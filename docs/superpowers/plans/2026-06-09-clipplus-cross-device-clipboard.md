@@ -2728,6 +2728,25 @@ git add crates/clipplus-cli
 git commit -m "feat: add diagnostic cli"
 ```
 
+**已接受提交：**
+
+- `05b7127263149bdf3c2586dd858c1a6e186161d2` `feat: add diagnostic cli`
+
+**审查状态：**
+
+- 规格审查：通过。提交范围仅包含 `clipplus-cli` 主程序和集成测试；`status`、`diagnose`、未知命令、无命令行为均覆盖计划要求。
+- 代码质量审查：通过。当前实现作为首版开发调试 CLI 可接受，没有引入完整 CLI 框架，没有输出原始剪贴板内容、完整设备 ID、共享 Key、token、环境变量或路径等敏感信息。
+- 非阻断建议：后续可把 `status` 测试升级为 JSON 字段级断言；可对多余参数返回用法错误；真实运行状态接入后应替换 `RuntimeStatus::new_for_test()`。
+
+**验证记录：**
+
+- `cargo test -p clipplus-cli --test cli_status`：通过，4/4。
+- `cargo run -p clipplus-cli -- status`：通过，stdout 为 pretty JSON，包含 `core_version`、`connected_peer_count`、`log_level`。
+- `cargo run -p clipplus-cli -- diagnose`：通过，stdout 为 JSON，三项状态均为 `not_started`。
+- `cargo clippy -p clipplus-cli --all-targets -- -D warnings`：通过。
+- `git diff --check`：通过。
+- `./scripts/dev/check.sh`：通过。
+
 ---
 
 ### Task 10: macOS SwiftUI 菜单栏壳骨架
