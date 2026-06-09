@@ -1,11 +1,47 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerCapability {
     Text,
     Image,
     File,
+    Unknown(String),
+}
+
+impl PeerCapability {
+    fn as_wire_value(&self) -> &str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::File => "file",
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+impl Serialize for PeerCapability {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_wire_value())
+    }
+}
+
+impl<'de> Deserialize<'de> for PeerCapability {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "text" => Self::Text,
+            "image" => Self::Image,
+            "file" => Self::File,
+            _ => Self::Unknown(value),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +59,8 @@ pub struct DiscoveryPacket {
 pub enum DiscoveryPacketError {
     #[error("discovery packet JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid discovery packet field: {0}")]
+    InvalidField(&'static str),
 }
 
 impl DiscoveryPacket {
@@ -43,7 +81,7 @@ impl DiscoveryPacket {
     }
 
     pub fn matches_group(&self, group_id: &str) -> bool {
-        self.group_id == group_id
+        !self.group_id.trim().is_empty() && !group_id.trim().is_empty() && self.group_id == group_id
     }
 
     pub fn to_json(&self) -> Result<String, DiscoveryPacketError> {
@@ -51,6 +89,19 @@ impl DiscoveryPacket {
     }
 
     pub fn from_json(value: &str) -> Result<Self, DiscoveryPacketError> {
-        Ok(serde_json::from_str(value)?)
+        let packet = serde_json::from_str::<Self>(value)?;
+        packet.validate()?;
+        Ok(packet)
+    }
+
+    pub fn validate(&self) -> Result<(), DiscoveryPacketError> {
+        if self.group_id.trim().is_empty() {
+            return Err(DiscoveryPacketError::InvalidField("group_id"));
+        }
+        if self.device_id.trim().is_empty() {
+            return Err(DiscoveryPacketError::InvalidField("device_id"));
+        }
+
+        Ok(())
     }
 }
