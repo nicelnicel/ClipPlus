@@ -3431,6 +3431,7 @@ git commit -m "test: add parallels e2e checklist"
 - Computer Use：`list_apps` 能看到 Parallels Desktop、Windows 11 Dock Helper 和 `/private/tmp/ClipPlusMac.app` 正在运行；`get_app_state` 在锁屏下无法取得 Parallels 窗口，返回 `cgWindowNotFound`，ClipPlus 状态读取超时。
 - Parallels Windows：`prlctl list --all --info` 显示 `Windows 11` 仍为 `stopped`，`EFI Secure boot: on`，`Shared clipboard mode: on`，IP 为空。
 - Parallels 日志：`/Users/cc/Library/Logs/parallels.log` 记录 VM 启动后从 `VMS_RUNNING` 立刻进入 `VMS_STOPPING`/`VMS_STOPPED`，并出现 `PRL_ERR_SECURE_BOOT_VIOLATION`，中文提示为“安全启动功能防止操作系统启动”。调整 Parallels 安全启动或共享剪贴板属于系统/VM 设置变更，继续操作前需要用户明确确认。
+- 后续确认后命令：关闭安全启动为 `prlctl set "Windows 11" --efi-secure-boot off`；关闭 Parallels 自带剪贴板共享为 `prlctl set "Windows 11" --shared-clipboard off`。
 
 ---
 
