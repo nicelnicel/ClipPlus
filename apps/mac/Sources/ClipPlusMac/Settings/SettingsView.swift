@@ -6,12 +6,12 @@ struct SettingsState: Equatable {
     var startupEnabled: Bool
 
     var requiresKeySetup: Bool {
-        sharingEnabled && !sharedKeyConfigured
+        !sharedKeyConfigured
     }
 
     init(
         sharedKeyConfigured: Bool = false,
-        sharingEnabled: Bool = false,
+        sharingEnabled: Bool = true,
         startupEnabled: Bool = false
     ) {
         self.sharedKeyConfigured = sharedKeyConfigured

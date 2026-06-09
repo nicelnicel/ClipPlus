@@ -23,4 +23,23 @@ final class SettingsStateTests: XCTestCase {
 
         XCTAssertTrue(state.startupEnabled)
     }
+
+    func testMissingKeyRequiresSetupWhenSharingDisabled() {
+        let state = SettingsState(
+            sharedKeyConfigured: false,
+            sharingEnabled: false,
+            startupEnabled: false
+        )
+
+        XCTAssertTrue(state.requiresKeySetup)
+    }
+
+    func testDefaultStateMatchesInitialAppConfiguration() {
+        let state = SettingsState()
+
+        XCTAssertFalse(state.sharedKeyConfigured)
+        XCTAssertTrue(state.sharingEnabled)
+        XCTAssertFalse(state.startupEnabled)
+        XCTAssertTrue(state.requiresKeySetup)
+    }
 }
