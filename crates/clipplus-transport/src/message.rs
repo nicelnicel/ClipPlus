@@ -28,6 +28,8 @@ pub struct TransportMessage {
 pub enum TransportMessageError {
     #[error("transport message JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid transport message field: {0}")]
+    InvalidField(&'static str),
 }
 
 impl TransportMessage {
@@ -41,6 +43,7 @@ impl TransportMessage {
     }
 
     pub fn to_json(&self) -> Result<String, TransportMessageError> {
+        self.validate()?;
         Ok(serde_json::to_string(self)?)
     }
 
@@ -52,21 +55,13 @@ impl TransportMessage {
 
     fn validate(&self) -> Result<(), TransportMessageError> {
         if self.sender_device_id.trim().is_empty() {
-            return Err(Self::invalid_field("sender_device_id"));
+            return Err(TransportMessageError::InvalidField("sender_device_id"));
         }
 
         if serde_json::from_str::<serde_json::Value>(&self.payload_json).is_err() {
-            return Err(Self::invalid_field("payload_json"));
+            return Err(TransportMessageError::InvalidField("payload_json"));
         }
 
         Ok(())
-    }
-
-    fn invalid_field(field: &'static str) -> TransportMessageError {
-        use serde::de::Error as _;
-
-        TransportMessageError::Json(serde_json::Error::custom(format!(
-            "invalid transport message field: {field}"
-        )))
     }
 }

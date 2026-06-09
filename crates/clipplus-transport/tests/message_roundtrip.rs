@@ -1,6 +1,6 @@
-use clipplus_transport::file_transfer::{FileTransferRequest, TransferState};
-use clipplus_transport::message::{TransportMessage, TransportMessageKind};
-use clipplus_transport::session::{HandshakeState, PeerSession};
+use clipplus_transport::file_transfer::{FileTransferError, FileTransferRequest, TransferState};
+use clipplus_transport::message::{TransportMessage, TransportMessageError, TransportMessageKind};
+use clipplus_transport::session::{HandshakeState, PeerSession, SessionError};
 use serde_json::json;
 
 #[test]
@@ -25,31 +25,75 @@ fn transport_message_kind_uses_snake_case_wire_value() {
 
 #[test]
 fn transport_message_rejects_invalid_json() {
-    let error = TransportMessage::from_json("not-json").unwrap_err();
+    let error = TransportMessage::from_json("not-json");
 
-    assert!(format!("{error}").contains("expected"));
+    assert!(matches!(error, Err(TransportMessageError::Json(_))));
 }
 
 #[test]
 fn transport_message_rejects_empty_sender_device_id() {
     let mut message = TransportMessage::new_for_test(TransportMessageKind::TextEvent);
     message.sender_device_id.clear();
-    let json = message.to_json().unwrap();
+    let json = serde_json::to_string(&message).unwrap();
 
     let error = TransportMessage::from_json(&json).unwrap_err();
 
-    assert!(format!("{error}").contains("sender_device_id"));
+    assert!(matches!(
+        error,
+        TransportMessageError::InvalidField("sender_device_id")
+    ));
 }
 
 #[test]
 fn transport_message_rejects_non_json_payload_json() {
     let mut message = TransportMessage::new_for_test(TransportMessageKind::TextEvent);
     message.payload_json = "plain text".to_string();
-    let json = message.to_json().unwrap();
+    let json = serde_json::to_string(&message).unwrap();
 
     let error = TransportMessage::from_json(&json).unwrap_err();
 
-    assert!(format!("{error}").contains("payload_json"));
+    assert!(matches!(
+        error,
+        TransportMessageError::InvalidField("payload_json")
+    ));
+}
+
+#[test]
+fn transport_message_to_json_rejects_empty_sender_device_id() {
+    let mut message = TransportMessage::new_for_test(TransportMessageKind::TextEvent);
+    message.sender_device_id.clear();
+
+    let error = message.to_json();
+
+    assert!(matches!(
+        error,
+        Err(TransportMessageError::InvalidField("sender_device_id"))
+    ));
+}
+
+#[test]
+fn transport_message_to_json_rejects_non_json_payload_json() {
+    let mut message = TransportMessage::new_for_test(TransportMessageKind::TextEvent);
+    message.payload_json = "plain text".to_string();
+
+    let error = message.to_json();
+
+    assert!(matches!(
+        error,
+        Err(TransportMessageError::InvalidField("payload_json"))
+    ));
+}
+
+#[test]
+fn transport_message_unknown_kind_is_rejected() {
+    let message = TransportMessage::new_for_test(TransportMessageKind::TextEvent);
+    let mut encoded: serde_json::Value = serde_json::from_str(&message.to_json().unwrap()).unwrap();
+    encoded["kind"] = json!("future_kind");
+    let json = serde_json::to_string(&encoded).unwrap();
+
+    let error = TransportMessage::from_json(&json);
+
+    assert!(matches!(error, Err(TransportMessageError::Json(_))));
 }
 
 #[test]
@@ -71,6 +115,34 @@ fn peer_session_allows_sync_only_when_trusted() {
 }
 
 #[test]
+fn peer_session_rejects_blank_device_id() {
+    let session = PeerSession::try_new("   ", HandshakeState::Trusted);
+
+    assert!(matches!(
+        session,
+        Err(SessionError::InvalidField("device_id"))
+    ));
+}
+
+#[test]
+fn peer_session_trims_device_id_on_new() {
+    let session = PeerSession::new(" device-a ", HandshakeState::Trusted);
+
+    assert_eq!(session.device_id, "device-a");
+    assert!(session.can_sync());
+}
+
+#[test]
+fn peer_session_can_sync_defends_against_blank_public_device_id() {
+    let session = PeerSession {
+        device_id: String::new(),
+        state: HandshakeState::Trusted,
+    };
+
+    assert!(!session.can_sync());
+}
+
+#[test]
 fn file_transfer_request_has_expiry() {
     let request = FileTransferRequest::new_for_test("transfer-a", 30);
 
@@ -87,4 +159,22 @@ fn file_transfer_request_supports_u64_expiry_minutes() {
 
     assert!(!request.is_expired_at_minute(u32::MAX as u64 + 9));
     assert!(request.is_expired_at_minute(u32::MAX as u64 + 11));
+}
+
+#[test]
+fn file_transfer_request_rejects_blank_transfer_id() {
+    let request = FileTransferRequest::new("   ", 30);
+
+    assert!(matches!(
+        request,
+        Err(FileTransferError::InvalidField("transfer_id"))
+    ));
+}
+
+#[test]
+fn file_transfer_request_trims_transfer_id_on_new() {
+    let request = FileTransferRequest::new(" transfer-a ", 30).unwrap();
+
+    assert_eq!(request.transfer_id, "transfer-a");
+    assert_eq!(request.state, TransferState::Available);
 }
