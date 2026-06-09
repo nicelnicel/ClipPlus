@@ -1,0 +1,11 @@
+[package]
+name = "clipplus-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clipplus-core = { path = "../clipplus-core" }
+clipplus-diagnostics = { path = "../clipplus-diagnostics" }
+serde_json.workspace = true

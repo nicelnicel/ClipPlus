@@ -1,0 +1,33 @@
+[workspace]
+members = [
+  "crates/clipplus-core",
+  "crates/clipplus-crypto",
+  "crates/clipplus-diagnostics",
+  "crates/clipplus-discovery",
+  "crates/clipplus-transport",
+  "crates/clipplus-ffi",
+  "crates/clipplus-cli"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+argon2 = "0.5"
+base64 = "0.22"
+blake3 = "1"
+chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time", "sync", "fs", "io-util"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+x25519-dalek = "2"
+zip = "2"

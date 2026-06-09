@@ -1,0 +1,15 @@
+[package]
+name = "clipplus-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2.workspace = true
+base64.workspace = true
+blake3.workspace = true
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
