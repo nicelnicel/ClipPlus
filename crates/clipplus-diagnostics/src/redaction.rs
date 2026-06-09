@@ -149,14 +149,22 @@ fn find_value_end(text: &str, start: usize, value_quote: Option<char>) -> usize 
             break;
         };
 
-        let is_end = if let Some(quote) = value_quote {
-            ch == quote
-        } else {
-            is_unquoted_value_terminator(ch)
-        };
+        if let Some(quote) = value_quote {
+            if ch == '\\' {
+                cursor += ch.len_utf8();
+                if let Some(escaped) = char_at(text, cursor) {
+                    cursor += escaped.len_utf8();
+                }
+                continue;
+            }
 
-        if is_end {
-            break;
+            if ch == quote {
+                break;
+            }
+        } else {
+            if is_unquoted_value_terminator(ch) {
+                break;
+            }
         }
 
         cursor += ch.len_utf8();

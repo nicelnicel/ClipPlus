@@ -112,6 +112,36 @@ shared_key=semi-secret;
 }
 
 #[test]
+fn sensitive_text_redaction_handles_escaped_quotes_in_quoted_values() {
+    let redacted = redact_sensitive_text(r#"{"token":"abc\"def","next":1}"#);
+
+    assert!(!redacted.contains("abc"));
+    assert!(!redacted.contains("def"));
+    assert!(!redacted.contains(r#"abc\"def"#));
+    assert!(redacted.contains(r#""next":1"#));
+
+    let shared_key_redacted = redact_sensitive_text(r#"{"shared_key":"a\"b"}"#);
+    assert!(!shared_key_redacted.contains(r#"a\"b"#));
+    assert!(!shared_key_redacted.contains(r#"\"b"#));
+    assert!(!shared_key_redacted.contains(r#"b"}"#));
+}
+
+#[test]
+fn safe_diagnostic_message_redacts_escaped_quote_secrets() {
+    let mut status = RuntimeStatus::new_for_test();
+    status.last_error = Some(SafeDiagnosticMessage::new(
+        r#"failed {"token":"abc\"def","next":1}"#,
+    ));
+
+    let json = serde_json::to_string(&status).unwrap();
+
+    assert!(!json.contains("abc"));
+    assert!(!json.contains("def"));
+    assert!(!json.contains(r#"abc\\\"def"#));
+    assert!(json.contains("last_error"));
+}
+
+#[test]
 fn diagnostics_zip_contains_stable_redacted_entries() {
     let status = RuntimeStatus::new_for_test();
     let config = redact_config(
