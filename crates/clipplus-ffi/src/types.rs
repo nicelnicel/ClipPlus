@@ -12,7 +12,11 @@ pub fn string_to_c_ptr(value: String) -> *mut c_char {
 /// # Safety
 ///
 /// `ptr` must be null or a pointer returned by [`string_to_c_ptr`] that has not
-/// already been freed. Passing any other pointer is undefined behavior.
+/// already been freed. Non-null pointers must be passed back unchanged: callers
+/// must not modify the buffer contents, insert an earlier NUL byte, change the
+/// string length, or alter the terminating NUL after receiving the pointer.
+/// Passing any other pointer, a previously freed pointer, or a modified pointer
+/// is undefined behavior.
 pub unsafe fn free_c_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;

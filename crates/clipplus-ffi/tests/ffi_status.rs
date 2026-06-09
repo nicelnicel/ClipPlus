@@ -2,14 +2,17 @@ use std::ffi::CStr;
 use std::ptr;
 
 use clipplus_ffi::api::{clipplus_free_string, clipplus_get_status_json};
-use clipplus_ffi::clipplus_get_status_json as reexported_get_status_json;
+use clipplus_ffi::{
+    clipplus_free_string as reexported_free_string,
+    clipplus_get_status_json as reexported_get_status_json,
+};
 use serde_json::Value;
 
 unsafe fn take_status_json(ptr: *mut std::ffi::c_char) -> String {
     assert!(!ptr.is_null());
 
     let json = unsafe { CStr::from_ptr(ptr).to_string_lossy().to_string() };
-    unsafe { clipplus_free_string(ptr) };
+    unsafe { reexported_free_string(ptr) };
     json
 }
 
@@ -24,6 +27,11 @@ fn ffi_returns_status_json_and_frees_string() {
 #[test]
 fn ffi_free_string_ignores_null_pointer() {
     unsafe { clipplus_free_string(ptr::null_mut()) };
+}
+
+#[test]
+fn ffi_reexported_free_string_ignores_null_pointer() {
+    unsafe { reexported_free_string(ptr::null_mut()) };
 }
 
 #[test]
