@@ -96,3 +96,17 @@ impl PeerDevice {
         matches!(self.state, DeviceState::Trusted)
     }
 }
+
+impl PeerDevice {
+    pub fn approve(&mut self) {
+        self.state = DeviceState::Trusted;
+    }
+
+    pub fn pause(&mut self) {
+        self.state = DeviceState::Paused;
+    }
+
+    pub fn reject(&mut self) {
+        self.state = DeviceState::Rejected;
+    }
+}
