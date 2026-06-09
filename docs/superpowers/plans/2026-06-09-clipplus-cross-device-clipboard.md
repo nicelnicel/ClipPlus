@@ -3424,6 +3424,14 @@ git commit -m "test: add parallels e2e checklist"
 - Parallels Windows：`prlctl` 能识别 `Windows 11` VM，但 `prlctl start "Windows 11"` 返回成功后 VM 仍显示 `stopped`，IP 为空；无法进入 Windows 桌面执行 `dotnet test` 或托盘验证。
 - Parallels 配置：当前 `Shared clipboard mode: on`。真正剪贴板同步验证前，需要用户确认是否关闭 Parallels 自带剪贴板共享。
 
+**2026-06-10 复验状态：**
+
+- 全量脚本：`./scripts/dev/check.sh` 通过；Rust fmt/clippy/test、Rust doc tests 和 macOS Swift test 均通过，Windows dotnet 分支因 macOS 本机没有 `dotnet` 且 VM 未启动仍未执行。
+- macOS 图形会话：`screencapture` 显示宿主机仍在锁屏界面；`ClipPlusMac` 进程存在，但菜单栏图标和设置面板无法做最终视觉确认。
+- Computer Use：`list_apps` 能看到 Parallels Desktop、Windows 11 Dock Helper 和 `/private/tmp/ClipPlusMac.app` 正在运行；`get_app_state` 在锁屏下无法取得 Parallels 窗口，返回 `cgWindowNotFound`，ClipPlus 状态读取超时。
+- Parallels Windows：`prlctl list --all --info` 显示 `Windows 11` 仍为 `stopped`，`EFI Secure boot: on`，`Shared clipboard mode: on`，IP 为空。
+- Parallels 日志：`/Users/cc/Library/Logs/parallels.log` 记录 VM 启动后从 `VMS_RUNNING` 立刻进入 `VMS_STOPPING`/`VMS_STOPPED`，并出现 `PRL_ERR_SECURE_BOOT_VIOLATION`，中文提示为“安全启动功能防止操作系统启动”。调整 Parallels 安全启动或共享剪贴板属于系统/VM 设置变更，继续操作前需要用户明确确认。
+
 ---
 
 ## 自查清单
