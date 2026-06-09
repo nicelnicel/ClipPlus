@@ -79,3 +79,12 @@ fn file_transfer_request_has_expiry() {
     assert!(!request.is_expired_at_minute(30));
     assert!(request.is_expired_at_minute(31));
 }
+
+#[test]
+fn file_transfer_request_supports_u64_expiry_minutes() {
+    let expires_after_minutes = u32::MAX as u64 + 10;
+    let request = FileTransferRequest::new_for_test("transfer-long", expires_after_minutes);
+
+    assert!(!request.is_expired_at_minute(u32::MAX as u64 + 9));
+    assert!(request.is_expired_at_minute(u32::MAX as u64 + 11));
+}
