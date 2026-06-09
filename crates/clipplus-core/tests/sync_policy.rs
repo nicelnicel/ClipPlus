@@ -90,6 +90,30 @@ fn device_id_rejects_blank_values() {
 }
 
 #[test]
+fn device_id_parse_trims_runtime_values() {
+    let id = " peer-a ".parse::<DeviceId>().unwrap();
+
+    assert_eq!(id.as_str(), "peer-a");
+}
+
+#[test]
+fn device_id_parse_rejects_blank_values() {
+    assert!("   ".parse::<DeviceId>().is_err());
+}
+
+#[test]
+fn device_id_deserialization_trims_runtime_values() {
+    let id = serde_json::from_str::<DeviceId>("\" peer-a \"").unwrap();
+
+    assert_eq!(id.as_str(), "peer-a");
+}
+
+#[test]
+fn device_id_deserialization_rejects_blank_values() {
+    assert!(serde_json::from_str::<DeviceId>("\"   \"").is_err());
+}
+
+#[test]
 fn image_payload_respects_configured_limit() {
     let content = ContentTypeSettings {
         text: true,

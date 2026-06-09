@@ -9,6 +9,7 @@ pub enum DeviceIdError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct DeviceId(String);
 
 impl DeviceId {
@@ -33,6 +34,20 @@ impl FromStr for DeviceId {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::new(value)
+    }
+}
+
+impl TryFrom<String> for DeviceId {
+    type Error = DeviceIdError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<DeviceId> for String {
+    fn from(value: DeviceId) -> Self {
+        value.0
     }
 }
 
