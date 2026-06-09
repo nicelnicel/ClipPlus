@@ -3287,6 +3287,22 @@ git add apps/windows
 git commit -m "feat: add windows tray shell"
 ```
 
+**已接受提交：**
+
+- `2b7c7d2a2b7dd9ae6c2844cc508f422a2fa32f5f` `feat: add windows tray shell`
+
+**审查状态：**
+
+- 规格审查：通过。解决方案、WPF app、xUnit 测试、托盘、设置窗口、剪贴板、开机启动和 CoreBridge 骨架文件均覆盖计划要求。
+- 代码质量审查：通过。WPF/WinForms 托盘互操作配置、`NotifyIcon` 生命周期、WPF `Application` 与 WinForms 命名空间冲突处理、项目引用结构和设置状态测试均未发现静态阻塞问题。
+- 环境限制：macOS 本机没有 `dotnet`，因此未在本机运行 `dotnet test`；真实编译、测试和托盘显示验证将在 Parallels Windows 阶段完成。
+
+**验证记录：**
+
+- `git diff --check HEAD~1..HEAD`：通过。
+- `./scripts/dev/check.sh`：通过。
+- `dotnet test apps/windows/ClipPlus.Windows.sln`：macOS 本机未运行，原因是 `dotnet` 命令不存在；待 Windows VM 验证。
+
 ---
 
 ### Task 12: Parallels 端到端测试手册与首轮验证
