@@ -3,7 +3,10 @@ use std::io::{Cursor, Write};
 use thiserror::Error;
 use zip::{write::SimpleFileOptions, ZipWriter};
 
-use crate::{redaction::RedactedConfig, status::RuntimeStatus};
+use crate::{
+    redaction::{redact_sensitive_text, RedactedConfig},
+    status::RuntimeStatus,
+};
 
 #[derive(Debug, Error)]
 pub enum ExportError {
@@ -30,48 +33,8 @@ pub fn export_diagnostics_zip(
     writer.write_all(&serde_json::to_vec_pretty(config)?)?;
 
     writer.start_file("logs/clipplus.log", options)?;
-    writer.write_all(redact_log_text(log_text).as_bytes())?;
+    writer.write_all(redact_sensitive_text(log_text).as_bytes())?;
 
     let cursor = writer.finish()?;
     Ok(cursor.into_inner())
-}
-
-fn redact_log_text(log_text: &str) -> String {
-    log_text
-        .lines()
-        .map(redact_log_line)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + if log_text.ends_with('\n') { "\n" } else { "" }
-}
-
-fn redact_log_line(line: &str) -> String {
-    ["shared_key", "key", "token"]
-        .into_iter()
-        .fold(line.to_string(), |current, name| {
-            redact_key_value(&current, name)
-        })
-}
-
-fn redact_key_value(line: &str, name: &str) -> String {
-    let pattern = format!("{name}=");
-    let mut redacted = String::with_capacity(line.len());
-    let mut rest = line;
-
-    while let Some(index) = rest.find(&pattern) {
-        let (prefix, matched) = rest.split_at(index);
-        redacted.push_str(prefix);
-        redacted.push_str(&pattern);
-        redacted.push_str("<redacted>");
-
-        let value_start = pattern.len();
-        let value_end = matched[value_start..]
-            .find(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';')
-            .map(|end| value_start + end)
-            .unwrap_or(matched.len());
-        rest = &matched[value_end..];
-    }
-
-    redacted.push_str(rest);
-    redacted
 }
