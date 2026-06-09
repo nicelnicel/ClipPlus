@@ -78,6 +78,28 @@ fn trusted_device_is_eligible_for_sync() {
 }
 
 #[test]
+fn peer_device_trust_actions_update_sync_eligibility() {
+    let mut peer = PeerDevice::new(
+        DeviceId::new("peer-a").unwrap(),
+        "Windows-PC",
+        Platform::Windows,
+        DeviceState::Pending,
+    );
+
+    peer.approve();
+    assert!(peer.can_sync());
+
+    peer.pause();
+    assert!(!peer.can_sync());
+
+    peer.approve();
+    assert!(peer.can_sync());
+
+    peer.reject();
+    assert!(!peer.can_sync());
+}
+
+#[test]
 fn device_id_trims_runtime_values() {
     let id = DeviceId::new(" peer-a ").unwrap();
 
