@@ -2965,6 +2965,24 @@ git add apps/mac
 git commit -m "feat: add mac menu bar shell"
 ```
 
+**已接受提交：**
+
+- `c5f52db39deeb71a6ed8f168c217ede4f31a5972` `feat: add mac menu bar shell`
+- `d9e1e9a5f65981a162d579254951fff2439229f8` `fix: align mac settings defaults`
+
+**审查状态：**
+
+- 规格审查：第一轮发现 `requiresKeySetup` 错误依赖 `sharingEnabled`，以及 `SettingsState()` 默认 `sharingEnabled` 与计划初始状态不一致；已修复。
+- 规格复审：通过。`requiresKeySetup` 现为 `!sharedKeyConfigured`；默认状态为 `sharedKeyConfigured: false, sharingEnabled: true, startupEnabled: false`；补充了默认值和共享关闭但未设置 Key 的测试。
+- 代码质量审查：通过。`MenuBarExtra` + `Settings` 的状态绑定、macOS 13 兼容设置入口、剪贴板/开机启动/CoreBridge 骨架均符合首版任务边界。
+
+**验证记录：**
+
+- `cd apps/mac && swift test`：通过，4/4。
+- `cd apps/mac && swift build`：通过。
+- `git diff --check`：通过。
+- `./scripts/dev/check.sh`：通过。
+
 ---
 
 ### Task 11: Windows WPF 托盘壳骨架
