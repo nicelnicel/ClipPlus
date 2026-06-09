@@ -2969,12 +2969,14 @@ git commit -m "feat: add mac menu bar shell"
 
 - `c5f52db39deeb71a6ed8f168c217ede4f31a5972` `feat: add mac menu bar shell`
 - `d9e1e9a5f65981a162d579254951fff2439229f8` `fix: align mac settings defaults`
+- `4e90495` `fix: make mac menu settings accessible`
 
 **审查状态：**
 
 - 规格审查：第一轮发现 `requiresKeySetup` 错误依赖 `sharingEnabled`，以及 `SettingsState()` 默认 `sharingEnabled` 与计划初始状态不一致；已修复。
 - 规格复审：通过。`requiresKeySetup` 现为 `!sharedKeyConfigured`；默认状态为 `sharedKeyConfigured: false, sharingEnabled: true, startupEnabled: false`；补充了默认值和共享关闭但未设置 Key 的测试。
 - 代码质量审查：通过。`MenuBarExtra` + `Settings` 的状态绑定、macOS 13 兼容设置入口、剪贴板/开机启动/CoreBridge 骨架均符合首版任务边界。
+- 运行验证修复：首轮启动验证发现 pull-down menu 内“打开设置”无法在锁屏/自动化路径中调出窗口；已改为 `.menuBarExtraStyle(.window)`，点击菜单栏图标直接展示设置面板，并保留独立设置窗口入口。
 
 **验证记录：**
 
@@ -3415,6 +3417,12 @@ git commit -m "test: add parallels e2e checklist"
 - `cargo run -p clipplus-cli -- status`：通过，输出包含 `core_version`。
 - `cd apps/mac && swift test`：通过，4/4。
 - `git diff --check HEAD~1..HEAD`：通过。
+
+**首轮运行验证状态：**
+
+- macOS：`ClipPlusMac` 可构建并以临时 `.app` 方式启动；进程存在。菜单栏状态项可被 Accessibility 识别。运行验证过程中发现宿主机处于锁屏界面，无法完成最终视觉确认。
+- Parallels Windows：`prlctl` 能识别 `Windows 11` VM，但 `prlctl start "Windows 11"` 返回成功后 VM 仍显示 `stopped`，IP 为空；无法进入 Windows 桌面执行 `dotnet test` 或托盘验证。
+- Parallels 配置：当前 `Shared clipboard mode: on`。真正剪贴板同步验证前，需要用户确认是否关闭 Parallels 自带剪贴板共享。
 
 ---
 
