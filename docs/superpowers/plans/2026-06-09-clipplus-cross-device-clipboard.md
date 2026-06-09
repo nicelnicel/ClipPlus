@@ -1914,12 +1914,13 @@ git commit -m "fix: handle escaped diagnostic secrets"
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-discovery/src/udp.rs`
 - Test: `/Users/cc/proj/ClipPlus/crates/clipplus-discovery/tests/discovery_packet.rs`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `/Users/cc/proj/ClipPlus/crates/clipplus-discovery/tests/discovery_packet.rs`:
 
 ```rust
-use clipplus_discovery::packet::{DiscoveryPacket, PeerCapability};
+use clipplus_discovery::packet::{DiscoveryPacket, DiscoveryPacketError, PeerCapability};
+use clipplus_discovery::udp::{DiscoverySocketConfig, DISCOVERY_BROADCAST, DISCOVERY_PORT};
 
 #[test]
 fn discovery_packet_roundtrips_json() {
@@ -1930,7 +1931,14 @@ fn discovery_packet_roundtrips_json() {
 
     assert_eq!(decoded.group_id, "group-a");
     assert_eq!(decoded.device_id, "device-a");
-    assert!(decoded.capabilities.contains(&PeerCapability::Text));
+    assert_eq!(
+        decoded.capabilities,
+        vec![
+            PeerCapability::Text,
+            PeerCapability::Image,
+            PeerCapability::File,
+        ]
+    );
 }
 
 #[test]
@@ -1942,7 +1950,17 @@ fn group_mismatch_is_rejected() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+质量审查后继续补充以下协议契约测试：
+
+- `packet_json_uses_stable_wire_values`
+- `unknown_capability_is_preserved`
+- `empty_group_never_matches`
+- `from_json_rejects_empty_group_or_device`
+- `malformed_json_returns_json_error`
+- `unknown_fields_are_ignored_for_forward_compatibility`
+- `default_udp_config_uses_stable_discovery_endpoint`
+
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -1950,21 +1968,54 @@ Run:
 cargo test -p clipplus-discovery --test discovery_packet
 ```
 
-Expected: FAIL，错误包含 `unresolved import clipplus_discovery::packet::DiscoveryPacket`。
+初始预期：FAIL，错误包含 `unresolved import clipplus_discovery::packet::DiscoveryPacket`。
 
-- [ ] **Step 3: 实现发现包**
+质量修复阶段新增协议测试后再次 RED：缺少 `PeerCapability::Unknown` 和 `DiscoveryPacketError::InvalidField` 等接口。
+
+- [x] **Step 3: 实现发现包**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-discovery/src/packet.rs`:
 
 ```rust
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerCapability {
     Text,
     Image,
     File,
+    Unknown(String),
+}
+
+impl Serialize for PeerCapability {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::File => "file",
+            Self::Unknown(value) => value,
+        };
+        serializer.serialize_str(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for PeerCapability {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "text" => Self::Text,
+            "image" => Self::Image,
+            "file" => Self::File,
+            _ => Self::Unknown(value),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1982,6 +2033,8 @@ pub struct DiscoveryPacket {
 pub enum DiscoveryPacketError {
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid discovery packet field: {0}")]
+    InvalidField(&'static str),
 }
 
 impl DiscoveryPacket {
@@ -1998,7 +2051,9 @@ impl DiscoveryPacket {
     }
 
     pub fn matches_group(&self, group_id: &str) -> bool {
-        self.group_id == group_id
+        !self.group_id.trim().is_empty()
+            && !group_id.trim().is_empty()
+            && self.group_id == group_id
     }
 
     pub fn to_json(&self) -> Result<String, DiscoveryPacketError> {
@@ -2006,12 +2061,33 @@ impl DiscoveryPacket {
     }
 
     pub fn from_json(value: &str) -> Result<Self, DiscoveryPacketError> {
-        Ok(serde_json::from_str(value)?)
+        let packet = serde_json::from_str::<Self>(value)?;
+        packet.validate()?;
+        Ok(packet)
+    }
+
+    pub fn validate(&self) -> Result<(), DiscoveryPacketError> {
+        if self.group_id.trim().is_empty() {
+            return Err(DiscoveryPacketError::InvalidField("group_id"));
+        }
+        if self.device_id.trim().is_empty() {
+            return Err(DiscoveryPacketError::InvalidField("device_id"));
+        }
+        Ok(())
     }
 }
 ```
 
-- [ ] **Step 4: 实现 UDP 接口壳**
+实际落地的 discovery JSON wire contract：
+
+- capabilities 固定序列化为 `["text", "image", "file"]`，不依赖 Rust enum variant 名。
+- 未知 capability 会保留为 `PeerCapability::Unknown(String)`，用于后续手机端或新版本前向兼容。
+- `from_json` 允许未知字段，便于新旧版本发现包兼容。
+- `from_json` 拒绝空白 `group_id` / `device_id`。
+- `matches_group` 在本地 group 或包内 group 为空白时返回 false，其余情况仍使用派生后 group id 精确比较。
+- 测试解析 JSON object 并断言字段集合精确为 `group_id/device_id/device_name/platform/public_key/app_version/capabilities`，同时禁止 `raw_key/shared_key/verifier/private_key` 字段出现在发现包中。
+
+- [x] **Step 4: 实现 UDP 接口壳**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-discovery/src/udp.rs`:
 
@@ -2038,7 +2114,7 @@ impl Default for DiscoverySocketConfig {
 }
 ```
 
-- [ ] **Step 5: 运行测试通过**
+- [x] **Step 5: 运行测试通过**
 
 Run:
 
@@ -2046,9 +2122,9 @@ Run:
 cargo test -p clipplus-discovery --test discovery_packet
 ```
 
-Expected: PASS，2 个测试通过。
+预期：PASS，当前 9 个测试通过。
 
-- [ ] **Step 6: 运行 workspace 检查**
+- [x] **Step 6: 运行 workspace 检查**
 
 Run:
 
@@ -2056,14 +2132,31 @@ Run:
 ./scripts/dev/check.sh
 ```
 
-Expected: PASS。
+预期：PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add crates/clipplus-discovery
 git commit -m "feat: add discovery packet model"
 ```
+
+质量修复提交：
+
+```bash
+git commit -m "fix: harden discovery packet contract"
+```
+
+**已接受提交：**
+
+- `ccc68f195c419cc298fea398e87e76a3dcbc47b5` `feat: add discovery packet model`
+- `a19925d7a5b6be5d4401d472ed9cf56ce7a5fb2a` `fix: harden discovery packet contract`
+
+**审查状态：**
+
+- 规格审查：通过。
+- 代码质量审查：第一轮发现 capability wire contract 依赖 Serde 默认 Rust variant、未知能力不兼容、空 group/device 边界和测试覆盖不足；已修复。
+- 代码质量复审：通过。仅保留非阻塞建议：后续真实发送路径可以让 `to_json()` 调用 `validate()` 或引入受校验构造器，进一步收紧本端生成包边界。
 
 ---
 
