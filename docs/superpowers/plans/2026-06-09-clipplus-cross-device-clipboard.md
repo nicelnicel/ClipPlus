@@ -3400,6 +3400,22 @@ git add scripts/dev/check.sh scripts/test/parallels-e2e.md
 git commit -m "test: add parallels e2e checklist"
 ```
 
+**已接受提交：**
+
+- `a41a496ee5ff1c3f60de6bda5478aa30d5da108f` `test: add parallels e2e checklist`
+
+**审查状态：**
+
+- 规格审查：通过。Parallels 测试手册包含测试目标、前置条件、步骤和失败定位；覆盖 macOS 检查、CLI status、mac Swift test、Windows `dotnet test`、菜单栏/托盘确认、同 Key、设备允许、双向文字复制和诊断包不含 Key。
+- 代码质量审查：通过。`scripts/dev/check.sh` 保持 Rust 检查，并在 Swift/dotnet 环境可用且对应项目存在时条件运行 macOS/Windows 测试；本机无 `dotnet` 时正确跳过 Windows 分支。手册没有引导用户直接修改防火墙规则，并明确诊断包不得包含 `clipplus-test-key`。
+
+**验证记录：**
+
+- `./scripts/dev/check.sh`：通过；包含 Rust fmt/clippy/test 和 macOS Swift test；Windows dotnet 分支因本机无 `dotnet` 被跳过。
+- `cargo run -p clipplus-cli -- status`：通过，输出包含 `core_version`。
+- `cd apps/mac && swift test`：通过，4/4。
+- `git diff --check HEAD~1..HEAD`：通过。
+
 ---
 
 ## 自查清单
