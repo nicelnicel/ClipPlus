@@ -1,0 +1,16 @@
+<Window x:Class="ClipPlus.Windows.Settings.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ClipPlus 设置"
+        Height="420"
+        Width="520">
+    <StackPanel Margin="16">
+        <TextBlock Text="共享" FontWeight="Bold" />
+        <CheckBox Content="启用剪贴板共享" IsChecked="{Binding SharingEnabled}" />
+        <TextBlock Text="共享 Key：已设置或未设置" />
+        <Button Content="修改 Key" Width="120" HorizontalAlignment="Left" />
+        <TextBlock Text="系统" FontWeight="Bold" Margin="0,16,0,0" />
+        <CheckBox Content="开机自动启动" IsChecked="{Binding StartupEnabled}" />
+        <Button Content="导出诊断包" Width="120" HorizontalAlignment="Left" />
+    </StackPanel>
+</Window>
