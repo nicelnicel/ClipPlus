@@ -481,9 +481,49 @@ git commit -m "chore: initialize Rust workspace"
 Create `/Users/cc/proj/ClipPlus/crates/clipplus-core/tests/sync_policy.rs`:
 
 ```rust
+use chrono::Utc;
 use clipplus_core::config::{ContentTypeSettings, ImageLimit, SyncSettings};
 use clipplus_core::device::{DeviceId, DeviceState, PeerDevice, Platform};
-use clipplus_core::event::{ClipboardEvent, ClipboardPayload};
+use clipplus_core::event::{ClipboardEvent, ClipboardPayload, FileItem, ImageFormat};
+use uuid::Uuid;
+
+fn test_device_id() -> DeviceId {
+    DeviceId::new("test-device").unwrap()
+}
+
+fn text_event(text: &str) -> ClipboardEvent {
+    ClipboardEvent::new_text(test_device_id(), text)
+}
+
+fn image_event(byte_size: usize) -> ClipboardEvent {
+    ClipboardEvent::new_image_metadata(
+        test_device_id(),
+        ImageFormat::Png,
+        byte_size,
+        100,
+        100,
+        format!("test-image-{byte_size}"),
+    )
+}
+
+fn file_list_event() -> ClipboardEvent {
+    ClipboardEvent {
+        event_id: Uuid::new_v4(),
+        origin_device_id: test_device_id(),
+        created_at: Utc::now(),
+        payload: ClipboardPayload::FileList {
+            transfer_id: Uuid::new_v4(),
+            files: vec![FileItem {
+                file_id: Uuid::new_v4(),
+                name: "document.txt".to_string(),
+                size: 12,
+                modified_at: Utc::now(),
+                content_hash: "test-file".to_string(),
+                source_relative_path: "document.txt".to_string(),
+            }],
+        },
+    }
+}
 
 #[test]
 fn default_settings_enable_text_image_and_file() {
@@ -499,7 +539,7 @@ fn default_settings_enable_text_image_and_file() {
 #[test]
 fn paused_device_is_not_eligible_for_sync() {
     let peer = PeerDevice::new(
-        DeviceId::from_static("peer-a"),
+        DeviceId::new("peer-a").unwrap(),
         "Windows-PC",
         Platform::Windows,
         DeviceState::Paused,
@@ -516,7 +556,7 @@ fn image_payload_respects_configured_limit() {
         file: true,
         image_limit: ImageLimit::Mb5,
     };
-    let event = ClipboardEvent::image_for_test(6 * 1024 * 1024);
+    let event = image_event(6 * 1024 * 1024);
 
     assert!(!content.allows(&event));
 }
@@ -529,9 +569,9 @@ fn text_event_is_allowed_when_text_sync_is_enabled() {
         file: false,
         image_limit: ImageLimit::Mb20,
     };
-    let event = ClipboardEvent::text_for_test("hello");
+    let event = text_event("hello");
 
-    assert!(matches!(event.payload, ClipboardPayload::Text { .. }));
+    assert!(matches!(&event.payload, ClipboardPayload::Text { .. }));
     assert!(content.allows(&event));
 }
 ```
@@ -632,18 +672,41 @@ impl Default for SyncSettings {
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-core/src/device.rs`:
 
 ```rust
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DeviceIdError {
+    #[error("device id cannot be empty")]
+    Empty,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeviceId(String);
 
 impl DeviceId {
-    pub fn from_static(value: &'static str) -> Self {
-        Self(value.to_string())
+    pub fn new(value: impl Into<String>) -> Result<Self, DeviceIdError> {
+        let value = value.into();
+        let trimmed = value.trim();
+
+        if trimmed.is_empty() {
+            return Err(DeviceIdError::Empty);
+        }
+
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl FromStr for DeviceId {
+    type Err = DeviceIdError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
     }
 }
 
@@ -745,29 +808,36 @@ pub struct FileItem {
 }
 
 impl ClipboardEvent {
-    pub fn text_for_test(text: &str) -> Self {
+    pub fn new_text(origin_device_id: DeviceId, text: impl Into<String>) -> Self {
+        let text = text.into();
+        let byte_size = text.len();
+
         Self {
             event_id: Uuid::new_v4(),
-            origin_device_id: DeviceId::from_static("test-device"),
+            origin_device_id,
             created_at: Utc::now(),
-            payload: ClipboardPayload::Text {
-                text: text.to_string(),
-                byte_size: text.len(),
-            },
+            payload: ClipboardPayload::Text { text, byte_size },
         }
     }
 
-    pub fn image_for_test(byte_size: usize) -> Self {
+    pub fn new_image_metadata(
+        origin_device_id: DeviceId,
+        format: ImageFormat,
+        byte_size: usize,
+        width: u32,
+        height: u32,
+        content_hash: impl Into<String>,
+    ) -> Self {
         Self {
             event_id: Uuid::new_v4(),
-            origin_device_id: DeviceId::from_static("test-device"),
+            origin_device_id,
             created_at: Utc::now(),
             payload: ClipboardPayload::Image {
-                format: ImageFormat::Png,
+                format,
                 byte_size,
-                width: 100,
-                height: 100,
-                content_hash: format!("test-image-{byte_size}"),
+                width,
+                height,
+                content_hash: content_hash.into(),
             },
         }
     }
@@ -1013,14 +1083,14 @@ fn disabled_global_sharing_blocks_publish() {
     let mut settings = SyncSettings::default();
     settings.sharing_enabled = false;
     let policy = SyncPolicy::new(settings);
-    let event = ClipboardEvent::text_for_test("hello");
+    let event = text_event("hello");
 
     assert_eq!(policy.can_publish(&event), SyncDecision::Blocked("sharing_disabled"));
 }
 
 #[test]
 fn remote_write_guard_blocks_loopback() {
-    let event = ClipboardEvent::text_for_test("hello");
+    let event = text_event("hello");
     let mut guard = LoopGuard::default();
 
     guard.mark_remote_write(event.event_id);
@@ -1030,7 +1100,7 @@ fn remote_write_guard_blocks_loopback() {
 
 #[test]
 fn processed_event_is_not_processed_twice() {
-    let event = ClipboardEvent::text_for_test("hello");
+    let event = text_event("hello");
     let mut guard = LoopGuard::default();
 
     assert!(!guard.has_processed(event.event_id));
