@@ -926,6 +926,7 @@ git commit -m "feat: add core clipboard models"
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-crypto/src/identity.rs`
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-core/src/device.rs`
 - Test: `/Users/cc/proj/ClipPlus/crates/clipplus-crypto/tests/key_derivation.rs`
+- Test: `/Users/cc/proj/ClipPlus/crates/clipplus-core/tests/sync_policy.rs`
 
 - [ ] **Step 1: 写 Key 派生失败测试**
 
@@ -945,11 +946,40 @@ fn same_key_derives_same_group_id() {
 }
 
 #[test]
+fn same_key_with_whitespace_derives_same_group_id() {
+    let left = SharedKeyMaterial::derive(" friend-lan-key ").unwrap();
+    let right = SharedKeyMaterial::derive("friend-lan-key").unwrap();
+
+    assert_eq!(left.group_id, right.group_id);
+}
+
+#[test]
 fn different_keys_derive_different_group_ids() {
     let left = SharedKeyMaterial::derive("friend-lan-key").unwrap();
     let right = SharedKeyMaterial::derive("other-lan-key").unwrap();
 
     assert_ne!(left.group_id, right.group_id);
+}
+
+#[test]
+fn verifier_is_stable_distinct_and_key_specific() {
+    let left = SharedKeyMaterial::derive("friend-lan-key").unwrap();
+    let same = SharedKeyMaterial::derive("friend-lan-key").unwrap();
+    let other = SharedKeyMaterial::derive("other-lan-key").unwrap();
+
+    assert_eq!(left.verifier, same.verifier);
+    assert_ne!(left.verifier, other.verifier);
+    assert_ne!(left.group_id, left.verifier);
+}
+
+#[test]
+fn shared_key_debug_redacts_verifier() {
+    let material = SharedKeyMaterial::derive("friend-lan-key").unwrap();
+    let debug = format!("{:?}", material);
+
+    assert!(debug.contains(&material.group_id));
+    assert!(!debug.contains(&material.verifier));
+    assert!(debug.contains("<redacted>"));
 }
 
 #[test]
@@ -965,6 +995,32 @@ fn device_identity_has_stable_fingerprint_prefix() {
 
     assert_eq!(identity.fingerprint_short().len(), 9);
     assert!(identity.fingerprint_short().contains('-'));
+}
+
+#[test]
+fn device_identity_exposes_non_empty_key_material() {
+    let identity = DeviceIdentity::generate("MacBook Pro", "macos");
+
+    assert!(!identity.public_key.is_empty());
+    assert!(!identity.private_key_material_for_local_storage().is_empty());
+}
+
+#[test]
+fn device_identity_debug_redacts_private_key() {
+    let identity = DeviceIdentity::generate("MacBook Pro", "macos");
+    let private_key = identity.private_key_material_for_local_storage();
+    let debug = format!("{:?}", identity);
+
+    assert!(debug.contains(&identity.public_key));
+    assert!(!debug.contains(private_key));
+    assert!(debug.contains("<redacted>"));
+}
+
+#[test]
+fn device_identity_fingerprint_is_stable() {
+    let identity = DeviceIdentity::generate("MacBook Pro", "macos");
+
+    assert_eq!(identity.fingerprint_short(), identity.fingerprint_short());
 }
 ```
 
@@ -985,19 +1041,31 @@ Replace `/Users/cc/proj/ClipPlus/crates/clipplus-crypto/src/key.rs`:
 ```rust
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use std::fmt;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum KeyError {
     #[error("共享 Key 不能为空")]
     Empty,
+    #[error("共享 Key 派生失败: {0}")]
+    Kdf(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SharedKeyMaterial {
     pub group_id: String,
     pub verifier: String,
+}
+
+impl fmt::Debug for SharedKeyMaterial {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SharedKeyMaterial")
+            .field("group_id", &self.group_id)
+            .field("verifier", &"<redacted>")
+            .finish()
+    }
 }
 
 impl SharedKeyMaterial {
@@ -1007,8 +1075,18 @@ impl SharedKeyMaterial {
             return Err(KeyError::Empty);
         }
 
-        let group_hash = blake3::derive_key("clipplus.group.v1", normalized.as_bytes());
-        let verifier_hash = blake3::derive_key("clipplus.verifier.v1", normalized.as_bytes());
+        let argon2 = argon2::Argon2::default();
+        let mut stretched = [0u8; 32];
+        argon2
+            .hash_password_into(
+                normalized.as_bytes(),
+                b"clipplus.shared-key.v1",
+                &mut stretched,
+            )
+            .map_err(|error| KeyError::Kdf(error.to_string()))?;
+
+        let group_hash = blake3::derive_key("clipplus.group.v1", &stretched);
+        let verifier_hash = blake3::derive_key("clipplus.verifier.v1", &stretched);
 
         Ok(Self {
             group_id: URL_SAFE_NO_PAD.encode(&group_hash[..16]),
@@ -1027,16 +1105,29 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DeviceIdentity {
     pub device_id: String,
     pub device_name: String,
     pub platform: String,
     pub public_key: String,
-    pub private_key: String,
+    private_key: String,
+}
+
+impl fmt::Debug for DeviceIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeviceIdentity")
+            .field("device_id", &self.device_id)
+            .field("device_name", &self.device_name)
+            .field("platform", &self.platform)
+            .field("public_key", &self.public_key)
+            .field("private_key", &"<redacted>")
+            .finish()
+    }
 }
 
 impl DeviceIdentity {
@@ -1051,6 +1142,10 @@ impl DeviceIdentity {
             public_key: URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
             private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
         }
+    }
+
+    pub fn private_key_material_for_local_storage(&self) -> &str {
+        &self.private_key
     }
 
     pub fn fingerprint_short(&self) -> String {
@@ -1081,15 +1176,42 @@ impl PeerDevice {
 }
 ```
 
+Append to `/Users/cc/proj/ClipPlus/crates/clipplus-core/tests/sync_policy.rs`:
+
+```rust
+#[test]
+fn peer_device_trust_actions_update_sync_eligibility() {
+    let mut peer = PeerDevice::new(
+        DeviceId::new("peer-a").unwrap(),
+        "Windows-PC",
+        Platform::Windows,
+        DeviceState::Pending,
+    );
+
+    peer.approve();
+    assert!(peer.can_sync());
+
+    peer.pause();
+    assert!(!peer.can_sync());
+
+    peer.approve();
+    assert!(peer.can_sync());
+
+    peer.reject();
+    assert!(!peer.can_sync());
+}
+```
+
 - [ ] **Step 6: 运行测试通过**
 
 Run:
 
 ```bash
 cargo test -p clipplus-crypto --test key_derivation
+cargo test -p clipplus-core --test sync_policy
 ```
 
-Expected: PASS，4 个测试通过。
+Expected: PASS，`key_derivation` 和 `sync_policy` 都通过。
 
 - [ ] **Step 7: 运行 workspace 检查**
 
