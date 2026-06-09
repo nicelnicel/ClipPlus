@@ -2601,6 +2601,25 @@ git add crates/clipplus-ffi
 git commit -m "feat: expose core status over ffi"
 ```
 
+**已接受提交：**
+
+- `3d291f19f865260e045709c2b2ac639ee0d6f975` `feat: expose core status over ffi`
+- `143fd71ff4d8cbb5c38423cf149dd663b0f9934c` `fix: document ffi string ownership`
+
+**审查状态：**
+
+- 规格审查：通过。`clipplus_get_status_json`、`clipplus_free_string`、crate root re-export 和 FFI 状态 JSON 测试均覆盖计划要求。
+- 代码质量审查：第一轮发现 Safety 文档没有明确 `*mut c_char` 对调用方只读、必须原样传回释放，且 root re-export 的 `clipplus_free_string` 覆盖不足；已修复。
+- 代码质量复审：通过。Safety 文档已明确 `*mut` 仅用于所有权释放，不代表可写；调用方不得修改内容、提前插入 NUL、改变长度或修改终止 NUL。测试 helper 已通过 crate root re-export 的释放函数释放非空状态字符串，并增加 root re-export null free 覆盖。
+
+**验证记录：**
+
+- `cargo test -p clipplus-ffi --test ffi_status`：通过，5/5。
+- `cargo clippy -p clipplus-ffi --all-targets -- -D warnings`：通过。
+- `RUSTDOCFLAGS='-D warnings' cargo doc -p clipplus-ffi --no-deps`：通过。
+- `git diff --check`：通过。
+- `./scripts/dev/check.sh`：通过。
+
 ---
 
 ### Task 9: 开发 CLI 状态和诊断命令
