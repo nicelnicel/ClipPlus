@@ -2168,14 +2168,14 @@ git commit -m "fix: harden discovery packet contract"
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-transport/src/file_transfer.rs`
 - Test: `/Users/cc/proj/ClipPlus/crates/clipplus-transport/tests/message_roundtrip.rs`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `/Users/cc/proj/ClipPlus/crates/clipplus-transport/tests/message_roundtrip.rs`:
 
 ```rust
-use clipplus_transport::file_transfer::{FileTransferRequest, TransferState};
-use clipplus_transport::message::{TransportMessage, TransportMessageKind};
-use clipplus_transport::session::{HandshakeState, PeerSession};
+use clipplus_transport::file_transfer::{FileTransferError, FileTransferRequest, TransferState};
+use clipplus_transport::message::{TransportMessage, TransportMessageError, TransportMessageKind};
+use clipplus_transport::session::{HandshakeState, PeerSession, SessionError};
 
 #[test]
 fn transport_message_roundtrips_json() {
@@ -2200,11 +2200,29 @@ fn file_transfer_request_has_expiry() {
 
     assert_eq!(request.state, TransferState::Available);
     assert!(!request.is_expired_at_minute(29));
+    assert!(!request.is_expired_at_minute(30));
     assert!(request.is_expired_at_minute(31));
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+质量审查后继续补充以下回归测试：
+
+- `transport_message_kind_uses_snake_case_wire_value`
+- `transport_message_rejects_invalid_json`
+- `transport_message_rejects_empty_sender_device_id`
+- `transport_message_rejects_non_json_payload_json`
+- `transport_message_to_json_rejects_empty_sender_device_id`
+- `transport_message_to_json_rejects_non_json_payload_json`
+- `transport_message_unknown_kind_is_rejected`
+- `peer_session_allows_sync_only_when_trusted`
+- `peer_session_rejects_blank_device_id`
+- `peer_session_trims_device_id_on_new`
+- `peer_session_can_sync_defends_against_blank_public_device_id`
+- `file_transfer_request_supports_u64_expiry_minutes`
+- `file_transfer_request_rejects_blank_transfer_id`
+- `file_transfer_request_trims_transfer_id_on_new`
+
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -2212,9 +2230,11 @@ Run:
 cargo test -p clipplus-transport --test message_roundtrip
 ```
 
-Expected: FAIL，错误包含 `unresolved import clipplus_transport::message::TransportMessage`。
+初始预期：FAIL，错误包含 `unresolved import clipplus_transport::message::TransportMessage`。
 
-- [ ] **Step 3: 实现传输消息**
+规格修复阶段再次 RED：新增超过 `u32::MAX` 的过期分钟数测试后，当前 API 编译失败，错误为 `expected u32, found u64`。质量修复阶段再次 RED：缺少 `TransportMessageError::InvalidField`、`PeerSession::try_new`、`SessionError`、`FileTransferRequest::new`、`FileTransferError` 等校验型接口。
+
+- [x] **Step 3: 实现传输消息**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-transport/src/message.rs`:
 
@@ -2224,6 +2244,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransportMessageKind {
     Hello,
     ApprovalRequest,
@@ -2248,6 +2269,8 @@ pub struct TransportMessage {
 pub enum TransportMessageError {
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid transport message field: {0}")]
+    InvalidField(&'static str),
 }
 
 impl TransportMessage {
@@ -2261,26 +2284,55 @@ impl TransportMessage {
     }
 
     pub fn to_json(&self) -> Result<String, TransportMessageError> {
+        self.validate()?;
         Ok(serde_json::to_string(self)?)
     }
 
     pub fn from_json(value: &str) -> Result<Self, TransportMessageError> {
-        Ok(serde_json::from_str(value)?)
+        let message = serde_json::from_str::<Self>(value)?;
+        message.validate()?;
+        Ok(message)
+    }
+
+    fn validate(&self) -> Result<(), TransportMessageError> {
+        if self.sender_device_id.trim().is_empty() {
+            return Err(TransportMessageError::InvalidField("sender_device_id"));
+        }
+
+        if serde_json::from_str::<serde_json::Value>(&self.payload_json).is_err() {
+            return Err(TransportMessageError::InvalidField("payload_json"));
+        }
+
+        Ok(())
     }
 }
 ```
 
-- [ ] **Step 4: 实现会话状态**
+实际落地还包含：
+
+- `TransportMessageKind` wire 值固定为 snake_case，例如 `text_event`。
+- `from_json` 和 `to_json` 共用校验逻辑，发送和接收都会拒绝空白 `sender_device_id` 与非 JSON 的 `payload_json`。
+- 字段校验错误使用 `TransportMessageError::InvalidField(&'static str)`，malformed JSON 和未知 kind 仍作为 JSON 反序列化错误处理；未知 kind 当前严格拒绝，这是有意的 message action contract。
+
+- [x] **Step 4: 实现会话状态**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-transport/src/session.rs`:
 
 ```rust
+use thiserror::Error;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeState {
     PendingApproval,
     Trusted,
     Rejected,
     KeyMismatch,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SessionError {
+    #[error("invalid peer session field: {0}")]
+    InvalidField(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2291,23 +2343,40 @@ pub struct PeerSession {
 
 impl PeerSession {
     pub fn new(device_id: impl Into<String>, state: HandshakeState) -> Self {
-        Self {
-            device_id: device_id.into(),
-            state,
+        Self::try_new(device_id, state).expect("valid peer session device id")
+    }
+
+    pub fn try_new(
+        device_id: impl Into<String>,
+        state: HandshakeState,
+    ) -> Result<Self, SessionError> {
+        let device_id = device_id.into();
+        let device_id = device_id.trim();
+        if device_id.is_empty() {
+            return Err(SessionError::InvalidField("device_id"));
         }
+
+        Ok(Self {
+            device_id: device_id.to_string(),
+            state,
+        })
     }
 
     pub fn can_sync(&self) -> bool {
-        matches!(self.state, HandshakeState::Trusted)
+        self.state == HandshakeState::Trusted && !self.device_id.trim().is_empty()
     }
 }
 ```
 
-- [ ] **Step 5: 实现文件传输请求模型**
+`PeerSession::try_new` 是面向外部输入的安全构造器；`new` 保持原计划测试兼容并委托 `try_new`。`can_sync` 额外防御手动构造 public 字段造成的空身份 Trusted session。
+
+- [x] **Step 5: 实现文件传输请求模型**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-transport/src/file_transfer.rs`:
 
 ```rust
+use thiserror::Error;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferState {
     Available,
@@ -2315,6 +2384,12 @@ pub enum TransferState {
     Completed,
     Failed,
     Expired,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FileTransferError {
+    #[error("invalid file transfer field: {0}")]
+    InvalidField(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2325,12 +2400,25 @@ pub struct FileTransferRequest {
 }
 
 impl FileTransferRequest {
-    pub fn new_for_test(transfer_id: impl Into<String>, expires_after_minutes: u64) -> Self {
-        Self {
-            transfer_id: transfer_id.into(),
+    pub fn new(
+        transfer_id: impl Into<String>,
+        expires_after_minutes: u64,
+    ) -> Result<Self, FileTransferError> {
+        let transfer_id = transfer_id.into();
+        let transfer_id = transfer_id.trim();
+        if transfer_id.is_empty() {
+            return Err(FileTransferError::InvalidField("transfer_id"));
+        }
+
+        Ok(Self {
+            transfer_id: transfer_id.to_string(),
             expires_after_minutes,
             state: TransferState::Available,
-        }
+        })
+    }
+
+    pub fn new_for_test(transfer_id: impl Into<String>, expires_after_minutes: u64) -> Self {
+        Self::new(transfer_id, expires_after_minutes).expect("valid file transfer id")
     }
 
     pub fn is_expired_at_minute(&self, elapsed_minutes: u64) -> bool {
@@ -2339,7 +2427,9 @@ impl FileTransferRequest {
 }
 ```
 
-- [ ] **Step 6: 运行测试通过**
+文件传输请求现在提供校验型生产构造器 `new`，trim 后拒绝空白 transfer id；`new_for_test` 委托 `new` 保持测试便捷性。
+
+- [x] **Step 6: 运行测试通过**
 
 Run:
 
@@ -2347,9 +2437,9 @@ Run:
 cargo test -p clipplus-transport --test message_roundtrip
 ```
 
-Expected: PASS，3 个测试通过。
+预期：PASS，当前 17 个测试通过。
 
-- [ ] **Step 7: 运行 workspace 检查**
+- [x] **Step 7: 运行 workspace 检查**
 
 Run:
 
@@ -2357,14 +2447,34 @@ Run:
 ./scripts/dev/check.sh
 ```
 
-Expected: PASS。
+预期：PASS。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add crates/clipplus-transport
 git commit -m "feat: add transport message models"
 ```
+
+质量修复提交：
+
+```bash
+git commit -m "fix: use u64 transfer expiry"
+git commit -m "fix: validate transport model invariants"
+```
+
+**已接受提交：**
+
+- `4008b71104cda02fde3b4246a1f9722ab35fbd88` `feat: add transport message models`
+- `e23459867e38e1d7ae185f1a417df8fecbab3faa` `fix: use u64 transfer expiry`
+- `43326b06e7acd31a7d36ac77a0f5d80d9906fe5d` `fix: validate transport model invariants`
+
+**审查状态：**
+
+- 规格审查：第一轮发现文件传输过期分钟数使用 `u32`，与计划 `u64` 不一致；已修复。
+- 规格复审：通过。
+- 代码质量审查：第一轮发现发送侧 `to_json` 不校验、可信空身份 session、空 transfer id 请求、错误类型不结构化和未知 kind contract 缺测试；已修复。
+- 代码质量复审：通过。仅保留非阻塞建议：后续 FFI/CLI 边界应优先使用 `try_new`/`new` 校验型接口，真实 payload 落地前再决定 `payload_json` 是否升级为 typed payload 或 `serde_json::Value`。
 
 ---
 
