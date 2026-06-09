@@ -1239,7 +1239,7 @@ git commit -m "feat: add shared key and device identity"
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-core/src/service.rs`
 - Test: `/Users/cc/proj/ClipPlus/crates/clipplus-core/tests/sync_policy.rs`
 
-- [ ] **Step 1: 扩展失败测试**
+- [x] **Step 1: 扩展失败测试**
 
 Append to `/Users/cc/proj/ClipPlus/crates/clipplus-core/tests/sync_policy.rs`:
 
@@ -1261,9 +1261,9 @@ fn remote_write_guard_blocks_loopback() {
     let event = text_event("hello");
     let mut guard = LoopGuard::default();
 
-    guard.mark_remote_write(event.event_id);
+    guard.mark_remote_write(&event);
 
-    assert!(guard.should_ignore_local_change(event.event_id));
+    assert!(guard.should_ignore_local_change(&event));
 }
 
 #[test]
@@ -1277,7 +1277,21 @@ fn processed_event_is_not_processed_twice() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+质量审查后继续补充以下回归测试：
+
+- `default_policy_allows_text_publish`
+- `policy_blocks_text_when_text_sync_is_disabled`
+- `policy_blocks_image_when_image_sync_is_disabled`
+- `policy_blocks_image_when_image_is_too_large`
+- `policy_blocks_file_list_when_file_sync_is_disabled`
+- `remote_write_guard_matches_same_payload_with_new_event_id`
+- `remote_write_lru_refreshes_repeated_payload`
+- `remote_write_and_processed_caches_do_not_pollute_each_other`
+- `processed_lru_refreshes_repeated_event_id`
+- `cloned_service_shares_loop_guard_state`
+- `service_policy_uses_updated_settings_snapshot`
+
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -1285,19 +1299,22 @@ Run:
 cargo test -p clipplus-core --test sync_policy
 ```
 
-Expected: FAIL，错误包含 `unresolved import clipplus_core::sync::LoopGuard`。
+初始预期：FAIL，错误包含 `unresolved import clipplus_core::sync::LoopGuard`。
 
-- [ ] **Step 3: 实现同步策略**
+质量修复阶段新增事件级 API 测试后再次 RED：旧实现只接受 `Uuid`，新增测试触发 `E0308 mismatched types`；`CoreService` 缺少领域方法时触发 `E0599 no method named mark_remote_write / should_ignore_local_change / update_settings`。
+
+- [x] **Step 3: 实现同步策略**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-core/src/sync.rs`:
 
 ```rust
-use std::collections::VecDeque;
+use std::collections::{hash_map::DefaultHasher, VecDeque};
+use std::hash::{Hash, Hasher};
 
 use uuid::Uuid;
 
 use crate::config::SyncSettings;
-use crate::event::ClipboardEvent;
+use crate::event::{ClipboardEvent, ClipboardPayload, ImageFormat};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncDecision {
@@ -1330,7 +1347,7 @@ impl SyncPolicy {
 
 #[derive(Debug, Clone)]
 pub struct LoopGuard {
-    recent_remote_writes: VecDeque<Uuid>,
+    recent_remote_writes: VecDeque<RemoteWriteRecord>,
     recent_processed: VecDeque<Uuid>,
     capacity: usize,
 }
@@ -1346,28 +1363,49 @@ impl Default for LoopGuard {
 }
 
 impl LoopGuard {
-    pub fn mark_remote_write(&mut self, event_id: Uuid) {
-        Self::push_lru(&mut self.recent_remote_writes, self.capacity, event_id);
+    pub fn mark_remote_write(&mut self, event: &ClipboardEvent) {
+        let record = RemoteWriteRecord::from_event(event);
+
+        Self::push_lru_by(
+            &mut self.recent_remote_writes,
+            self.capacity,
+            record,
+            |entry| entry.event_id == record.event_id || entry.payload == record.payload,
+        );
     }
 
-    pub fn should_ignore_local_change(&self, event_id: Uuid) -> bool {
-        self.recent_remote_writes.contains(&event_id)
+    pub fn should_ignore_local_change(&self, event: &ClipboardEvent) -> bool {
+        let payload = PayloadFingerprint::from_event(event);
+
+        self.recent_remote_writes
+            .iter()
+            .any(|entry| entry.event_id == event.event_id || entry.payload == payload)
     }
 
     pub fn mark_processed(&mut self, event_id: Uuid) {
-        Self::push_lru(&mut self.recent_processed, self.capacity, event_id);
+        Self::push_lru_by(
+            &mut self.recent_processed,
+            self.capacity,
+            event_id,
+            |entry| *entry == event_id,
+        );
     }
 
     pub fn has_processed(&self, event_id: Uuid) -> bool {
         self.recent_processed.contains(&event_id)
     }
 
-    fn push_lru(queue: &mut VecDeque<Uuid>, capacity: usize, event_id: Uuid) {
-        if queue.contains(&event_id) {
-            return;
+    fn push_lru_by<T>(
+        queue: &mut VecDeque<T>,
+        capacity: usize,
+        item: T,
+        matches: impl Fn(&T) -> bool,
+    ) {
+        if let Some(position) = queue.iter().position(matches) {
+            queue.remove(position);
         }
 
-        queue.push_back(event_id);
+        queue.push_back(item);
         while queue.len() > capacity {
             queue.pop_front();
         }
@@ -1375,16 +1413,34 @@ impl LoopGuard {
 }
 ```
 
-- [ ] **Step 4: 实现 core 服务壳状态**
+实际落地还包含：
+
+- `RemoteWriteRecord { event_id, payload: PayloadFingerprint }`
+- `PayloadFingerprint(u64)` 使用 `DefaultHasher` 做进程内短期 payload 指纹，不保存原始剪贴板文本。
+- 文本指纹包含 payload variant、text、byte_size。
+- 图片指纹包含 payload variant、format、byte_size、width、height、content_hash。
+- 文件列表指纹排除 `transfer_id` / `file_id`，基于文件数量、name、size、modified_at、content_hash、source_relative_path，并排序后计算，避免同一批文件因传输 UUID 或顺序变化误判。
+- LRU 重复命中会移除旧位置后 `push_back`，不会退化成 FIFO。
+
+- [x] **Step 4: 实现 core 服务壳状态**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-core/src/service.rs`:
 
 ```rust
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use crate::config::SyncSettings;
+use crate::event::ClipboardEvent;
 use crate::sync::{LoopGuard, SyncPolicy};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct CoreService {
+    state: Arc<Mutex<CoreServiceState>>,
+}
+
+#[derive(Debug)]
+struct CoreServiceState {
     settings: SyncSettings,
     loop_guard: LoopGuard,
 }
@@ -1392,22 +1448,52 @@ pub struct CoreService {
 impl CoreService {
     pub fn new(settings: SyncSettings) -> Self {
         Self {
-            settings,
-            loop_guard: LoopGuard::default(),
+            state: Arc::new(Mutex::new(CoreServiceState {
+                settings,
+                loop_guard: LoopGuard::default(),
+            })),
         }
     }
 
     pub fn policy(&self) -> SyncPolicy {
-        SyncPolicy::new(self.settings.clone())
+        SyncPolicy::new(self.lock_state().settings.clone())
     }
 
-    pub fn loop_guard(&self) -> &LoopGuard {
-        &self.loop_guard
+    pub fn loop_guard(&self) -> LoopGuard {
+        self.lock_state().loop_guard.clone()
+    }
+
+    pub fn mark_remote_write(&self, event: &ClipboardEvent) {
+        self.lock_state().loop_guard.mark_remote_write(event);
+    }
+
+    pub fn should_ignore_local_change(&self, event: &ClipboardEvent) -> bool {
+        self.lock_state().loop_guard.should_ignore_local_change(event)
+    }
+
+    pub fn mark_processed(&self, event_id: Uuid) {
+        self.lock_state().loop_guard.mark_processed(event_id);
+    }
+
+    pub fn has_processed(&self, event_id: Uuid) -> bool {
+        self.lock_state().loop_guard.has_processed(event_id)
+    }
+
+    pub fn update_settings(&self, settings: SyncSettings) {
+        self.lock_state().settings = settings;
+    }
+
+    fn lock_state(&self) -> MutexGuard<'_, CoreServiceState> {
+        self.state
+            .lock()
+            .expect("core service state mutex poisoned")
     }
 }
 ```
 
-- [ ] **Step 5: 运行测试通过**
+`CoreService` 使用 `Arc<Mutex<CoreServiceState>>`，`Clone` 后共享 settings 和 loop guard 状态，避免网络接收路径和剪贴板监听路径持有不同 clone 时状态分裂。
+
+- [x] **Step 5: 运行测试通过**
 
 Run:
 
@@ -1415,9 +1501,9 @@ Run:
 cargo test -p clipplus-core --test sync_policy
 ```
 
-Expected: PASS，新增 3 个测试通过，文件内全部测试通过。
+预期：PASS，当前 `sync_policy` 30 个测试全部通过。
 
-- [ ] **Step 6: 运行 workspace 检查**
+- [x] **Step 6: 运行 workspace 检查**
 
 Run:
 
@@ -1425,14 +1511,31 @@ Run:
 ./scripts/dev/check.sh
 ```
 
-Expected: PASS。
+预期：PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add crates/clipplus-core
 git commit -m "feat: add sync policy and loop guard"
 ```
+
+质量修复提交：
+
+```bash
+git commit -m "fix: harden loop guard state handling"
+```
+
+**已接受提交：**
+
+- `1222f5482bc25db515758ee5322368e33d583607` `feat: add sync policy and loop guard`
+- `9cb0f64a316b0ba0b521012a0a9464b22e0894d6` `fix: harden loop guard state handling`
+
+**审查状态：**
+
+- 规格审查：通过。
+- 代码质量审查：第一轮发现只按 `event_id` 做回环保护、`CoreService` 状态克隆分裂、LRU 语义和测试覆盖问题；已修复。
+- 代码质量复审：通过，无 Critical/Important/Minor。
 
 ---
 
