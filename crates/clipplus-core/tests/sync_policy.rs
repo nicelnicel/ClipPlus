@@ -2,6 +2,7 @@ use chrono::Utc;
 use clipplus_core::config::{ContentTypeSettings, ImageLimit, SyncSettings};
 use clipplus_core::device::{DeviceId, DeviceState, PeerDevice, Platform};
 use clipplus_core::event::{ClipboardEvent, ClipboardPayload, FileItem, ImageFormat};
+use clipplus_core::sync::{LoopGuard, SyncDecision, SyncPolicy};
 use uuid::Uuid;
 
 fn test_device_id() -> DeviceId {
@@ -212,4 +213,39 @@ fn file_list_is_rejected_when_file_sync_is_disabled() {
     let event = file_list_event();
 
     assert!(!content.allows(&event));
+}
+
+#[test]
+fn disabled_global_sharing_blocks_publish() {
+    let settings = SyncSettings {
+        sharing_enabled: false,
+        ..SyncSettings::default()
+    };
+    let policy = SyncPolicy::new(settings);
+    let event = text_event("hello");
+
+    assert_eq!(
+        policy.can_publish(&event),
+        SyncDecision::Blocked("sharing_disabled")
+    );
+}
+
+#[test]
+fn remote_write_guard_blocks_loopback() {
+    let event = text_event("hello");
+    let mut guard = LoopGuard::default();
+
+    guard.mark_remote_write(event.event_id);
+
+    assert!(guard.should_ignore_local_change(event.event_id));
+}
+
+#[test]
+fn processed_event_is_not_processed_twice() {
+    let event = text_event("hello");
+    let mut guard = LoopGuard::default();
+
+    assert!(!guard.has_processed(event.event_id));
+    guard.mark_processed(event.event_id);
+    assert!(guard.has_processed(event.event_id));
 }
