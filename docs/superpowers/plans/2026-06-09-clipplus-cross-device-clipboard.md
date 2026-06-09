@@ -228,6 +228,9 @@ chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 ```
 
 Create `/Users/cc/proj/ClipPlus/crates/clipplus-core/src/lib.rs`:
@@ -549,6 +552,34 @@ fn paused_device_is_not_eligible_for_sync() {
 }
 
 #[test]
+fn device_id_trims_runtime_values() {
+    let id = DeviceId::new(" peer-a ").unwrap();
+
+    assert_eq!(id.as_str(), "peer-a");
+}
+
+#[test]
+fn device_id_rejects_blank_values() {
+    assert!(DeviceId::new("   ").is_err());
+}
+
+#[test]
+fn device_id_from_str_uses_same_validation() {
+    let id = " peer-a ".parse::<DeviceId>().unwrap();
+
+    assert_eq!(id.as_str(), "peer-a");
+    assert!("   ".parse::<DeviceId>().is_err());
+}
+
+#[test]
+fn device_id_deserialization_uses_same_validation() {
+    let id = serde_json::from_str::<DeviceId>("\" peer-a \"").unwrap();
+
+    assert_eq!(id.as_str(), "peer-a");
+    assert!(serde_json::from_str::<DeviceId>("\"   \"").is_err());
+}
+
+#[test]
 fn image_payload_respects_configured_limit() {
     let content = ContentTypeSettings {
         text: true,
@@ -683,6 +714,7 @@ pub enum DeviceIdError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct DeviceId(String);
 
 impl DeviceId {
@@ -707,6 +739,20 @@ impl FromStr for DeviceId {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::new(value)
+    }
+}
+
+impl TryFrom<String> for DeviceId {
+    type Error = DeviceIdError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<DeviceId> for String {
+    fn from(value: DeviceId) -> Self {
+        value.0
     }
 }
 
