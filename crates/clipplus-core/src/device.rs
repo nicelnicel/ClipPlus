@@ -1,15 +1,38 @@
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DeviceIdError {
+    #[error("device id cannot be empty")]
+    Empty,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeviceId(String);
 
 impl DeviceId {
-    pub fn from_static(value: &'static str) -> Self {
-        Self(value.to_string())
+    pub fn new(value: impl Into<String>) -> Result<Self, DeviceIdError> {
+        let value = value.into();
+        let trimmed = value.trim();
+
+        if trimmed.is_empty() {
+            return Err(DeviceIdError::Empty);
+        }
+
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl FromStr for DeviceId {
+    type Err = DeviceIdError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
     }
 }
 

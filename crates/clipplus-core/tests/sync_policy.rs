@@ -1,6 +1,46 @@
+use chrono::Utc;
 use clipplus_core::config::{ContentTypeSettings, ImageLimit, SyncSettings};
 use clipplus_core::device::{DeviceId, DeviceState, PeerDevice, Platform};
-use clipplus_core::event::{ClipboardEvent, ClipboardPayload};
+use clipplus_core::event::{ClipboardEvent, ClipboardPayload, FileItem, ImageFormat};
+use uuid::Uuid;
+
+fn test_device_id() -> DeviceId {
+    DeviceId::new("test-device").unwrap()
+}
+
+fn text_event(text: &str) -> ClipboardEvent {
+    ClipboardEvent::new_text(test_device_id(), text)
+}
+
+fn image_event(byte_size: usize) -> ClipboardEvent {
+    ClipboardEvent::new_image_metadata(
+        test_device_id(),
+        ImageFormat::Png,
+        byte_size,
+        100,
+        100,
+        format!("test-image-{byte_size}"),
+    )
+}
+
+fn file_list_event() -> ClipboardEvent {
+    ClipboardEvent {
+        event_id: Uuid::new_v4(),
+        origin_device_id: test_device_id(),
+        created_at: Utc::now(),
+        payload: ClipboardPayload::FileList {
+            transfer_id: Uuid::new_v4(),
+            files: vec![FileItem {
+                file_id: Uuid::new_v4(),
+                name: "document.txt".to_string(),
+                size: 12,
+                modified_at: Utc::now(),
+                content_hash: "test-file".to_string(),
+                source_relative_path: "document.txt".to_string(),
+            }],
+        },
+    }
+}
 
 #[test]
 fn default_settings_enable_text_image_and_file() {
@@ -16,13 +56,37 @@ fn default_settings_enable_text_image_and_file() {
 #[test]
 fn paused_device_is_not_eligible_for_sync() {
     let peer = PeerDevice::new(
-        DeviceId::from_static("peer-a"),
+        DeviceId::new("peer-a").unwrap(),
         "Windows-PC",
         Platform::Windows,
         DeviceState::Paused,
     );
 
     assert!(!peer.can_sync());
+}
+
+#[test]
+fn trusted_device_is_eligible_for_sync() {
+    let peer = PeerDevice::new(
+        DeviceId::new("peer-a").unwrap(),
+        "Windows-PC",
+        Platform::Windows,
+        DeviceState::Trusted,
+    );
+
+    assert!(peer.can_sync());
+}
+
+#[test]
+fn device_id_trims_runtime_values() {
+    let id = DeviceId::new(" peer-a ").unwrap();
+
+    assert_eq!(id.as_str(), "peer-a");
+}
+
+#[test]
+fn device_id_rejects_blank_values() {
+    assert!(DeviceId::new("   ").is_err());
 }
 
 #[test]
@@ -33,7 +97,33 @@ fn image_payload_respects_configured_limit() {
         file: true,
         image_limit: ImageLimit::Mb5,
     };
-    let event = ClipboardEvent::image_for_test(6 * 1024 * 1024);
+    let event = image_event(6 * 1024 * 1024);
+
+    assert!(!content.allows(&event));
+}
+
+#[test]
+fn image_payload_is_allowed_at_configured_limit() {
+    let content = ContentTypeSettings {
+        text: true,
+        image: true,
+        file: true,
+        image_limit: ImageLimit::Mb5,
+    };
+    let event = image_event(5 * 1024 * 1024);
+
+    assert!(content.allows(&event));
+}
+
+#[test]
+fn image_payload_is_rejected_when_image_sync_is_disabled() {
+    let content = ContentTypeSettings {
+        text: true,
+        image: false,
+        file: true,
+        image_limit: ImageLimit::Mb20,
+    };
+    let event = image_event(1024);
 
     assert!(!content.allows(&event));
 }
@@ -46,8 +136,34 @@ fn text_event_is_allowed_when_text_sync_is_enabled() {
         file: false,
         image_limit: ImageLimit::Mb20,
     };
-    let event = ClipboardEvent::text_for_test("hello");
+    let event = text_event("hello");
 
-    assert!(matches!(event.payload, ClipboardPayload::Text { .. }));
+    assert!(matches!(&event.payload, ClipboardPayload::Text { .. }));
     assert!(content.allows(&event));
+}
+
+#[test]
+fn text_event_is_rejected_when_text_sync_is_disabled() {
+    let content = ContentTypeSettings {
+        text: false,
+        image: true,
+        file: true,
+        image_limit: ImageLimit::Mb20,
+    };
+    let event = text_event("hello");
+
+    assert!(!content.allows(&event));
+}
+
+#[test]
+fn file_list_is_rejected_when_file_sync_is_disabled() {
+    let content = ContentTypeSettings {
+        text: true,
+        image: true,
+        file: false,
+        image_limit: ImageLimit::Mb20,
+    };
+    let event = file_list_event();
+
+    assert!(!content.allows(&event));
 }

@@ -49,29 +49,36 @@ pub struct FileItem {
 }
 
 impl ClipboardEvent {
-    pub fn text_for_test(text: &str) -> Self {
+    pub fn new_text(origin_device_id: DeviceId, text: impl Into<String>) -> Self {
+        let text = text.into();
+        let byte_size = text.len();
+
         Self {
             event_id: Uuid::new_v4(),
-            origin_device_id: DeviceId::from_static("test-device"),
+            origin_device_id,
             created_at: Utc::now(),
-            payload: ClipboardPayload::Text {
-                text: text.to_string(),
-                byte_size: text.len(),
-            },
+            payload: ClipboardPayload::Text { text, byte_size },
         }
     }
 
-    pub fn image_for_test(byte_size: usize) -> Self {
+    pub fn new_image_metadata(
+        origin_device_id: DeviceId,
+        format: ImageFormat,
+        byte_size: usize,
+        width: u32,
+        height: u32,
+        content_hash: impl Into<String>,
+    ) -> Self {
         Self {
             event_id: Uuid::new_v4(),
-            origin_device_id: DeviceId::from_static("test-device"),
+            origin_device_id,
             created_at: Utc::now(),
             payload: ClipboardPayload::Image {
-                format: ImageFormat::Png,
+                format,
                 byte_size,
-                width: 100,
-                height: 100,
-                content_hash: format!("test-image-{byte_size}"),
+                width,
+                height,
+                content_hash: content_hash.into(),
             },
         }
     }
