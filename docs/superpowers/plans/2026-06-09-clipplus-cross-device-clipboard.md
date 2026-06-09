@@ -1547,13 +1547,16 @@ git commit -m "fix: harden loop guard state handling"
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-diagnostics/src/export.rs`
 - Test: `/Users/cc/proj/ClipPlus/crates/clipplus-diagnostics/tests/diagnostics_redaction.rs`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `/Users/cc/proj/ClipPlus/crates/clipplus-diagnostics/tests/diagnostics_redaction.rs`:
 
 ```rust
-use clipplus_diagnostics::redaction::{redact_config, RedactedConfig};
-use clipplus_diagnostics::status::{ContentTypeStatus, RuntimeStatus};
+use clipplus_diagnostics::redaction::{redact_config, redact_sensitive_text};
+use clipplus_diagnostics::status::{
+    ClipboardContentKind, ClipboardEventSummary, ContentTypeStatus, RuntimeStatus,
+    SafeDiagnosticMessage,
+};
 
 #[test]
 fn redacted_config_does_not_include_raw_key() {
@@ -1573,12 +1576,17 @@ fn redacted_config_does_not_include_raw_key() {
 }
 
 #[test]
-fn runtime_status_serializes_without_clipboard_content() {
-    let status = RuntimeStatus::new_for_test();
+fn runtime_status_serializes_without_clipboard_content_or_error_secrets() {
+    let mut status = RuntimeStatus::new_for_test();
+    status.last_error = Some(SafeDiagnosticMessage::new("failed token=runtime-secret"));
     let json = serde_json::to_string(&status).unwrap();
 
     assert!(json.contains("connected_peer_count"));
+    assert!(json.contains("last_clipboard_event_summary"));
+    assert!(json.contains("\"content_kind\":\"Text\""));
+    assert!(json.contains("\"byte_count\":32"));
     assert!(!json.contains("password copied from clipboard"));
+    assert!(!json.contains("runtime-secret"));
 }
 
 #[test]
@@ -1593,7 +1601,16 @@ fn content_type_status_reports_enabled_types() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+质量审查后继续补充以下回归测试：
+
+- `redacted_config_uses_eight_character_prefixes_for_long_ids`
+- `clipboard_event_summary_constructors_do_not_accept_raw_content`
+- `sensitive_text_redaction_handles_common_secret_formats`
+- `sensitive_text_redaction_handles_escaped_quotes_in_quoted_values`
+- `safe_diagnostic_message_redacts_escaped_quote_secrets`
+- `diagnostics_zip_contains_stable_redacted_entries`
+
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -1601,14 +1618,18 @@ Run:
 cargo test -p clipplus-diagnostics --test diagnostics_redaction
 ```
 
-Expected: FAIL，错误包含 `unresolved import clipplus_diagnostics::redaction::redact_config`。
+初始预期：FAIL，错误包含 `unresolved import clipplus_diagnostics::redaction::redact_config`。
 
-- [ ] **Step 3: 实现脱敏配置**
+质量修复阶段新增结构化摘要和公共脱敏函数测试后再次 RED：缺少 `redact_sensitive_text`、`ClipboardContentKind`、`ClipboardEventSummary`、`SafeDiagnosticMessage`；转义引号修复前，`abc\"def` 形式的 quoted secret 会残留后半段。
+
+- [x] **Step 3: 实现脱敏配置**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-diagnostics/src/redaction.rs`:
 
 ```rust
 use serde::{Deserialize, Serialize};
+
+pub const REDACTED_ID_PREFIX_CHARS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedactedConfig {
@@ -1637,16 +1658,26 @@ pub fn redact_config(
 }
 
 fn prefix(value: &str) -> String {
-    value.chars().take(8).collect()
+    value.chars().take(REDACTED_ID_PREFIX_CHARS).collect()
 }
 ```
 
-- [ ] **Step 4: 实现运行状态**
+实际落地还包含 `redact_sensitive_text(text: &str) -> String`：
+
+- 统一供 `export.rs` 和 `status.rs` 使用。
+- 支持大小写不敏感字段名 `key`、`shared_key`、`token`。
+- 支持 `=` / `:`、分隔符周围空白、单双引号、JSON 字段、URL/query 参数。
+- 未引用值按空白、逗号、分号、`&`、引号结束。
+- quoted value 会识别反斜杠转义，不会把 `\"` 当成结束引号，避免 `abc\"def` 泄漏后半段。
+
+- [x] **Step 4: 实现运行状态**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-diagnostics/src/status.rs`:
 
 ```rust
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::redaction::redact_sensitive_text;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentTypeStatus {
@@ -1672,6 +1703,60 @@ impl ContentTypeStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipboardContentKind {
+    Text,
+    Image,
+    FileList,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardEventSummary {
+    pub content_kind: ClipboardContentKind,
+    pub byte_count: usize,
+    pub item_count: Option<usize>,
+    pub source_device_id_prefix: Option<String>,
+}
+
+impl ClipboardEventSummary {
+    pub fn text(byte_count: usize) -> Self { /* ... */ }
+    pub fn image(byte_count: usize) -> Self { /* ... */ }
+    pub fn file_list(item_count: usize) -> Self { /* ... */ }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SafeDiagnosticMessage {
+    message: String,
+}
+
+impl SafeDiagnosticMessage {
+    pub fn new(message: impl AsRef<str>) -> Self {
+        Self {
+            message: redact_sensitive_text(message.as_ref()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.message
+    }
+}
+
+impl<'de> Deserialize<'de> for SafeDiagnosticMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMessage {
+            message: String,
+        }
+
+        let raw = RawMessage::deserialize(deserializer)?;
+        Ok(Self::new(raw.message))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeStatus {
     pub app_version: String,
     pub core_version: String,
@@ -1684,8 +1769,8 @@ pub struct RuntimeStatus {
     pub connected_peer_count: usize,
     pub pending_peer_count: usize,
     pub paused_peer_count: usize,
-    pub last_clipboard_event_summary: Option<String>,
-    pub last_error: Option<String>,
+    pub last_clipboard_event_summary: Option<ClipboardEventSummary>,
+    pub last_error: Option<SafeDiagnosticMessage>,
     pub startup_enabled: bool,
     pub log_level: String,
 }
@@ -1708,7 +1793,7 @@ impl RuntimeStatus {
             connected_peer_count: 1,
             pending_peer_count: 0,
             paused_peer_count: 0,
-            last_clipboard_event_summary: Some("text bytes=32".to_string()),
+            last_clipboard_event_summary: Some(ClipboardEventSummary::text(32)),
             last_error: None,
             startup_enabled: false,
             log_level: "normal".to_string(),
@@ -1717,7 +1802,9 @@ impl RuntimeStatus {
 }
 ```
 
-- [ ] **Step 5: 实现诊断包导出模型**
+`RuntimeStatus` 保留 JSON 字段名 `last_clipboard_event_summary` 和 `last_error`，但字段类型已从自由字符串收窄为结构化安全摘要和会自动脱敏的安全消息，避免调用方直接放入真实剪贴板内容或 secret。
+
+- [x] **Step 5: 实现诊断包导出模型**
 
 Replace `/Users/cc/proj/ClipPlus/crates/clipplus-diagnostics/src/export.rs`:
 
@@ -1727,7 +1814,7 @@ use std::io::{Cursor, Write};
 use thiserror::Error;
 use zip::write::SimpleFileOptions;
 
-use crate::redaction::RedactedConfig;
+use crate::redaction::{redact_sensitive_text, RedactedConfig};
 use crate::status::RuntimeStatus;
 
 #[derive(Debug, Error)]
@@ -1756,14 +1843,22 @@ pub fn export_diagnostics_zip(
     zip.write_all(serde_json::to_string_pretty(config)?.as_bytes())?;
 
     zip.start_file("logs/clipplus.log", options)?;
-    zip.write_all(log_text.as_bytes())?;
+    zip.write_all(redact_sensitive_text(log_text).as_bytes())?;
 
     let cursor = zip.finish()?;
     Ok(cursor.into_inner())
 }
 ```
 
-- [ ] **Step 6: 运行测试通过**
+诊断包测试会打开 zip 并精确校验 3 个稳定条目名：
+
+- `runtime-status.json`
+- `config-redacted.json`
+- `logs/clipplus.log`
+
+测试同时解析 status/config JSON，确认 raw key、完整 group id、完整 device id 不进入诊断包。
+
+- [x] **Step 6: 运行测试通过**
 
 Run:
 
@@ -1771,9 +1866,9 @@ Run:
 cargo test -p clipplus-diagnostics --test diagnostics_redaction
 ```
 
-Expected: PASS，3 个测试通过。
+预期：PASS，当前 9 个测试通过。
 
-- [ ] **Step 7: 运行 workspace 检查**
+- [x] **Step 7: 运行 workspace 检查**
 
 Run:
 
@@ -1781,14 +1876,34 @@ Run:
 ./scripts/dev/check.sh
 ```
 
-Expected: PASS。
+预期：PASS。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add crates/clipplus-diagnostics
 git commit -m "feat: add diagnostics redaction"
 ```
+
+质量修复提交：
+
+```bash
+git commit -m "fix: harden diagnostics sanitization"
+git commit -m "fix: handle escaped diagnostic secrets"
+```
+
+**已接受提交：**
+
+- `27bb63fedad2b74c0cc367d7ce042f96b69d8037` `feat: add diagnostics redaction`
+- `ec5b7eb9927d28dc250971f30b33ffc41025e07f` `fix: harden diagnostics sanitization`
+- `c88a8e2456e3b9199884460ef112ef43d3583e9a` `fix: handle escaped diagnostic secrets`
+
+**审查状态：**
+
+- 规格审查：通过。
+- 代码质量审查：第一轮发现日志脱敏格式覆盖不足、运行状态自由字符串和 zip 条目测试缺口；已修复。
+- 代码质量复审：第二轮发现 quoted/JSON 字符串中 `\"` 转义会导致 secret 后半段泄漏；已修复。
+- 最终代码质量复审：通过。仅保留非阻塞建议：后续可收紧 `ClipboardEventSummary::source_device_id_prefix` 的写入路径，统一截断完整设备 ID。
 
 ---
 
