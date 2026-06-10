@@ -94,6 +94,29 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/
 ./scripts/dev/check.sh
 ```
 
+- 共享 Key、组 ID、Rust FFI、Swift/C# CoreBridge 相关改动必须额外做 FFI 真实调用验证，不能把原生壳 fallback 路径通过当作 FFI 通过：
+  - Rust golden vector 必须确认 `clipplus-test-key` 派生为 `21YR2N3_wcdRPmEMLiuLMA`。
+  - macOS 必须用 `CLIPPLUS_FFI_LIBRARY_PATH` 指向真实 `libclipplus_ffi.dylib` 运行 Swift 测试。
+  - Windows 必须生成真实 `clipplus_ffi.dll` 并通过 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 P/Invoke 测试。
+  - 如果任一平台只能走 fallback，要在计划/提交说明里明确写出阻塞原因，不能宣称跨平台共享 Key 已完全统一。
+
+macOS FFI 验证命令：
+
+```bash
+cargo build -p clipplus-ffi
+cd /Users/cc/proj/ClipPlus/apps/mac
+CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib swift test --filter CoreBridgeDerivesGroupIdWhenFFILibraryIsAvailable
+```
+
+Windows FFI 验证命令：
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "$env:CARGO_TARGET_DIR=\"$env:TEMP/ClipPlusRustTarget\"; Set-Location C:/Mac/Home/proj/ClipPlus; cargo build -p clipplus-ffi; $dll=Join-Path $env:CARGO_TARGET_DIR \"debug/clipplus_ffi.dll\"; $env:CLIPPLUS_FFI_LIBRARY_PATH=$dll; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable"'
+```
+
+- 在 Parallels Windows VM 内构建 Rust crate 时，必须设置 `CARGO_TARGET_DIR` 到 Windows 本机目录（例如 `$env:TEMP/ClipPlusRustTarget`），不要使用 `C:\Mac\Home\proj\ClipPlus\target`；共享目录上 Cargo/MSVC 可能出现临时目录删除失败或文件锁异常。
+- Windows FFI 验证前必须确认 MSVC linker 可用；至少检查 `where.exe link` 或 Visual Studio `vswhere.exe` 能找到包含 `Microsoft.VisualStudio.Component.VC.Tools.*` 的 Build Tools 实例。
+
 - 文件按需传输验收至少验证一个真实跨系统方向，并在计划或提交说明中写明方向：
   - 发送端复制真实文件到系统剪贴板后，接收端日志出现 `received file offer`。
   - 在接收端通过真实 UI 点击接收，不用直接调用内部函数代替用户操作。

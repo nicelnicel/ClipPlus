@@ -54,7 +54,13 @@ final class SettingsStateTests: XCTestCase {
     }
 
     func testCoreBridgeDerivesGroupIdWhenFFILibraryIsAvailable() {
+        let ffiLibraryPath = ProcessInfo.processInfo.environment["CLIPPLUS_FFI_LIBRARY_PATH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let groupId = CoreBridge().deriveGroupId(for: "clipplus-test-key") else {
+            if let ffiLibraryPath, !ffiLibraryPath.isEmpty {
+                XCTFail("Expected CoreBridge to load FFI library from CLIPPLUS_FFI_LIBRARY_PATH: \(ffiLibraryPath)")
+            }
+
             return
         }
 

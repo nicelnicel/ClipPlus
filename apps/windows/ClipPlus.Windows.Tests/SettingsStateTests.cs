@@ -53,9 +53,15 @@ public sealed class SettingsStateTests
     [Fact]
     public void CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable()
     {
+        var ffiLibraryPath = Environment.GetEnvironmentVariable("CLIPPLUS_FFI_LIBRARY_PATH");
         var groupId = new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId("clipplus-test-key");
         if (groupId is null)
         {
+            if (!string.IsNullOrWhiteSpace(ffiLibraryPath))
+            {
+                Assert.Fail($"Expected CoreBridge to load FFI library from CLIPPLUS_FFI_LIBRARY_PATH: {ffiLibraryPath}");
+            }
+
             return;
         }
 

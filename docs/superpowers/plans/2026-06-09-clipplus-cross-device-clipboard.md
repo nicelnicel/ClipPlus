@@ -3520,9 +3520,10 @@ git commit -m "test: add parallels e2e checklist"
 - macOS 验证：`CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib swift test` 通过 21/21；测试确认 `clipplus-test-key` 通过 FFI 派生为 `21YR2N3_wcdRPmEMLiuLMA`。普通 `swift test` 也通过 21/21。
 - Windows：`CoreBridge` 新增 `NativeLibrary.TryLoad` 动态加载 `clipplus_ffi.dll` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或 app 输出目录下 `clipplus_ffi.dll`；`SharedKeyHasher` 在 DLL 可用时使用 Rust 派生结果，否则保留旧 SHA-256 回退。
 - Windows 验证：Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 21/21，证明动态加载接口和回退路径不破坏 WPF app/test 构建。
-- Windows FFI DLL 阻塞：Windows VM 内 Rust host 为 `aarch64-pc-windows-msvc`，但当前缺少 MSVC `link.exe`；`cargo build -p clipplus-ffi` 因 `link.exe not found` 失败。因此尚未完成 Windows 真实 `clipplus_ffi.dll` P/Invoke 运行证明，需要后续安装 Visual Studio Build Tools/VC++ Build Tools 或配置可用 Windows linker 后再补。
+- Windows FFI DLL 补齐：Windows VM 内 Rust host 和 .NET Host 均为 ARM64；初始 Build Tools 缺少 ARM64 VC Tools，`vcvarsall arm64` 后找不到 `link.exe`。已通过 Visual Studio Installer `modify --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.Windows11SDK.26100 --quiet --norestart` 补装 ARM64 C++ 工具，`vswhere -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64` 可读回实例，`vcvarsall arm64 && where link` 可找到 `HostARM64\arm64\link.exe`。
+- Windows FFI 真实调用：Windows VM 内使用 `set "CARGO_TARGET_DIR=%TEMP%\ClipPlusRustTarget"` 避免 Parallels 共享目录文件系统异常，随后 `cargo build -p clipplus-ffi` 成功生成 `%TEMP%\ClipPlusRustTarget\debug\clipplus_ffi.dll`。设置 `CLIPPLUS_FFI_LIBRARY_PATH` 指向该 DLL 后，`C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable` 通过 1/1，测试已收紧为显式设置 FFI 路径时加载失败必须失败，确认 Windows C# CoreBridge 真实调用 Rust FFI 并得到 `21YR2N3_wcdRPmEMLiuLMA`。
 - 风险控制：默认不再自动搜索仓库 `target/debug`；开发/端到端启用 Rust FFI 必须显式传 `CLIPPLUS_FFI_LIBRARY_PATH` 或把 native library 放在 app 旁边，避免 macOS 自动用 Rust 派生而 Windows 默默回退导致组 ID 分叉。
-- 剩余项更新：共享 Key 派生已有 Rust FFI 入口和 macOS 真实调用证明；Windows 真实 FFI 调用、Swift/C# 完全移除回退、以及 UDP 文本/图片/文件运行时迁入 Rust core/transport 仍未完成。
+- 剩余项更新：共享 Key 派生已有 Rust FFI 入口、macOS 真实调用证明和 Windows 真实 DLL/PInvoke 调用证明；Swift/C# 完全移除回退、native library 打包随 app 发布、以及 UDP 文本/图片/文件运行时迁入 Rust core/transport 仍未完成。
 
 ---
 
