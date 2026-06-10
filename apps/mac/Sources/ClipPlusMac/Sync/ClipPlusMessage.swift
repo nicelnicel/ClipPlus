@@ -47,23 +47,15 @@ struct ClipPlusMessage: Codable, Equatable {
         senderDeviceId: String,
         senderDeviceName: String
     ) -> Self {
-        Self(
-            kind: .hello,
-            protocolVersion: 1,
+        guard let json = CoreBridge().createHelloMessageJSON(
             groupId: groupId,
             senderDeviceId: senderDeviceId,
-            senderDeviceName: senderDeviceName,
-            eventId: UUID().uuidString,
-            text: nil,
-            imageBase64: nil,
-            imageByteSize: nil,
-            imageContentHash: nil,
-            approvedDeviceId: nil,
-            transferId: nil,
-            files: nil,
-            archivePort: nil,
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
+            senderDeviceName: senderDeviceName
+        ) else {
+            preconditionFailure("Rust 核心库不可用，无法创建 hello 消息")
+        }
+
+        return decodeCoreMessageJSON(json)
     }
 
     static func trust(
@@ -72,23 +64,16 @@ struct ClipPlusMessage: Codable, Equatable {
         senderDeviceName: String,
         approvedDeviceId: String
     ) -> Self {
-        Self(
-            kind: .trust,
-            protocolVersion: 1,
+        guard let json = CoreBridge().createTrustMessageJSON(
             groupId: groupId,
             senderDeviceId: senderDeviceId,
             senderDeviceName: senderDeviceName,
-            eventId: UUID().uuidString,
-            text: nil,
-            imageBase64: nil,
-            imageByteSize: nil,
-            imageContentHash: nil,
-            approvedDeviceId: approvedDeviceId,
-            transferId: nil,
-            files: nil,
-            archivePort: nil,
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
+            approvedDeviceId: approvedDeviceId
+        ) else {
+            preconditionFailure("Rust 核心库不可用，无法创建 trust 消息")
+        }
+
+        return decodeCoreMessageJSON(json)
     }
 
     static func text(
@@ -102,13 +87,11 @@ struct ClipPlusMessage: Codable, Equatable {
             senderDeviceId: senderDeviceId,
             senderDeviceName: senderDeviceName,
             text: text
-        ),
-              let data = json.data(using: .utf8),
-              let message = try? JSONDecoder().decode(Self.self, from: data) else {
+        ) else {
             preconditionFailure("Rust 核心库不可用，无法创建文本剪贴板消息")
         }
 
-        return message
+        return decodeCoreMessageJSON(json)
     }
 
     static func image(
@@ -167,5 +150,14 @@ struct ClipPlusMessage: Codable, Equatable {
             archivePort: archivePort,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
+    }
+
+    private static func decodeCoreMessageJSON(_ json: String) -> Self {
+        guard let data = json.data(using: .utf8),
+              let message = try? JSONDecoder().decode(Self.self, from: data) else {
+            preconditionFailure("Rust 核心库返回了无法解析的消息 JSON")
+        }
+
+        return message
     }
 }

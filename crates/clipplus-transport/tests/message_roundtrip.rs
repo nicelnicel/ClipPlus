@@ -126,12 +126,60 @@ fn native_clipboard_text_message_uses_current_shell_wire_format() {
 }
 
 #[test]
+fn native_clipboard_hello_message_uses_current_shell_wire_format() {
+    let message = NativeClipboardMessage::hello("group-1", "mac-device", "Mac").unwrap();
+    let json = message.to_json().unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(encoded["kind"], json!("hello"));
+    assert_eq!(encoded["protocolVersion"], json!(1));
+    assert_eq!(encoded["groupId"], json!("group-1"));
+    assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
+    assert_eq!(encoded["senderDeviceName"], json!("Mac"));
+    assert!(encoded.get("text").is_none());
+
+    let decoded = NativeClipboardMessage::from_json(&json).unwrap();
+    assert_eq!(decoded.kind, NativeClipboardMessageKind::Hello);
+}
+
+#[test]
+fn native_clipboard_trust_message_uses_current_shell_wire_format() {
+    let message =
+        NativeClipboardMessage::trust("group-1", "mac-device", "Mac", "windows-device").unwrap();
+    let json = message.to_json().unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(encoded["kind"], json!("trust"));
+    assert_eq!(encoded["protocolVersion"], json!(1));
+    assert_eq!(encoded["groupId"], json!("group-1"));
+    assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
+    assert_eq!(encoded["approvedDeviceId"], json!("windows-device"));
+
+    let decoded = NativeClipboardMessage::from_json(&json).unwrap();
+    assert_eq!(decoded.kind, NativeClipboardMessageKind::Trust);
+    assert_eq!(
+        decoded.approved_device_id.as_deref(),
+        Some("windows-device")
+    );
+}
+
+#[test]
 fn native_clipboard_text_message_rejects_blank_required_fields() {
     let error = NativeClipboardMessage::text(" ", "mac-device", "Mac", "hello").unwrap_err();
 
     assert!(matches!(
         error,
         NativeClipboardMessageError::InvalidField("group_id")
+    ));
+}
+
+#[test]
+fn native_clipboard_trust_message_rejects_blank_approved_device_id() {
+    let error = NativeClipboardMessage::trust("group-1", "mac-device", "Mac", " ").unwrap_err();
+
+    assert!(matches!(
+        error,
+        NativeClipboardMessageError::InvalidField("approved_device_id")
     ));
 }
 

@@ -180,6 +180,37 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.text, "hello from ffi")
     }
 
+    func testCoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable() throws {
+        let json = try XCTUnwrap(CoreBridge().createHelloMessageJSON(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac"
+        ))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .hello)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.senderDeviceName, "Mac")
+    }
+
+    func testCoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable() throws {
+        let json = try XCTUnwrap(CoreBridge().createTrustMessageJSON(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            approvedDeviceId: "windows-device"
+        ))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .trust)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.approvedDeviceId, "windows-device")
+    }
+
     func testClipPlusMessageRoundTripsInlinePngImagePayload() throws {
         let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
         let message = try XCTUnwrap(ClipPlusMessage.image(

@@ -219,6 +219,41 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable()
+    {
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateHelloMessageJson(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows"
+        );
+
+        Assert.NotNull(json);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Hello, decoded.Kind);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("Windows", decoded.SenderDeviceName);
+    }
+
+    [Fact]
+    public void CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable()
+    {
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateTrustMessageJson(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            approvedDeviceId: "mac-device"
+        );
+
+        Assert.NotNull(json);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Trust, decoded.Kind);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("mac-device", decoded.ApprovedDeviceId);
+    }
+
+    [Fact]
     public void ClipPlusMessageRoundTripsInlinePngImagePayload()
     {
         var pngData = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };

@@ -2,11 +2,14 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use clipplus_ffi::api::{
-    clipplus_create_text_message_json, clipplus_derive_group_id, clipplus_free_string,
+    clipplus_create_hello_message_json, clipplus_create_text_message_json,
+    clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_free_string,
     clipplus_get_status_json,
 };
 use clipplus_ffi::{
+    clipplus_create_hello_message_json as reexported_create_hello_message_json,
     clipplus_create_text_message_json as reexported_create_text_message_json,
+    clipplus_create_trust_message_json as reexported_create_trust_message_json,
     clipplus_derive_group_id as reexported_derive_group_id,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
@@ -143,6 +146,80 @@ fn ffi_create_text_message_json_rejects_missing_required_values() {
     .is_null());
     assert!(unsafe {
         reexported_create_text_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            ptr::null(),
+        )
+    }
+    .is_null());
+}
+
+#[test]
+fn ffi_creates_hello_message_json_for_native_shells() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+
+    let ptr = unsafe {
+        clipplus_create_hello_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+        )
+    };
+    let json = unsafe { take_ffi_string(ptr) };
+    let value: Value = serde_json::from_str(&json).expect("message json should parse");
+
+    assert_eq!(value["kind"], "hello");
+    assert_eq!(value["protocolVersion"], 1);
+    assert_eq!(value["groupId"], "group-1");
+    assert_eq!(value["senderDeviceId"], "mac-device");
+    assert_eq!(value["senderDeviceName"], "Mac");
+    assert!(value.get("text").is_none());
+}
+
+#[test]
+fn ffi_creates_trust_message_json_for_native_shells() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let approved_device_id = CString::new("windows-device").unwrap();
+
+    let ptr = unsafe {
+        clipplus_create_trust_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            approved_device_id.as_ptr(),
+        )
+    };
+    let json = unsafe { take_ffi_string(ptr) };
+    let value: Value = serde_json::from_str(&json).expect("message json should parse");
+
+    assert_eq!(value["kind"], "trust");
+    assert_eq!(value["protocolVersion"], 1);
+    assert_eq!(value["groupId"], "group-1");
+    assert_eq!(value["senderDeviceId"], "mac-device");
+    assert_eq!(value["approvedDeviceId"], "windows-device");
+}
+
+#[test]
+fn ffi_create_hello_and_trust_message_json_reject_missing_required_values() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+
+    assert!(unsafe {
+        reexported_create_hello_message_json(
+            ptr::null(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_trust_message_json(
             group_id.as_ptr(),
             sender_device_id.as_ptr(),
             sender_device_name.as_ptr(),

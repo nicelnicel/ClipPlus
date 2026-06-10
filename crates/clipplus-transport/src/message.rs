@@ -57,24 +57,73 @@ pub enum NativeClipboardMessageError {
 }
 
 impl NativeClipboardMessage {
+    pub fn hello(
+        group_id: impl Into<String>,
+        sender_device_id: impl Into<String>,
+        sender_device_name: impl Into<String>,
+    ) -> Result<Self, NativeClipboardMessageError> {
+        Self::new(
+            NativeClipboardMessageKind::Hello,
+            group_id,
+            sender_device_id,
+            sender_device_name,
+            None,
+            None,
+        )
+    }
+
+    pub fn trust(
+        group_id: impl Into<String>,
+        sender_device_id: impl Into<String>,
+        sender_device_name: impl Into<String>,
+        approved_device_id: impl Into<String>,
+    ) -> Result<Self, NativeClipboardMessageError> {
+        Self::new(
+            NativeClipboardMessageKind::Trust,
+            group_id,
+            sender_device_id,
+            sender_device_name,
+            None,
+            Some(approved_device_id.into()),
+        )
+    }
+
     pub fn text(
         group_id: impl Into<String>,
         sender_device_id: impl Into<String>,
         sender_device_name: impl Into<String>,
         text: impl Into<String>,
     ) -> Result<Self, NativeClipboardMessageError> {
+        Self::new(
+            NativeClipboardMessageKind::Text,
+            group_id,
+            sender_device_id,
+            sender_device_name,
+            Some(text.into()),
+            None,
+        )
+    }
+
+    fn new(
+        kind: NativeClipboardMessageKind,
+        group_id: impl Into<String>,
+        sender_device_id: impl Into<String>,
+        sender_device_name: impl Into<String>,
+        text: Option<String>,
+        approved_device_id: Option<String>,
+    ) -> Result<Self, NativeClipboardMessageError> {
         let message = Self {
-            kind: NativeClipboardMessageKind::Text,
+            kind,
             protocol_version: 1,
             group_id: group_id.into(),
             sender_device_id: sender_device_id.into(),
             sender_device_name: sender_device_name.into(),
             event_id: Uuid::new_v4(),
-            text: Some(text.into()),
+            text,
             image_base64: None,
             image_byte_size: None,
             image_content_hash: None,
-            approved_device_id: None,
+            approved_device_id,
             transfer_id: None,
             files: None,
             archive_port: None,
@@ -118,6 +167,16 @@ impl NativeClipboardMessage {
             && self.text.as_deref().is_none_or(str::is_empty)
         {
             return Err(NativeClipboardMessageError::InvalidField("text"));
+        }
+        if matches!(self.kind, NativeClipboardMessageKind::Trust)
+            && self
+                .approved_device_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(NativeClipboardMessageError::InvalidField(
+                "approved_device_id",
+            ));
         }
 
         Ok(())

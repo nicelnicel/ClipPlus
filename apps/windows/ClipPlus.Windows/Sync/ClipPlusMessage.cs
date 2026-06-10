@@ -49,13 +49,13 @@ public sealed class ClipPlusMessage
         string senderDeviceId,
         string senderDeviceName)
     {
-        return new ClipPlusMessage
-        {
-            Kind = ClipPlusMessageKind.Hello,
-            GroupId = groupId,
-            SenderDeviceId = senderDeviceId,
-            SenderDeviceName = senderDeviceName
-        };
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateHelloMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName
+        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create hello message.");
+
+        return FromJson(json);
     }
 
     public static ClipPlusMessage CreateTrust(
@@ -64,14 +64,14 @@ public sealed class ClipPlusMessage
         string senderDeviceName,
         string approvedDeviceId)
     {
-        return new ClipPlusMessage
-        {
-            Kind = ClipPlusMessageKind.Trust,
-            GroupId = groupId,
-            SenderDeviceId = senderDeviceId,
-            SenderDeviceName = senderDeviceName,
-            ApprovedDeviceId = approvedDeviceId
-        };
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateTrustMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            approvedDeviceId
+        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create trust message.");
+
+        return FromJson(json);
     }
 
     public static ClipPlusMessage CreateFileOffer(

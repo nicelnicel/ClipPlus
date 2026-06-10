@@ -3568,6 +3568,19 @@ git commit -m "test: add parallels e2e checklist"
 - 日志检查：macOS 和 Windows 日志只返回 `published text clipboard` / `received text clipboard` 摘要；匹配检查未出现 `clipplus-test-key`、`rust-ffi-text-mac-to-windows-1781076371` 或 `rust-ffi-text-windows-to-mac-1781076396` 明文。
 - 剩余项更新：文本消息 JSON 生成已迁入 Rust FFI 并通过真实双向同步；hello/trust/image/file offer 消息生成、UDP socket 运行时、图片/文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。
 
+**2026-06-10 hello/trust 消息 JSON Rust FFI 迁移复验：**
+
+- 子代理审查：已派只读子代理检查 image/fileOffer 迁移风险。结论是先闭合当前 hello/trust 测试与实现不一致，再优先迁移 image；fileOffer 需要额外处理路径脱敏、transferId 注入、archivePort 校验和接收端下载路径安全。
+- 迁移范围：`clipplus-transport` 新增 `NativeClipboardMessage::hello` 和 `NativeClipboardMessage::trust`；`clipplus-ffi` 新增 `clipplus_create_hello_message_json` 与 `clipplus_create_trust_message_json`；macOS `CoreBridge.createHelloMessageJSON` / `createTrustMessageJSON` 和 Windows `CoreBridge.CreateHelloMessageJson` / `CreateTrustMessageJson` 加载对应符号。`ClipPlusMessage.hello` / `trust` 与 Windows `CreateHello` / `CreateTrust` 现在通过 Rust FFI 生成 JSON 后再解码回原生模型，不再走 Swift/C# 本地重复实现。
+- TDD 红灯：Rust transport 测试先因缺少 `NativeClipboardMessage::hello/trust` 编译失败；Rust FFI 测试先因缺少 `clipplus_create_hello_message_json` / `clipplus_create_trust_message_json` 编译失败；Swift 测试先因 `CoreBridge` 缺少 `createHelloMessageJSON` / `createTrustMessageJSON` 编译失败；Windows VM 过滤测试先因 `CoreBridge` 缺少 `CreateHelloMessageJson` / `CreateTrustMessageJson` 编译失败。
+- 单元验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 13/13、transport message 22/22 和 macOS Swift 26/26；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 25/25。
+- 默认打包路径 smoke test：`./scripts/dev/build-mac-app.sh` 通过，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；随后将当前 `ClipPlusMac` 与 `libclipplus_ffi.dylib` 放入 `/private/tmp/ClipPlusMac.app`，运行 `env -u CLIPPLUS_FFI_LIBRARY_PATH CLIPPLUS_COREBRIDGE_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac` 也通过。
+- 端到端复验：Parallels `Windows 11` 运行中，`EFI Secure boot: off`，`Shared clipboard mode: off`；Computer Use 观察到 Parallels 窗口内 `C:\dotnet\dotnet.exe` 正在运行。macOS 和 Windows 两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，使用 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- Mac -> Windows：macOS 写入 `rust-ffi-hello-trust-mac-to-windows-1781077117`，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 日志出现 `received text clipboard byte_count=46`。
+- Windows -> Mac：Windows 写入 `rust-ffi-hello-trust-windows-to-mac-1781077135`，macOS `pbpaste` 返回同一字符串；macOS 日志出现 `received text clipboard byte_count=46`。
+- 日志检查：macOS 和 Windows 日志只返回 `published text clipboard` / `received text clipboard` 摘要；匹配检查未出现 `clipplus-test-key`、`rust-ffi-hello-trust-mac-to-windows-1781077117` 或 `rust-ffi-hello-trust-windows-to-mac-1781077135` 明文。E2E 后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe` 测试进程。
+- 剩余项更新：共享 Key、hello、text、trust 消息 JSON 生成已迁入 Rust FFI 并通过默认打包路径与真实双向同步；image、fileOffer 消息生成、UDP socket 运行时、图片/文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。下一步优先 image。
+
 ---
 
 ## 自查清单

@@ -59,6 +59,38 @@ pub unsafe extern "C" fn clipplus_derive_group_id(raw_key: *const c_char) -> *mu
 }
 
 #[no_mangle]
+/// Creates a hello message JSON string using the native shell wire format.
+///
+/// # Safety
+///
+/// All pointer arguments must be non-null valid NUL-terminated UTF-8 C strings.
+/// Invalid, empty required fields or serialization failures return null. The returned
+/// non-null pointer follows the same ownership rules as [`clipplus_get_status_json`]
+/// and must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_create_hello_message_json(
+    group_id: *const c_char,
+    sender_device_id: *const c_char,
+    sender_device_name: *const c_char,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(group_id) = ffi_string(group_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_id) = ffi_string(sender_device_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_name) = ffi_string(sender_device_name) else {
+            return ptr::null_mut();
+        };
+
+        NativeClipboardMessage::hello(group_id, sender_device_id, sender_device_name)
+            .and_then(|message| message.to_json())
+            .map_or(ptr::null_mut(), string_to_c_ptr)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
 /// Creates a text clipboard message JSON string using the native shell wire format.
 ///
 /// # Safety
@@ -93,6 +125,47 @@ pub unsafe extern "C" fn clipplus_create_text_message_json(
             Ok(json) => string_to_c_ptr(json),
             Err(_) => ptr::null_mut(),
         }
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+/// Creates a trust message JSON string using the native shell wire format.
+///
+/// # Safety
+///
+/// All pointer arguments must be non-null valid NUL-terminated UTF-8 C strings.
+/// Invalid, empty required fields or serialization failures return null. The returned
+/// non-null pointer follows the same ownership rules as [`clipplus_get_status_json`]
+/// and must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_create_trust_message_json(
+    group_id: *const c_char,
+    sender_device_id: *const c_char,
+    sender_device_name: *const c_char,
+    approved_device_id: *const c_char,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(group_id) = ffi_string(group_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_id) = ffi_string(sender_device_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_name) = ffi_string(sender_device_name) else {
+            return ptr::null_mut();
+        };
+        let Some(approved_device_id) = ffi_string(approved_device_id) else {
+            return ptr::null_mut();
+        };
+
+        NativeClipboardMessage::trust(
+            group_id,
+            sender_device_id,
+            sender_device_name,
+            approved_device_id,
+        )
+        .and_then(|message| message.to_json())
+        .map_or(ptr::null_mut(), string_to_c_ptr)
     })
     .unwrap_or(ptr::null_mut())
 }
