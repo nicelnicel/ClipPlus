@@ -6,6 +6,8 @@ final class ClipPlusAppModel: ObservableObject {
     private let syncService: UdpTextSyncService
 
     init() {
+        LoginItemSmokeTest.runIfRequested()
+
         let loginItemManager = LoginItemManager()
         let state = SettingsState(startupEnabled: loginItemManager.isEnabled())
         let logger = ClipPlusLogger()

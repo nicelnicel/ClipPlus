@@ -3505,7 +3505,14 @@ git commit -m "test: add parallels e2e checklist"
 - 路径选择：真实启动项使用 `ClipPlus.Windows.exe`，避免开发期 `dotnet ClipPlus.Windows.dll` 启动时 `Environment.ProcessPath` 只指向 `dotnet.exe`。
 - 复验命令：Windows VM 内运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled`，并传入 `CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST=1` 与 `CLIPPLUS_SYSTEM_STARTUP_EXE=C:/Mac/Home/proj/ClipPlus/apps/windows/ClipPlus.Windows/bin/Debug/net8.0-windows/ClipPlus.Windows.exe`。
 - 验证结果：该真实注册表测试通过 1/1；随后显式读取 `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run` 下 `ClipPlus` 值，结果为 `ClipPlus Run entry absent`，确认测试未遗留开机启动项。
-- 剩余项更新：Windows 开机启动已有真实系统写入/读回/清理验证；macOS Login Item 仍需在合适签名/打包形态下做真实系统读回复验。文本/图片/文件运行时仍需迁入 Rust core/FFI。
+- 复验后续：该步骤先补齐 Windows 开机启动真实系统写入/读回/清理验证；macOS Login Item 真实读回复验见下一节。文本/图片/文件运行时仍需迁入 Rust core/FFI。
+
+**2026-06-10 macOS Login Item 真实读回复验：**
+
+- 实现范围：macOS App 新增调试 smoke test 入口 `CLIPPLUS_LOGIN_ITEM_SMOKE_TEST=1`，仅在显式设置环境变量时执行；流程为记录原始状态、`SMAppService.mainApp.register()`、读回 `LoginItemManager.isEnabled()`、`unregister()`、再次读回，最后恢复原始状态并退出。
+- 单元测试：新增 `LoginItemSmokeTest.perform` 的 fake service 测试，覆盖原始关闭和原始开启两种状态，确认会恢复原始状态。
+- 真实复验：当前源码 `swift build` 后替换 `/private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac`，运行 `CLIPPLUS_LOGIN_ITEM_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac`，输出 `login_item_smoke_test enabled_after_register=true disabled_after_unregister=true restored_original=true`，证明临时 app bundle 形态下 SMAppService 注册/注销均可系统读回且未遗留状态。
+- 剩余项更新：macOS 和 Windows 开机启动均已有真实系统写入/读回/清理验证；文本/图片/文件运行时仍需迁入 Rust core/FFI，native library 打包随 app 发布仍需补齐。
 
 **2026-06-10 Rust FFI 共享 Key 派生入口复验：**
 

@@ -141,6 +141,17 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDeriv
 - 开机启动相关改动必须做系统读回验证：
   - macOS 读回 Login Item 或对应系统状态，不能只检查内存开关值。
   - Windows 读回 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 或实际启动项状态，不能只检查 UI 绑定值。
+  - macOS 真实读回可用调试 smoke test，测试会注册 Login Item、读回、注销、读回，并恢复原始状态：
+
+```bash
+cd /Users/cc/proj/ClipPlus/apps/mac
+swift build
+cp .build/debug/ClipPlusMac /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac
+CLIPPLUS_LOGIN_ITEM_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac
+```
+
+期望输出包含 `enabled_after_register=true disabled_after_unregister=true restored_original=true`。
+
   - Windows 真实注册表测试默认不写系统；需要显式开启：
 
 ```bash

@@ -312,6 +312,35 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(manager.isEnabled())
     }
 
+    func testLoginItemSmokeTestRestoresDisabledOriginalState() throws {
+        let service = FakeLoginItemService(enabled: false)
+        let manager = LoginItemManager(service: service)
+
+        let result = try LoginItemSmokeTest.perform(manager: manager)
+
+        XCTAssertEqual(
+            result,
+            LoginItemSmokeTestResult(
+                enabledAfterRegister: true,
+                disabledAfterUnregister: true,
+                restoredOriginal: true
+            )
+        )
+        XCTAssertEqual(service.requests, [true, false, false])
+        XCTAssertFalse(manager.isEnabled())
+    }
+
+    func testLoginItemSmokeTestRestoresEnabledOriginalState() throws {
+        let service = FakeLoginItemService(enabled: true)
+        let manager = LoginItemManager(service: service)
+
+        let result = try LoginItemSmokeTest.perform(manager: manager)
+
+        XCTAssertTrue(result.passed)
+        XCTAssertEqual(service.requests, [true, false, true])
+        XCTAssertTrue(manager.isEnabled())
+    }
+
     func testDiagnosticsExporterWritesRedactedStatusAndLogZip() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

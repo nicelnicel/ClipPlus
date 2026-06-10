@@ -43,6 +43,17 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
     - 两端日志分别出现 `served file archive` 和 `downloaded file archive`。
 14. 开机启动改动要做系统读回验证；Windows 可用显式环境变量触发 HKCU Run 真实写入/读回/清理测试：
 
+macOS 可用调试 smoke test 验证 `SMAppService.mainApp` 注册/读回/注销/读回，并恢复原始状态：
+
+```bash
+cd /Users/cc/proj/ClipPlus/apps/mac
+swift build
+cp .build/debug/ClipPlusMac /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac
+CLIPPLUS_LOGIN_ITEM_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac
+```
+
+期望输出包含 `enabled_after_register=true disabled_after_unregister=true restored_original=true`。
+
 ```bash
 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "$env:CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST='\''1'\''; $env:CLIPPLUS_SYSTEM_STARTUP_EXE='\''C:/Mac/Home/proj/ClipPlus/apps/windows/ClipPlus.Windows/bin/Debug/net8.0-windows/ClipPlus.Windows.exe'\''; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled"'
 ```
