@@ -189,6 +189,84 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.approvedDeviceId, "windows-device")
     }
 
+    func testClipPlusMessageRoundTripsFileOfferPayloadWithoutLocalPaths() throws {
+        let item = FileTransferItem(
+            relativePath: "Reports/Q1.txt",
+            byteSize: 12,
+            isDirectory: false
+        )
+        let message = ClipPlusMessage.fileOffer(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            transferId: "transfer-1",
+            files: [item],
+            archivePort: 47_632
+        )
+
+        let data = try JSONEncoder().encode(message)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .fileOffer)
+        XCTAssertEqual(decoded.transferId, "transfer-1")
+        XCTAssertEqual(decoded.archivePort, 47_632)
+        XCTAssertEqual(decoded.files, [item])
+        XCTAssertFalse(json.contains("/Users/"))
+        XCTAssertFalse(json.contains("C:\\\\"))
+    }
+
+    func testRemoteFileOfferCanRequestReceive() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+        var requestedTransferId: String?
+        state.remoteFileReceiveRequested = { requestedTransferId = $0 }
+
+        state.updateRemoteFileOffer(RemoteFileOfferSummary(
+            transferId: "transfer-1",
+            sourceDeviceId: "windows-device",
+            sourceDeviceName: "Windows",
+            sourceHost: "10.211.55.3",
+            fileCount: 2,
+            totalBytes: 24
+        ))
+
+        XCTAssertEqual(state.remoteFileOffer?.displayTitle, "Windows：2 个文件可接收")
+        XCTAssertTrue(state.hasRemoteFileOffer)
+
+        state.requestRemoteFileReceive()
+
+        XCTAssertEqual(requestedTransferId, "transfer-1")
+    }
+
+    func testFileTransferArchiveWritesZipEntriesForFilesAndDirectories() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceDirectory = temporaryDirectory.appendingPathComponent("source", isDirectory: true)
+        let nestedDirectory = sourceDirectory.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedDirectory, withIntermediateDirectories: true)
+        try "alpha".write(to: sourceDirectory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "beta".write(to: nestedDirectory.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+
+        let archiveURL = temporaryDirectory.appendingPathComponent("files.zip")
+        try FileTransferArchive.writeZip(
+            sourceURLs: [sourceDirectory.appendingPathComponent("a.txt"), nestedDirectory],
+            to: archiveURL
+        )
+
+        let extractedDirectory = temporaryDirectory.appendingPathComponent("unzipped", isDirectory: true)
+        try FileManager.default.createDirectory(at: extractedDirectory, withIntermediateDirectories: true)
+        try unzip(archiveURL, to: extractedDirectory)
+
+        let a = try String(contentsOf: extractedDirectory.appendingPathComponent("a.txt"), encoding: .utf8)
+        let b = try String(contentsOf: extractedDirectory.appendingPathComponent("Nested/b.txt"), encoding: .utf8)
+        XCTAssertEqual(a, "alpha")
+        XCTAssertEqual(b, "beta")
+    }
+
     func testClipPlusMessageRejectsOversizedInlineImagePayload() {
         let pngData = Data(repeating: 0xFF, count: ClipPlusMessage.maxInlineImageBytes + 1)
 

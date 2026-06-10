@@ -46,6 +46,11 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void ReceiveRemoteFiles_Click(object sender, RoutedEventArgs e)
+    {
+        state.RequestRemoteFileReceive();
+    }
+
     private void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
     {
         var sensitiveValues = new[]

@@ -9,8 +9,11 @@ public enum ClipPlusMessageKind
     Hello,
     Trust,
     Text,
-    Image
+    Image,
+    FileOffer
 }
+
+public sealed record FileTransferItem(string RelativePath, long ByteSize, bool IsDirectory);
 
 public sealed class ClipPlusMessage
 {
@@ -33,6 +36,9 @@ public sealed class ClipPlusMessage
     public int? ImageByteSize { get; init; }
     public string? ImageContentHash { get; init; }
     public string? ApprovedDeviceId { get; init; }
+    public string? TransferId { get; init; }
+    public IReadOnlyList<FileTransferItem>? Files { get; init; }
+    public int? ArchivePort { get; init; }
     public string CreatedAt { get; init; } = DateTimeOffset.UtcNow.ToString("O");
 
     [JsonIgnore]
@@ -65,6 +71,26 @@ public sealed class ClipPlusMessage
             SenderDeviceId = senderDeviceId,
             SenderDeviceName = senderDeviceName,
             ApprovedDeviceId = approvedDeviceId
+        };
+    }
+
+    public static ClipPlusMessage CreateFileOffer(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string transferId,
+        IReadOnlyList<FileTransferItem> files,
+        int archivePort)
+    {
+        return new ClipPlusMessage
+        {
+            Kind = ClipPlusMessageKind.FileOffer,
+            GroupId = groupId,
+            SenderDeviceId = senderDeviceId,
+            SenderDeviceName = senderDeviceName,
+            TransferId = transferId,
+            Files = files,
+            ArchivePort = archivePort
         };
     }
 

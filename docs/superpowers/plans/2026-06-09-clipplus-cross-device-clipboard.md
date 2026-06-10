@@ -3483,7 +3483,21 @@ git commit -m "test: add parallels e2e checklist"
 - Windows：`DiagnosticsExporter.Export` 从导出目录改为直接生成 `ClipPlus-Diagnostics-*.zip`；zip 内包含 `status.json` 和 `clipplus.log`，测试使用 `System.IO.Compression.ZipFile` 读取条目并验证脱敏。
 - 脱敏：两端测试继续验证 `clipplus-test-key` 和剪贴板敏感文本不会出现在 status/log 条目里。
 - 测试：macOS `swift test` 通过 17/17；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 16/16。
-- 仍未完成项：文件按需传输、开机启动真实系统写入开关的人工验证、文本/图片同步运行时迁入 Rust core/FFI。
+- 仍未完成项：开机启动真实系统写入开关的人工验证、文本/图片同步运行时迁入 Rust core/FFI；文件按需传输仍需继续补流式传输、hash 校验、原生延迟粘贴和 core/FFI 迁移。
+
+**2026-06-10 文件按需传输 MVP 复验：**
+
+- 实现范围：macOS 与 Windows 原生壳新增 `fileOffer` 消息、远端文件 offer UI、TCP `47632` 归档服务和接收端 `Downloads/ClipPlus-Received-<transferId>.zip` 降级接收路径。当前不是 Finder/Explorer 原生延迟粘贴，接收结果是 zip 包。
+- 剪贴板读取：macOS 使用 `NSPasteboard` 读取 file URL；Windows 使用 WPF `Clipboard.GetFileDropList()` 读取 FileDropList。
+- 传输模型：发送端只在 UDP offer 中广播相对文件名、文件数、总字节数、transferId 和归档端口，不广播本地绝对路径；接收端点击接收后再通过 TCP 请求归档正文。
+- 单元测试：macOS 覆盖 file offer JSON 往返、远端文件 offer 接收回调、文件/目录 zip 写入；Windows 覆盖同等场景。
+- 端到端复验方向：Windows -> macOS。Windows 侧用 `Set-Clipboard -Path` 设置真实 FileDropList；Windows 日志出现 `published file offer file_count=1`，macOS 日志出现 `received file offer file_count=1 byte_count=12`。
+- 真实 UI 接收：通过 macOS 菜单栏 ClipPlus 面板点击远端文件接收按钮；macOS `Downloads` 生成 `ClipPlus-Received-ba332f94-3db9-427b-9e3c-ddcafb0e3e69.zip`。
+- 内容校验：解压 zip 后包含 `windows-source.txt`；其内容 `1781061387` 与 Windows 源文件 `C:\Users\Administrator\AppData\Local\Temp\ClipPlusE2E\windows-source.txt` 读回内容一致。
+- 日志证据：Windows 日志出现 `served file transfer file_count=1 byte_count=148`；macOS 日志出现 `downloaded file transfer byte_count=148`。随后日志文案已统一调整为 `served file archive` 和 `downloaded file archive`。
+- 限制：归档当前一次性读入内存，并设置 512 MiB 上限；尚未做流式传输、hash 校验、断点续传、冲突文件选择、接收目录选择、原生延迟粘贴或 Rust core/FFI 统一实现。
+- 最终验证：`cd apps/mac && swift test` 通过 20/20；Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 19/19；`./scripts/dev/check.sh` 通过；`git diff --check` 通过；macOS 和 Windows 日志未发现 `clipplus-test-key` 明文。
+- 剩余项更新：文件按需传输已有 MVP 可运行闭环；仍需完成开机启动真实系统写入开关的人工验证，以及文本/图片/文件运行时迁入 Rust core/FFI。
 
 ---
 

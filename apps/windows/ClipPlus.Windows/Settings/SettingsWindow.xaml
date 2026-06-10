@@ -35,6 +35,12 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
             <Button Content="允许全部待确认设备" Width="160" HorizontalAlignment="Left" Margin="0,8,0,0" Click="ApprovePendingPeers_Click" />
+            <Button Content="{Binding RemoteFileOffer.DisplayTitle, TargetNullValue=暂无可接收文件, FallbackValue=暂无可接收文件}"
+                    Width="180"
+                    HorizontalAlignment="Left"
+                    Margin="0,8,0,0"
+                    IsEnabled="{Binding HasRemoteFileOffer}"
+                    Click="ReceiveRemoteFiles_Click" />
             <TextBlock Text="系统" FontWeight="Bold" Margin="0,16,0,0" />
             <CheckBox Content="开机自动启动" IsChecked="{Binding StartupEnabled}" />
             <Button Content="导出诊断包" Width="120" HorizontalAlignment="Left" Click="ExportDiagnostics_Click" />

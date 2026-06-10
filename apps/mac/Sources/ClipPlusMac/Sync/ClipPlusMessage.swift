@@ -6,6 +6,13 @@ enum ClipPlusMessageKind: String, Codable {
     case trust
     case text
     case image
+    case fileOffer
+}
+
+struct FileTransferItem: Codable, Equatable {
+    let relativePath: String
+    let byteSize: Int64
+    let isDirectory: Bool
 }
 
 struct ClipPlusMessage: Codable, Equatable {
@@ -22,6 +29,9 @@ struct ClipPlusMessage: Codable, Equatable {
     let imageByteSize: Int?
     let imageContentHash: String?
     let approvedDeviceId: String?
+    let transferId: String?
+    let files: [FileTransferItem]?
+    let archivePort: Int?
     let createdAt: String
 
     var decodedImageData: Data? {
@@ -49,6 +59,9 @@ struct ClipPlusMessage: Codable, Equatable {
             imageByteSize: nil,
             imageContentHash: nil,
             approvedDeviceId: nil,
+            transferId: nil,
+            files: nil,
+            archivePort: nil,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }
@@ -71,6 +84,9 @@ struct ClipPlusMessage: Codable, Equatable {
             imageByteSize: nil,
             imageContentHash: nil,
             approvedDeviceId: approvedDeviceId,
+            transferId: nil,
+            files: nil,
+            archivePort: nil,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }
@@ -93,6 +109,9 @@ struct ClipPlusMessage: Codable, Equatable {
             imageByteSize: nil,
             imageContentHash: nil,
             approvedDeviceId: nil,
+            transferId: nil,
+            files: nil,
+            archivePort: nil,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }
@@ -121,6 +140,36 @@ struct ClipPlusMessage: Codable, Equatable {
                 .map { String(format: "%02x", $0) }
                 .joined(),
             approvedDeviceId: nil,
+            transferId: nil,
+            files: nil,
+            archivePort: nil,
+            createdAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    static func fileOffer(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        transferId: String,
+        files: [FileTransferItem],
+        archivePort: Int
+    ) -> Self {
+        Self(
+            kind: .fileOffer,
+            protocolVersion: 1,
+            groupId: groupId,
+            senderDeviceId: senderDeviceId,
+            senderDeviceName: senderDeviceName,
+            eventId: UUID().uuidString,
+            text: nil,
+            imageBase64: nil,
+            imageByteSize: nil,
+            imageContentHash: nil,
+            approvedDeviceId: nil,
+            transferId: transferId,
+            files: files,
+            archivePort: archivePort,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }

@@ -33,6 +33,12 @@ struct MenuBarController: View {
                 }
             }
 
+            if let remoteFileOffer = state.remoteFileOffer {
+                Button(remoteFileOffer.displayTitle) {
+                    state.requestRemoteFileReceive()
+                }
+            }
+
             Button("导出诊断包") {
                 exportDiagnostics()
             }

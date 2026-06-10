@@ -5,6 +5,18 @@ using System.Windows.Media.Imaging;
 
 public sealed class NativeClipboard
 {
+    public IReadOnlyList<string> ReadFilePaths()
+    {
+        if (!System.Windows.Clipboard.ContainsFileDropList())
+        {
+            return Array.Empty<string>();
+        }
+
+        return System.Windows.Clipboard.GetFileDropList()
+            .Cast<string>()
+            .ToArray();
+    }
+
     public string? ReadText()
     {
         return System.Windows.Clipboard.ContainsText()

@@ -71,3 +71,39 @@ C:\dotnet\dotnet.exe C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin
   - macOS `pbcopy` 写入后，Windows `Get-Clipboard -Raw` 返回相同字符串。
   - Windows `Set-Clipboard` 写入后，macOS `pbpaste` 返回相同字符串。
 - 日志不得包含原始共享 Key；检查 `~/Library/Logs/ClipPlus/clipplus.log` 和 Windows `%LOCALAPPDATA%\ClipPlus\logs\clipplus.log`。
+
+## 跨设备验收矩阵
+
+- 每次涉及网络协议、剪贴板监听、信任确认、文件传输、诊断导出、开机启动的改动，都不能只跑单平台单元测试；至少按影响面选择下面对应项复验。
+- macOS 单元测试：
+
+```bash
+cd /Users/cc/proj/ClipPlus/apps/mac
+swift test
+```
+
+- Windows 单元测试必须在 Parallels Windows VM 内运行：
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo"'
+```
+
+- Rust/core 侧改动必须运行仓库全量检查：
+
+```bash
+./scripts/dev/check.sh
+```
+
+- 文件按需传输验收至少验证一个真实跨系统方向，并在计划或提交说明中写明方向：
+  - 发送端复制真实文件到系统剪贴板后，接收端日志出现 `received file offer`。
+  - 在接收端通过真实 UI 点击接收，不用直接调用内部函数代替用户操作。
+  - 接收端 `Downloads` 下生成 `ClipPlus-Received-<transferId>.zip`。
+  - 解压后文件名和内容与源文件一致。
+  - 日志出现 `downloaded file archive`，且不包含源机器本地绝对路径。
+- 图片同步验收至少验证一个真实跨系统方向；如果只覆盖 32 KiB 以内的小图，需要在计划里明确这是当前 MVP 限制。
+- 首次确认/信任验收必须覆盖无 `CLIPPLUS_AUTO_TRUST` 的负向路径；确认前不得同步内容，确认后才允许同步。
+- 开机启动相关改动必须做系统读回验证：
+  - macOS 读回 Login Item 或对应系统状态，不能只检查内存开关值。
+  - Windows 读回 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 或实际启动项状态，不能只检查 UI 绑定值。
+- 诊断导出验收必须打开生成的 `ClipPlus-Diagnostics-*.zip`，检查至少包含 `status.json` 和 `clipplus.log`，并确认共享 Key、设备私钥、本地绝对文件路径不会明文泄漏。
+- 做 Parallels 端到端测试前后都要确认 Parallels 自带剪贴板共享仍为 `off`。

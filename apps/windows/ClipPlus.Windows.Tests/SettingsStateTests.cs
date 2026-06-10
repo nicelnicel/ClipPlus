@@ -208,6 +208,85 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void ClipPlusMessageRoundTripsFileOfferPayloadWithoutLocalPaths()
+    {
+        var item = new ClipPlus.Windows.Sync.FileTransferItem(
+            RelativePath: @"Reports/Q1.txt",
+            ByteSize: 12,
+            IsDirectory: false
+        );
+        var message = ClipPlus.Windows.Sync.ClipPlusMessage.CreateFileOffer(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            transferId: "transfer-1",
+            files: new[] { item },
+            archivePort: 47_632
+        );
+
+        var json = message.ToJson();
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded.Kind);
+        Assert.Equal("transfer-1", decoded.TransferId);
+        Assert.Equal(47_632, decoded.ArchivePort);
+        Assert.Equal(new[] { item }, decoded.Files);
+        Assert.DoesNotContain(@"C:\\", json);
+        Assert.DoesNotContain("/Users/", json);
+    }
+
+    [Fact]
+    public void RemoteFileOfferCanRequestReceive()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+        string? requestedTransferId = null;
+        state.RemoteFileReceiveRequested += transferId => requestedTransferId = transferId;
+
+        state.UpdateRemoteFileOffer(new RemoteFileOfferSummary(
+            TransferId: "transfer-1",
+            SourceDeviceId: "mac-device",
+            SourceDeviceName: "Mac",
+            SourceHost: "10.211.55.2",
+            FileCount: 2,
+            TotalBytes: 24
+        ));
+
+        Assert.Equal("Mac：2 个文件可接收", state.RemoteFileOffer?.DisplayTitle);
+        Assert.True(state.HasRemoteFileOffer);
+
+        state.RequestRemoteFileReceive();
+
+        Assert.Equal("transfer-1", requestedTransferId);
+    }
+
+    [Fact]
+    public void FileTransferArchiveWritesZipEntriesForFilesAndDirectories()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var sourceDirectory = Path.Combine(temporaryDirectory, "source");
+        var nestedDirectory = Path.Combine(sourceDirectory, "Nested");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "a.txt"), "alpha");
+        File.WriteAllText(Path.Combine(nestedDirectory, "b.txt"), "beta");
+        var archivePath = Path.Combine(temporaryDirectory, "files.zip");
+
+        ClipPlus.Windows.Sync.FileTransferArchive.WriteZip(
+            new[] { Path.Combine(sourceDirectory, "a.txt"), nestedDirectory },
+            archivePath
+        );
+
+        var extractedDirectory = Path.Combine(temporaryDirectory, "unzipped");
+        ZipFile.ExtractToDirectory(archivePath, extractedDirectory);
+
+        Assert.Equal("alpha", File.ReadAllText(Path.Combine(extractedDirectory, "a.txt")));
+        Assert.Equal("beta", File.ReadAllText(Path.Combine(extractedDirectory, "Nested", "b.txt")));
+    }
+
+    [Fact]
     public void ClipPlusMessageRejectsOversizedInlineImagePayload()
     {
         var pngData = Enumerable.Repeat((byte)0xFF, ClipPlus.Windows.Sync.ClipPlusMessage.MaxInlineImageBytes + 1)

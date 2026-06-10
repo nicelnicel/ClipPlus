@@ -13,6 +13,7 @@ public sealed class SettingsState : INotifyPropertyChanged
     private string sharedKeyInput = string.Empty;
     private string sharedKeyConfirmationInput = string.Empty;
     private string lastStatusMessage;
+    private RemoteFileOfferSummary? remoteFileOffer;
     private readonly Dictionary<string, string> pendingPeers = new();
     private readonly HashSet<string> trustedPeerIds = new(StringComparer.Ordinal);
 
@@ -26,6 +27,7 @@ public sealed class SettingsState : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action<string>? PeerApproved;
+    public event Action<string>? RemoteFileReceiveRequested;
 
     public bool SharedKeyConfigured
     {
@@ -82,10 +84,23 @@ public sealed class SettingsState : INotifyPropertyChanged
         set => SetField(ref lastStatusMessage, value);
     }
 
+    public RemoteFileOfferSummary? RemoteFileOffer
+    {
+        get => remoteFileOffer;
+        private set
+        {
+            if (SetField(ref remoteFileOffer, value))
+            {
+                OnPropertyChanged(nameof(HasRemoteFileOffer));
+            }
+        }
+    }
+
     public bool RequiresKeySetup => !SharedKeyConfigured;
     public int PendingPeerCount => pendingPeers.Count;
     public int TrustedPeerCount => trustedPeerIds.Count;
     public bool CanPublishClipboardContent => SharedKeyConfigured && SharingEnabled && trustedPeerIds.Count > 0;
+    public bool HasRemoteFileOffer => RemoteFileOffer is not null;
 
     public IReadOnlyCollection<string> TrustedPeerIds => trustedPeerIds.ToArray();
 
@@ -196,6 +211,32 @@ public sealed class SettingsState : INotifyPropertyChanged
         return trustedPeerIds.Contains(deviceId);
     }
 
+    public void UpdateRemoteFileOffer(RemoteFileOfferSummary offer)
+    {
+        RemoteFileOffer = offer;
+        LastStatusMessage = offer.DisplayTitle;
+    }
+
+    public void ClearRemoteFileOffer(string transferId)
+    {
+        if (!string.Equals(RemoteFileOffer?.TransferId, transferId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        RemoteFileOffer = null;
+    }
+
+    public void RequestRemoteFileReceive()
+    {
+        if (RemoteFileOffer is null)
+        {
+            return;
+        }
+
+        RemoteFileReceiveRequested?.Invoke(RemoteFileOffer.TransferId);
+    }
+
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
@@ -217,4 +258,15 @@ public sealed class SettingsState : INotifyPropertyChanged
 public sealed record PendingPeerSummary(string DeviceId, string DeviceName)
 {
     public string ShortDeviceId => DeviceId.Length <= 8 ? DeviceId : DeviceId[..8];
+}
+
+public sealed record RemoteFileOfferSummary(
+    string TransferId,
+    string SourceDeviceId,
+    string SourceDeviceName,
+    string SourceHost,
+    int FileCount,
+    long TotalBytes)
+{
+    public string DisplayTitle => $"{SourceDeviceName}：{FileCount} 个文件可接收";
 }

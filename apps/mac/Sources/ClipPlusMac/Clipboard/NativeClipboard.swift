@@ -1,6 +1,15 @@
 import AppKit
 
 struct NativeClipboard {
+    func readFileURLs() -> [URL] {
+        let urls = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL]
+
+        return urls ?? []
+    }
+
     func readText() -> String? {
         NSPasteboard.general.string(forType: .string)
     }

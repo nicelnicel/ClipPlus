@@ -27,6 +27,19 @@ struct PendingPeerSummary: Identifiable, Equatable {
     }
 }
 
+struct RemoteFileOfferSummary: Equatable {
+    let transferId: String
+    let sourceDeviceId: String
+    let sourceDeviceName: String
+    let sourceHost: String
+    let fileCount: Int
+    let totalBytes: Int64
+
+    var displayTitle: String {
+        "\(sourceDeviceName)：\(fileCount) 个文件可接收"
+    }
+}
+
 final class SettingsState: ObservableObject, Equatable {
     @Published var sharedKeyConfigured: Bool
     @Published var sharingEnabled: Bool
@@ -41,11 +54,13 @@ final class SettingsState: ObservableObject, Equatable {
     @Published private(set) var sharedGroupId: String
     @Published private(set) var pendingPeers: [String: String]
     @Published private(set) var trustedPeerIds: Set<String>
+    @Published private(set) var remoteFileOffer: RemoteFileOfferSummary?
     @Published var sharedKeyInput: String
     @Published var sharedKeyConfirmationInput: String
     @Published var lastStatusMessage: String
     var startupEnabledChanged: ((Bool) -> Void)?
     var peerApproved: ((String) -> Void)?
+    var remoteFileReceiveRequested: ((String) -> Void)?
 
     var requiresKeySetup: Bool {
         !sharedKeyConfigured
@@ -76,6 +91,10 @@ final class SettingsState: ObservableObject, Equatable {
         sharedKeyConfigured && sharingEnabled && !trustedPeerIds.isEmpty
     }
 
+    var hasRemoteFileOffer: Bool {
+        remoteFileOffer != nil
+    }
+
     init(
         sharedKeyConfigured: Bool = false,
         sharingEnabled: Bool = true,
@@ -89,6 +108,7 @@ final class SettingsState: ObservableObject, Equatable {
         self.sharedGroupId = sharedGroupId
         self.pendingPeers = [:]
         self.trustedPeerIds = trustedPeerIds
+        self.remoteFileOffer = nil
         self.sharedKeyInput = ""
         self.sharedKeyConfirmationInput = ""
         self.lastStatusMessage = sharedKeyConfigured ? "剪贴板共享准备就绪" : "请先设置共享 Key"
@@ -101,6 +121,7 @@ final class SettingsState: ObservableObject, Equatable {
             && lhs.sharedGroupId == rhs.sharedGroupId
             && lhs.pendingPeers == rhs.pendingPeers
             && lhs.trustedPeerIds == rhs.trustedPeerIds
+            && lhs.remoteFileOffer == rhs.remoteFileOffer
     }
 
     func updateSharedKey(_ rawKey: String, confirmation: String) throws {
@@ -168,6 +189,27 @@ final class SettingsState: ObservableObject, Equatable {
         trustedPeerIds.insert(deviceId)
         lastStatusMessage = "设备 \(deviceName.isEmpty ? deviceId : deviceName) 已信任"
         return true
+    }
+
+    func updateRemoteFileOffer(_ offer: RemoteFileOfferSummary) {
+        remoteFileOffer = offer
+        lastStatusMessage = offer.displayTitle
+    }
+
+    func clearRemoteFileOffer(transferId: String) {
+        guard remoteFileOffer?.transferId == transferId else {
+            return
+        }
+
+        remoteFileOffer = nil
+    }
+
+    func requestRemoteFileReceive() {
+        guard let transferId = remoteFileOffer?.transferId else {
+            return
+        }
+
+        remoteFileReceiveRequested?(transferId)
     }
 }
 
@@ -238,6 +280,12 @@ struct SettingsView: View {
                     state.approvePendingPeers()
                 }
                 .disabled(state.pendingPeerCount == 0)
+
+                if let remoteFileOffer = state.remoteFileOffer {
+                    Button(remoteFileOffer.displayTitle) {
+                        state.requestRemoteFileReceive()
+                    }
+                }
             }
 
             Section("系统") {

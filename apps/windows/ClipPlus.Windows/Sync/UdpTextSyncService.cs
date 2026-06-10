@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Buffers.Binary;
 using System.Text;
 using System.Windows.Threading;
 using ClipPlus.Windows.Clipboard;
@@ -12,6 +13,7 @@ namespace ClipPlus.Windows.Sync;
 public sealed class UdpTextSyncService : IDisposable
 {
     private const int Port = 47_631;
+    private const int ArchivePort = 47_632;
 
     private readonly SettingsState state;
     private readonly NativeClipboard clipboard = new();
@@ -25,11 +27,15 @@ public sealed class UdpTextSyncService : IDisposable
 
     private UdpClient? receiveClient;
     private UdpClient? sendClient;
+    private TcpListener? archiveListener;
     private CancellationTokenSource? cancellation;
     private string? lastLocalText;
     private string? lastRemoteText;
     private string? lastLocalImageHash;
     private string? lastRemoteImageHash;
+    private string? lastLocalFileSignature;
+    private readonly Dictionary<string, IReadOnlyList<string>> localFileTransfers = new(StringComparer.Ordinal);
+    private readonly object localFileTransfersLock = new();
     private int tickCount;
 
     public UdpTextSyncService(SettingsState state, ClipPlusLogger logger, Dispatcher dispatcher)
@@ -43,6 +49,7 @@ public sealed class UdpTextSyncService : IDisposable
         peerHosts = (Environment.GetEnvironmentVariable("CLIPPLUS_PEER_HOSTS") ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         state.PeerApproved += SendTrust;
+        state.RemoteFileReceiveRequested += DownloadRemoteFileOffer;
         timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
         {
             Interval = TimeSpan.FromMilliseconds(750)
@@ -73,8 +80,11 @@ public sealed class UdpTextSyncService : IDisposable
             {
                 EnableBroadcast = true
             };
+            archiveListener = new TcpListener(IPAddress.Any, ArchivePort);
+            archiveListener.Start();
 
             _ = Task.Run(() => ReceiveLoopAsync(cancellation.Token));
+            _ = Task.Run(() => FileArchiveLoopAsync(cancellation.Token));
             timer.Start();
             SendHello();
             logger.Info($"sync service started on UDP {Port}");
@@ -89,8 +99,10 @@ public sealed class UdpTextSyncService : IDisposable
     public void Dispose()
     {
         state.PeerApproved -= SendTrust;
+        state.RemoteFileReceiveRequested -= DownloadRemoteFileOffer;
         timer.Stop();
         cancellation?.Cancel();
+        archiveListener?.Stop();
         receiveClient?.Dispose();
         sendClient?.Dispose();
         cancellation?.Dispose();
@@ -124,7 +136,8 @@ public sealed class UdpTextSyncService : IDisposable
                 var result = await receiveClient.ReceiveAsync(token);
                 var json = Encoding.UTF8.GetString(result.Buffer);
                 var message = ClipPlusMessage.FromJson(json);
-                await dispatcher.InvokeAsync(() => Handle(message));
+                var sourceHost = result.RemoteEndPoint.Address.ToString();
+                await dispatcher.InvokeAsync(() => Handle(message, sourceHost));
             }
             catch (OperationCanceledException)
             {
@@ -156,6 +169,19 @@ public sealed class UdpTextSyncService : IDisposable
 
         if (!state.CanPublishClipboardContent)
         {
+            return;
+        }
+
+        var filePaths = clipboard.ReadFilePaths();
+        if (filePaths.Count > 0)
+        {
+            var signature = string.Join("|", filePaths.OrderBy(path => path, StringComparer.Ordinal));
+            if (!string.Equals(signature, lastLocalFileSignature, StringComparison.Ordinal))
+            {
+                lastLocalFileSignature = signature;
+                PublishFileOffer(filePaths);
+            }
+
             return;
         }
 
@@ -197,7 +223,7 @@ public sealed class UdpTextSyncService : IDisposable
         logger.Info($"published image clipboard byte_count={pngData!.Length}");
     }
 
-    private void Handle(ClipPlusMessage message)
+    private void Handle(ClipPlusMessage message, string sourceHost)
     {
         if (!state.SharedKeyConfigured
             || message.ProtocolVersion != 1
@@ -259,7 +285,211 @@ public sealed class UdpTextSyncService : IDisposable
                 state.LastStatusMessage = "已接收远端图片剪贴板";
                 logger.Info($"received image clipboard byte_count={imageData.Length}");
                 break;
+            case ClipPlusMessageKind.FileOffer:
+                if (!state.SharingEnabled
+                    || !state.IsPeerTrusted(message.SenderDeviceId)
+                    || string.IsNullOrEmpty(message.TransferId)
+                    || message.Files is null
+                    || message.Files.Count == 0)
+                {
+                    return;
+                }
+
+                var totalBytes = message.Files.Sum(file => file.ByteSize);
+                state.UpdateRemoteFileOffer(new RemoteFileOfferSummary(
+                    TransferId: message.TransferId,
+                    SourceDeviceId: message.SenderDeviceId,
+                    SourceDeviceName: message.SenderDeviceName,
+                    SourceHost: sourceHost,
+                    FileCount: message.Files.Count,
+                    TotalBytes: totalBytes
+                ));
+                logger.Info($"received file offer file_count={message.Files.Count} byte_count={totalBytes}");
+                break;
         }
+    }
+
+    private void PublishFileOffer(IReadOnlyList<string> filePaths)
+    {
+        var transferId = Guid.NewGuid().ToString();
+        lock (localFileTransfersLock)
+        {
+            localFileTransfers[transferId] = filePaths.ToArray();
+        }
+
+        var items = filePaths.Select(CreateFileTransferItem).ToArray();
+        Send(ClipPlusMessage.CreateFileOffer(
+            state.SharedGroupId,
+            deviceId,
+            deviceName,
+            transferId,
+            items,
+            ArchivePort
+        ));
+        state.LastStatusMessage = "已广播文件剪贴板";
+        logger.Info($"published file offer file_count={items.Length}");
+    }
+
+    private static FileTransferItem CreateFileTransferItem(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            return new FileTransferItem(
+                RelativePath: Path.GetFileName(path),
+                ByteSize: Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                    .Sum(file => new FileInfo(file).Length),
+                IsDirectory: true
+            );
+        }
+
+        return new FileTransferItem(
+            RelativePath: Path.GetFileName(path),
+            ByteSize: File.Exists(path) ? new FileInfo(path).Length : 0,
+            IsDirectory: false
+        );
+    }
+
+    private async Task FileArchiveLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested && archiveListener is not null)
+        {
+            try
+            {
+                var client = await archiveListener.AcceptTcpClientAsync(token);
+                _ = Task.Run(() => HandleArchiveClientAsync(client, token), token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (Exception error)
+            {
+                logger.Error($"file archive loop error: {error.Message}");
+            }
+        }
+    }
+
+    private async Task HandleArchiveClientAsync(TcpClient client, CancellationToken token)
+    {
+        using (client)
+        {
+            try
+            {
+                await using var stream = client.GetStream();
+                using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+                var transferId = (await reader.ReadLineAsync(token))?.Trim();
+                if (string.IsNullOrEmpty(transferId))
+                {
+                    return;
+                }
+
+                IReadOnlyList<string>? filePaths;
+                lock (localFileTransfersLock)
+                {
+                    localFileTransfers.TryGetValue(transferId, out filePaths);
+                }
+
+                if (filePaths is null)
+                {
+                    return;
+                }
+
+                var archivePath = Path.Combine(Path.GetTempPath(), $"ClipPlus-{transferId}.zip");
+                FileTransferArchive.WriteZip(filePaths, archivePath);
+                var data = await File.ReadAllBytesAsync(archivePath, token);
+                File.Delete(archivePath);
+                var length = new byte[8];
+                BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)data.Length);
+                await stream.WriteAsync(length, token);
+                await stream.WriteAsync(data, token);
+                logger.Info($"served file archive file_count={filePaths.Count} byte_count={data.Length}");
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                logger.Error($"file transfer serve failed: {error.Message}");
+            }
+        }
+    }
+
+    private void DownloadRemoteFileOffer(string transferId)
+    {
+        var offer = state.RemoteFileOffer;
+        if (offer is null || !string.Equals(offer.TransferId, transferId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _ = Task.Run(async () => await DownloadRemoteFileOfferAsync(offer));
+    }
+
+    private async Task DownloadRemoteFileOfferAsync(RemoteFileOfferSummary offer)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(offer.SourceHost, ArchivePort);
+            await using var stream = client.GetStream();
+            var requestBytes = Encoding.UTF8.GetBytes($"{offer.TransferId}\n");
+            await stream.WriteAsync(requestBytes);
+            var lengthBytes = await ReadExactAsync(stream, 8);
+            var length = BinaryPrimitives.ReadUInt64BigEndian(lengthBytes);
+            if (length > 512UL * 1024UL * 1024UL)
+            {
+                throw new InvalidOperationException("file transfer too large");
+            }
+
+            var data = await ReadExactAsync(stream, (int)length);
+            var destinationPath = UniqueDownloadPath(offer.TransferId);
+            await File.WriteAllBytesAsync(destinationPath, data);
+            await dispatcher.InvokeAsync(() =>
+            {
+                state.ClearRemoteFileOffer(offer.TransferId);
+                state.LastStatusMessage = $"文件已接收到 {Path.GetFileName(destinationPath)}";
+            });
+            logger.Info($"downloaded file archive byte_count={data.Length}");
+        }
+        catch (Exception error)
+        {
+            await dispatcher.InvokeAsync(() => state.LastStatusMessage = "文件接收失败");
+            logger.Error($"file transfer download failed: {error.Message}");
+        }
+    }
+
+    private static async Task<byte[]> ReadExactAsync(Stream stream, int byteCount)
+    {
+        var buffer = new byte[byteCount];
+        var offset = 0;
+        while (offset < byteCount)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset, byteCount - offset));
+            if (read == 0)
+            {
+                throw new EndOfStreamException();
+            }
+
+            offset += read;
+        }
+
+        return buffer;
+    }
+
+    private static string UniqueDownloadPath(string transferId)
+    {
+        var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        Directory.CreateDirectory(downloads);
+        var candidate = Path.Combine(downloads, $"ClipPlus-Received-{transferId}.zip");
+        var index = 2;
+        while (File.Exists(candidate))
+        {
+            candidate = Path.Combine(downloads, $"ClipPlus-Received-{transferId}-{index}.zip");
+            index++;
+        }
+
+        return candidate;
     }
 
     private void SendHello()

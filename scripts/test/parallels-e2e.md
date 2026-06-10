@@ -2,13 +2,15 @@
 
 ## 测试目标
 
-验证 macOS 宿主机和 Parallels Windows 虚拟机能运行 ClipPlus，并在关闭 Parallels 自带剪贴板共享后，通过 ClipPlus 完成共享 Key 设置、设备确认、文字同步、日志和诊断检查。
+验证 macOS 宿主机和 Parallels Windows 虚拟机能运行 ClipPlus，并在关闭 Parallels 自带剪贴板共享后，通过 ClipPlus 完成共享 Key 设置、设备确认、文字/图片同步、文件按需传输、日志和诊断检查。
 
 ## 测试前置条件
 
 - macOS 宿主机在 `/Users/cc/proj/ClipPlus`。
-- Parallels 中已安装 Windows。
-- Windows VM 使用桥接网络，或者宿主机和虚拟机处于可互相访问的网络。
+- Parallels 中已安装 Windows，当前固定 VM 名称为 `Windows 11`。
+- Windows VM 使用桥接网络，或者宿主机和虚拟机处于可互相访问的网络；当前常用 Windows IP 为 `10.211.55.3`，macOS Parallels 网卡 IP 为 `10.211.55.2`。
+- Windows VM 已启用 OpenSSH Server，macOS 默认 SSH key 可登录 `ssh Administrator@10.211.55.3`。
+- Windows VM 内 `.NET SDK` 安装在 `C:\dotnet`。
 - 测试时关闭 Parallels 自带剪贴板共享。
 - 不修改防火墙规则，除非用户明确确认。
 
@@ -18,14 +20,45 @@
 2. 在 macOS 运行 `cargo run -p clipplus-cli -- status`，确认输出包含 `core_version`。
 3. 构建 mac App：`cd apps/mac && swift test`。
 4. 在 Windows VM 中打开项目目录或同步后的源码目录。
-5. 在 Windows VM 中运行 `dotnet test apps/windows/ClipPlus.Windows.sln`。
+5. 在 Windows VM 中运行：
+
+```powershell
+cd C:\Mac\Home\proj\ClipPlus\apps\windows
+C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
+```
+
 6. 启动 mac App，确认菜单栏出现 ClipPlus。
 7. 启动 Windows App，确认托盘出现 ClipPlus。
 8. 两端输入同一个共享 Key：`clipplus-test-key`。
 9. 在 mac 端允许 Windows 设备加入。
 10. mac 复制 `hello from mac`，Windows 粘贴应得到相同文字。
 11. Windows 复制 `hello from windows`，mac 粘贴应得到相同文字。
-12. 导出诊断包，确认诊断包不包含 `clipplus-test-key`。
+12. 图片同步至少复验一个真实跨系统方向；若仍使用 inline UDP MVP，图片应小于 32 KiB。
+13. 文件按需传输至少复验一个真实跨系统方向：
+    - 发送端把真实文件复制到系统剪贴板。
+    - 接收端日志出现 `received file offer`。
+    - 通过真实 UI 点击接收按钮，不能直接调用内部函数代替。
+    - 接收端 `Downloads` 生成 `ClipPlus-Received-<transferId>.zip`。
+    - 解压 zip，确认文件名和内容与发送端源文件一致。
+    - 两端日志分别出现 `served file archive` 和 `downloaded file archive`。
+14. 导出诊断包，确认 zip 内包含 `status.json` 和 `clipplus.log`，且不包含 `clipplus-test-key`。
+
+## 文件传输示例命令
+
+Windows -> macOS 方向可以用下面命令在 Windows 侧设置 FileDropList：
+
+```bash
+prlctl exec "Windows 11" --current-user powershell -NoProfile -Command "\$dir=Join-Path \$env:TEMP 'ClipPlusE2E'; New-Item -ItemType Directory -Force -Path \$dir | Out-Null; \$path=Join-Path \$dir 'windows-source.txt'; Set-Content -Path \$path -Value ([string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()); Set-Clipboard -Path \$path; Start-Sleep -Milliseconds 500; \$files=Get-Clipboard -Format FileDropList; Write-Output \$path; Write-Output ('ClipboardFiles=' + \$files.Count); foreach (\$file in \$files) { Write-Output \$file.FullName }"
+```
+
+macOS 菜单栏出现远端文件 offer 后，用 Accessibility 点击菜单栏面板里的接收按钮。完成后解压最新下载包并比对 Windows 源文件：
+
+```bash
+tmpdir=$(mktemp -d /tmp/clipplus-received.XXXXXX)
+unzip -q ~/Downloads/ClipPlus-Received-<transferId>.zip -d "$tmpdir"
+find "$tmpdir" -type f -maxdepth 3 -print
+cat "$tmpdir/windows-source.txt"
+```
 
 ## 失败定位
 
@@ -34,4 +67,5 @@
 - 如果 Parallels 配置显示 `Shared clipboard mode: on`，真实 ClipPlus 剪贴板同步验证前需要关闭 Parallels 自带共享剪贴板；这是 Parallels 设置变更，必须在动作前得到用户确认。确认后可执行 `prlctl set "Windows 11" --shared-clipboard off`。
 - 如果 macOS 处于锁屏界面，菜单栏图标、设置面板和 Parallels 桌面无法做可靠视觉验证；需要先解锁宿主机再继续 Computer Use 操作。
 - 如果文字同步失败，检查日志中的 `discovery`、`pairing`、`sync` 模块。
+- 如果文件 offer 到达但下载失败，先检查发送端 TCP `47632` 是否可从接收端访问，再检查 Windows 防火墙提示；不要在没有用户确认的情况下修改防火墙。
 - 如果诊断包包含原始 Key，立即停止测试并修复脱敏逻辑。
