@@ -1,6 +1,7 @@
 namespace ClipPlus.Windows.CoreBridge;
 
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -71,6 +72,11 @@ public sealed class CoreBridge
         string approvedDeviceId)
     {
         return Ffi.Value?.CreateTrustMessageJson(groupId, senderDeviceId, senderDeviceName, approvedDeviceId);
+    }
+
+    internal IReadOnlyList<string> FfiLoadDiagnostics()
+    {
+        return ClipPlusFfiBridge.LoadDiagnostics();
     }
 
     private static readonly Lazy<ClipPlusFfiBridge?> Ffi = new(ClipPlusFfiBridge.Load);
@@ -194,6 +200,52 @@ internal sealed class ClipPlusFfiBridge
         }
 
         return null;
+    }
+
+    internal static IReadOnlyList<string> LoadDiagnostics()
+    {
+        var lines = new List<string>();
+        var assembly = typeof(ClipPlusFfiBridge).Assembly;
+        lines.Add($"assembly_name={assembly.GetName().Name}");
+        lines.Add($"os_architecture={RuntimeInformation.OSArchitecture}");
+        lines.Add($"process_architecture={RuntimeInformation.ProcessArchitecture}");
+        lines.Add($"base_directory={AppContext.BaseDirectory}");
+        lines.Add($"resource_names={string.Join(",", assembly.GetManifestResourceNames())}");
+
+        foreach (var candidatePath in LibraryCandidatePaths())
+        {
+            lines.Add($"candidate={candidatePath}");
+            if (!File.Exists(candidatePath))
+            {
+                lines.Add("candidate_exists=false");
+                continue;
+            }
+
+            lines.Add($"candidate_exists=true length={new FileInfo(candidatePath).Length}");
+            IntPtr handle;
+            try
+            {
+                handle = NativeLibrary.Load(candidatePath);
+                lines.Add("native_load=ok");
+            }
+            catch (Exception exception)
+            {
+                lines.Add($"native_load=failed {exception.GetType().Name}: {exception.Message}");
+                continue;
+            }
+
+            try
+            {
+                lines.Add($"export_clipplus_derive_group_id={NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out _)}");
+                lines.Add($"export_clipplus_free_string={NativeLibrary.TryGetExport(handle, "clipplus_free_string", out _)}");
+            }
+            finally
+            {
+                NativeLibrary.Free(handle);
+            }
+        }
+
+        return lines;
     }
 
     public string? DeriveGroupId(string rawKey)
@@ -405,5 +457,33 @@ internal sealed class ClipPlusFfiBridge
         }
 
         yield return Path.Combine(AppContext.BaseDirectory, "clipplus_ffi.dll");
+        var embeddedLibraryPath = ExtractEmbeddedLibrary();
+        if (!string.IsNullOrWhiteSpace(embeddedLibraryPath))
+        {
+            yield return embeddedLibraryPath;
+        }
+        yield return "clipplus_ffi.dll";
+        yield return "clipplus_ffi";
+    }
+
+    private static string? ExtractEmbeddedLibrary()
+    {
+        var assembly = typeof(ClipPlusFfiBridge).Assembly;
+        const string resourceName = "clipplus_ffi.dll";
+        using var resourceStream = assembly.GetManifestResourceStream(resourceName);
+        if (resourceStream is null)
+        {
+            return null;
+        }
+
+        var extractionDirectory = Path.Combine(Path.GetTempPath(), "ClipPlus", assembly.GetName().Version?.ToString() ?? "dev");
+        Directory.CreateDirectory(extractionDirectory);
+        var extractionPath = Path.Combine(extractionDirectory, resourceName);
+        using (var output = File.Create(extractionPath))
+        {
+            resourceStream.CopyTo(output);
+        }
+
+        return extractionPath;
     }
 }

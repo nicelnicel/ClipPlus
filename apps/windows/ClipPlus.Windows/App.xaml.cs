@@ -1,5 +1,6 @@
 using System.Windows;
 using ClipPlus.Windows.Diagnostics;
+using ClipPlus.Windows.CoreBridge;
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
 using ClipPlus.Windows.Sync;
@@ -16,6 +17,8 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        CoreBridgeSmokeTest.RunIfRequested();
 
         startupManager = new StartupManager();
         var settings = new SettingsState(

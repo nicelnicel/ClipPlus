@@ -28,7 +28,7 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
 ```
 
 6. 启动 mac App，确认菜单栏出现 ClipPlus。默认 FFI 路径验收时，把 `libclipplus_ffi.dylib` 放在 `/private/tmp/ClipPlusMac.app/Contents/Frameworks/`，不要设置 `CLIPPLUS_FFI_LIBRARY_PATH`。
-7. 启动 Windows App，确认托盘出现 ClipPlus。当前 Windows VM 的 .NET 安装在 `C:\dotnet`，自动化测试应进入输出目录后用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll` 启动；不要直接运行 `ClipPlus.Windows.exe`，除非已确认全局 .NET runtime 注册完成。默认 FFI 路径验收时，不要设置 `CLIPPLUS_FFI_LIBRARY_PATH`，由输出目录里的 `clipplus_ffi.dll` 加载。
+7. 启动 Windows App，确认托盘出现 ClipPlus。当前 Windows VM 的 .NET 安装在 `C:\dotnet`，自动化测试启动调试输出目录时应进入输出目录后用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`；不要直接运行该目录里的 framework-dependent apphost `ClipPlus.Windows.exe`，除非已确认全局 .NET runtime 注册完成。默认 FFI 路径验收时，不要设置 `CLIPPLUS_FFI_LIBRARY_PATH`，由输出目录里的 `clipplus_ffi.dll` 加载。发布验收使用 `scripts/dev/publish-windows-single-exe.ps1` 生成 `target\windows-single-exe\ClipPlus.Windows.exe`，该 self-contained single-file exe 必须直接运行。
 8. 两端输入同一个共享 Key：`clipplus-test-key`。
 9. 在 mac 端允许 Windows 设备加入。
 10. mac 复制 `hello from mac`，Windows 粘贴应得到相同文字。

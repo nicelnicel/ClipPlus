@@ -62,7 +62,7 @@ cd /d C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-w
 C:\dotnet\dotnet.exe ClipPlus.Windows.dll
 ```
 
-- Windows VM 内 `.NET` 目前安装在 `C:\dotnet`，没有注册为全局 runtime；自动化/E2E 启动 App 时优先使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`，不要直接运行 `ClipPlus.Windows.exe`。直接运行 apphost exe 可能报 `hostfxr.dll not found`。
+- Windows VM 内 `.NET` 目前安装在 `C:\dotnet`，没有注册为全局 runtime；自动化/E2E 启动调试输出目录的 framework-dependent App 时优先使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`，不要直接运行该目录里的 apphost `ClipPlus.Windows.exe`。直接运行调试 apphost exe 可能报 `hostfxr.dll not found`。`target\windows-single-exe\ClipPlus.Windows.exe` 是 self-contained single-file 发布产物，必须直接运行它做发布烟测。
 - 快速同步回归可以使用 `CLIPPLUS_AUTO_TRUST=1`；测试首次确认/设备信任时不要设置 `CLIPPLUS_AUTO_TRUST`。
 - 无 `CLIPPLUS_AUTO_TRUST` 的手动确认验收至少验证：
   - 双方日志只出现 `peer hello` 时，Mac 写入剪贴板不会覆盖 Windows 剪贴板基线值。
@@ -117,6 +117,30 @@ Windows FFI 验证命令：
 
 ```bash
 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter '\''CoreBridgeDerivesGroupIdFromBundledFfiLibrary|CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable'\''"'
+```
+
+- Windows 发布验收必须确认单文件 exe 不依赖外部 `clipplus_ffi.dll` 或全局 .NET runtime。发布脚本默认根据 Windows 当前架构选择 RID：ARM64 VM 生成 `win-arm64`，Intel/AMD Windows 生成 `win-x64`；如需强制指定，可传 `-RuntimeIdentifier win-arm64` 或 `-RuntimeIdentifier win-x64`。脚本会把 RID 对应的 Rust target triple 传给 Cargo，避免 exe 和 `clipplus_ffi.dll` 架构不一致。
+
+Windows 单文件发布命令：
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -ExecutionPolicy Bypass -File C:/Mac/Home/proj/ClipPlus/scripts/dev/publish-windows-single-exe.ps1'
+```
+
+Windows 单文件 FFI smoke test 必须在不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时运行 `target\windows-single-exe\ClipPlus.Windows.exe`，期望退出码为 `0` 且输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`：
+
+```bash
+PS_SCRIPT='$output = "C:/Mac/Home/proj/ClipPlus/target/windows-single-exe/corebridge-smoke.txt"
+Remove-Item $output -ErrorAction SilentlyContinue
+$env:CLIPPLUS_COREBRIDGE_SMOKE_TEST = "1"
+$env:CLIPPLUS_COREBRIDGE_SMOKE_TEST_OUTPUT = $output
+Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue
+$process = Start-Process -FilePath "C:/Mac/Home/proj/ClipPlus/target/windows-single-exe/ClipPlus.Windows.exe" -PassThru -Wait
+Write-Output ("ExitCode=" + $process.ExitCode)
+Get-ChildItem "C:/Mac/Home/proj/ClipPlus/target/windows-single-exe" | Select-Object Name,Length
+Get-Content $output'
+ENCODED=$(printf "%s" "$PS_SCRIPT" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')
+prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand "$ENCODED"
 ```
 
 - 在 Parallels Windows VM 内构建 Rust crate 时，必须设置 `CARGO_TARGET_DIR` 到 Windows 本机目录（例如 `$env:TEMP/ClipPlusRustTarget`），不要使用 `C:\Mac\Home\proj\ClipPlus\target`；共享目录上 Cargo/MSVC 可能出现临时目录删除失败或文件锁异常。

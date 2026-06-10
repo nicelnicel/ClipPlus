@@ -3628,6 +3628,17 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充 `clipplus_write_file_archive_zip` 真实符号调用、两端 CoreBridge 归档测试和文件正文实现变更必须跑真实 UI 接收 E2E 的要求。
 - 剩余项更新：文件 offer 消息和 zip 正文归档都已迁入 Rust FFI；TCP 文件归档服务/下载 socket、UDP bind/send/receive 接入原生壳和 Windows 单 exe 封装仍需继续。
 
+**2026-06-10 Windows 单文件 exe 发布复验：**
+
+- 目标范围：Windows 端新增 `scripts/dev/publish-windows-single-exe.ps1`，发布 self-contained single-file WPF 应用到 `target/windows-single-exe/ClipPlus.Windows.exe`；`apps/windows/Directory.Build.targets` 支持按发布 RID 传入对应 Rust target triple，并把 `clipplus_ffi.dll` 作为嵌入资源打进单文件应用。
+- 根因定位：第一次发布固定使用 `win-x64`，但当前 Parallels `Windows 11` 是 ARM64，Cargo 默认生成 ARM64 `clipplus_ffi.dll`。单文件 exe 运行 smoke 时能从嵌入资源提取 DLL，但 `NativeLibrary.Load` 报 `BadImageFormatException`，证明失败来自 exe 和 FFI DLL 架构不一致。
+- 修复方式：发布脚本默认根据 Windows 当前架构选择 RID，ARM64 生成 `win-arm64`，x64 生成 `win-x64`；同时映射 `win-arm64 -> aarch64-pc-windows-msvc`、`win-x64 -> x86_64-pc-windows-msvc`，并通过 `/p:ClipPlusCargoTarget=...` 传给 MSBuild/Cargo，确保单文件 exe 与嵌入 DLL 架构一致。
+- smoke 入口：Windows App 新增 `CLIPPLUS_COREBRIDGE_SMOKE_TEST=1`，只在环境变量开启时运行 `CoreBridge` 派生 `clipplus-test-key` 并退出。失败时写出候选路径、资源名、进程架构和 native load 诊断；正常托盘启动路径不输出这些诊断。
+- 发布验证：Windows VM 内运行 `powershell -NoProfile -ExecutionPolicy Bypass -File C:/Mac/Home/proj/ClipPlus/scripts/dev/publish-windows-single-exe.ps1` 成功，输出 `Publishing ClipPlus.Windows for win-arm64 with Rust target aarch64-pc-windows-msvc`，生成 `target/windows-single-exe/ClipPlus.Windows.exe`，macOS `file` 检查为 `PE32+ executable (GUI) Aarch64, for MS Windows`。
+- 单文件 FFI 验证：不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，通过 `prlctl exec "Windows 11"` 直接运行 `target/windows-single-exe/ClipPlus.Windows.exe`，`ExitCode=0`，`corebridge-smoke.txt` 输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。输出目录只有 exe、pdb 和 smoke 文本；运行时 FFI 来自单文件内嵌资源。
+- 测试方案记录：`AGENTS.md` 已补充调试 apphost 与 self-contained single-file exe 的启动区别、Windows 单文件发布命令、无 `CLIPPLUS_FFI_LIBRARY_PATH` 的 smoke 命令，以及 RID 与 Rust target triple 必须匹配的约束。
+- 剩余项更新：Windows 单 exe 封装已完成并通过 VM smoke；文件 offer 消息和 zip 正文归档已迁入 Rust FFI。仍需继续处理 TCP 文件归档服务/下载 socket、UDP bind/send/receive 接入原生壳。
+
 ---
 
 ## 自查清单
