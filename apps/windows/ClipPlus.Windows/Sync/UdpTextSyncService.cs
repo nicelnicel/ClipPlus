@@ -458,53 +458,36 @@ public sealed class UdpTextSyncService : IDisposable
 
     private async Task DownloadRemoteFileOfferAsync(RemoteFileOfferSummary offer)
     {
+        var destinationPath = UniqueDownloadPath(offer.TransferId);
         try
         {
-            using var client = new TcpClient();
-            await client.ConnectAsync(offer.SourceHost, ArchivePort);
-            await using var stream = client.GetStream();
-            var requestBytes = Encoding.UTF8.GetBytes($"{offer.TransferId}\n");
-            await stream.WriteAsync(requestBytes);
-            var lengthBytes = await ReadExactAsync(stream, 8);
-            var length = BinaryPrimitives.ReadUInt64BigEndian(lengthBytes);
-            if (length > 512UL * 1024UL * 1024UL)
+            if (!new ClipPlus.Windows.CoreBridge.CoreBridge().DownloadFileArchive(
+                offer.SourceHost,
+                ArchivePort,
+                offer.TransferId,
+                destinationPath))
             {
-                throw new InvalidOperationException("file transfer too large");
+                if (File.Exists(destinationPath))
+                {
+                    File.Delete(destinationPath);
+                }
+
+                throw new InvalidOperationException("file transfer download failed");
             }
 
-            var data = await ReadExactAsync(stream, (int)length);
-            var destinationPath = UniqueDownloadPath(offer.TransferId);
-            await File.WriteAllBytesAsync(destinationPath, data);
+            var byteCount = new FileInfo(destinationPath).Length;
             await dispatcher.InvokeAsync(() =>
             {
                 state.ClearRemoteFileOffer(offer.TransferId);
                 state.LastStatusMessage = $"文件已接收到 {Path.GetFileName(destinationPath)}";
             });
-            logger.Info($"downloaded file archive byte_count={data.Length}");
+            logger.Info($"downloaded file archive byte_count={byteCount}");
         }
         catch (Exception error)
         {
             await dispatcher.InvokeAsync(() => state.LastStatusMessage = "文件接收失败");
             logger.Error($"file transfer download failed: {error.Message}");
         }
-    }
-
-    private static async Task<byte[]> ReadExactAsync(Stream stream, int byteCount)
-    {
-        var buffer = new byte[byteCount];
-        var offset = 0;
-        while (offset < byteCount)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, byteCount - offset));
-            if (read == 0)
-            {
-                throw new EndOfStreamException();
-            }
-
-            offset += read;
-        }
-
-        return buffer;
     }
 
     private static string UniqueDownloadPath(string transferId)

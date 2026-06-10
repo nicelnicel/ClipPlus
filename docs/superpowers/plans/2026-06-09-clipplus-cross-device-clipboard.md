@@ -3676,6 +3676,17 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充 `clipplus_download_file_archive` 真实符号调用、macOS CoreBridge 下载测试、Windows 入站 UDP/TCP 测试环境要求，以及 `scripts/test/windows-file-offer-helper.ps1` 只能作为“部分验证”不能替代完整 E2E 的约束。
 - 剩余项更新：macOS 文件归档下载端代码已迁入 Rust FFI 并通过 Rust/Swift 真实 FFI 单元测试；完整跨系统文件传输仍需在解决 Windows 入站 UDP 和菜单栏按钮自动化触发问题后复验。TCP 文件归档 server 端、Windows 下载端仍未迁入 Rust transport。
 
+**2026-06-10 Windows 文件归档下载 Rust FFI 迁移复验：**
+
+- 迁移范围：Windows `CoreBridge` 新增 `DownloadFileArchive(host, port, transferId, destinationPath)`，默认加载 `clipplus_download_file_archive` 导出并通过 UTF-8 FFI 参数调用 Rust 下载实现；Windows `UdpTextSyncService.DownloadRemoteFileOfferAsync` 从 C# `TcpClient + ReadExactAsync + File.WriteAllBytesAsync` 切换为 CoreBridge 下载，成功后按下载文件大小记录 `downloaded file archive byte_count=...`，失败时删除可能残留的目标文件并保持 `文件接收失败` 状态。
+- TDD 红灯：先新增 `CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable`，该测试在 Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，启动 loopback TCP length-prefixed 归档服务并要求 CoreBridge 下载到目标路径；首次过滤运行失败于 `CS1061: CoreBridge 未包含 DownloadFileArchive 的定义`，证明测试覆盖新增 API。
+- 单元验证：实现后在 Windows VM 内运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable` 通过 1/1；同一轮全量 Windows 测试在不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时通过 30/30。
+- 仓库验证：`cargo fmt --all` 通过；`./scripts/dev/check.sh` 通过，包含 Rust FFI 23/23、transport message 32/32、macOS Swift 31/31，其中 macOS 下载端 FFI 测试仍通过。
+- 发布验证：Windows VM 内运行 `scripts/dev/publish-windows-single-exe.ps1` 成功发布 `win-arm64` 单文件；不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 直接运行 `target/windows-single-exe/ClipPlus.Windows.exe` 的 CoreBridge smoke test，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。
+- 测试方案记录：`AGENTS.md` 已将 `CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable` 加入 `clipplus_download_file_archive` 固定验证要求和 Windows FFI 过滤命令，并补充“Windows 下载端 Rust FFI 改动必须跑 macOS -> Windows 文件传输真实 UI 验收”的方向要求。
+- 端到端状态：本切片没有标记完整文件传输 UI E2E 通过。上一轮已确认当前 Parallels 环境中 Mac -> Windows UDP 探针失败，Windows app 无法稳定收到 macOS hello/trust；而 Windows 下载端真实 UI 验收正依赖 macOS -> Windows fileOffer。因此该 E2E 需要在 Windows 入站 UDP 问题解决后再执行。
+- 剩余项更新：Windows 文件归档下载端已迁入 Rust FFI；macOS 和 Windows 下载端均共用 Rust `FileTransferDownload` 路径。TCP 文件归档 server 端仍分别保留在 Swift/C# 外壳层，后续如继续收敛可单独迁移 server 端。
+
 ---
 
 ## 自查清单

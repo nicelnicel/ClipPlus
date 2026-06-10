@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
@@ -455,6 +458,49 @@ public sealed class SettingsStateTests
 
         Assert.Equal("alpha", File.ReadAllText(Path.Combine(extractedDirectory, "a.txt")));
         Assert.Equal("beta", File.ReadAllText(Path.Combine(extractedDirectory, "Nested", "b.txt")));
+    }
+
+    [Fact]
+    public async Task CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(temporaryDirectory);
+        var destinationPath = Path.Combine(temporaryDirectory, "received.zip");
+        var payload = Encoding.UTF8.GetBytes("archive from windows ffi server");
+        string? requestedTransferId = null;
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            await using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+            requestedTransferId = await reader.ReadLineAsync();
+            var lengthBytes = new byte[8];
+            BinaryPrimitives.WriteUInt64BigEndian(lengthBytes, (ulong)payload.Length);
+            await stream.WriteAsync(lengthBytes);
+            await stream.WriteAsync(payload);
+        });
+
+        try
+        {
+            Assert.True(new ClipPlus.Windows.CoreBridge.CoreBridge().DownloadFileArchive(
+                "127.0.0.1",
+                port,
+                "transfer-a",
+                destinationPath
+            ));
+            await serverTask;
+
+            Assert.Equal("transfer-a", requestedTransferId);
+            Assert.Equal(payload, File.ReadAllBytes(destinationPath));
+        }
+        finally
+        {
+            listener.Stop();
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
     }
 
     [Fact]

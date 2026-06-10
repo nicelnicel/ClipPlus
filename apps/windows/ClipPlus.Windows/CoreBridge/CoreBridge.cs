@@ -66,6 +66,11 @@ public sealed class CoreBridge
         return Ffi.Value?.WriteFileArchiveZip(sourcePaths, archivePath) == true;
     }
 
+    public bool DownloadFileArchive(string host, int port, string transferId, string destinationPath)
+    {
+        return Ffi.Value?.DownloadFileArchive(host, port, transferId, destinationPath) == true;
+    }
+
     public RustUdpSocket? OpenUdpSocket(int bindPort)
     {
         return Ffi.Value?.OpenUdpSocket(bindPort);
@@ -172,6 +177,14 @@ internal sealed class ClipPlusFfiBridge
         IntPtr archivePath);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool DownloadFileArchiveDelegate(
+        IntPtr host,
+        ushort port,
+        IntPtr transferId,
+        IntPtr destinationPath);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate IntPtr UdpSocketBindDelegate(ushort bindPort);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -212,6 +225,7 @@ internal sealed class ClipPlusFfiBridge
     private readonly CreateImageMessageJsonDelegate createImageMessageJson;
     private readonly CreateFileOfferMessageJsonDelegate createFileOfferMessageJson;
     private readonly WriteFileArchiveZipDelegate writeFileArchiveZip;
+    private readonly DownloadFileArchiveDelegate downloadFileArchive;
     private readonly UdpSocketBindDelegate udpSocketBind;
     private readonly UdpSocketFreeDelegate udpSocketFree;
     private readonly UdpSocketLocalPortDelegate udpSocketLocalPort;
@@ -227,6 +241,7 @@ internal sealed class ClipPlusFfiBridge
         CreateImageMessageJsonDelegate createImageMessageJson,
         CreateFileOfferMessageJsonDelegate createFileOfferMessageJson,
         WriteFileArchiveZipDelegate writeFileArchiveZip,
+        DownloadFileArchiveDelegate downloadFileArchive,
         UdpSocketBindDelegate udpSocketBind,
         UdpSocketFreeDelegate udpSocketFree,
         UdpSocketLocalPortDelegate udpSocketLocalPort,
@@ -241,6 +256,7 @@ internal sealed class ClipPlusFfiBridge
         this.createImageMessageJson = createImageMessageJson;
         this.createFileOfferMessageJson = createFileOfferMessageJson;
         this.writeFileArchiveZip = writeFileArchiveZip;
+        this.downloadFileArchive = downloadFileArchive;
         this.udpSocketBind = udpSocketBind;
         this.udpSocketFree = udpSocketFree;
         this.udpSocketLocalPort = udpSocketLocalPort;
@@ -270,6 +286,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_file_offer_message_json", out var createFileOfferMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_write_file_archive_zip", out var writeFileArchiveZipSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out var downloadFileArchiveSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out var udpSocketBindSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_free", out var udpSocketFreeSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_local_port", out var udpSocketLocalPortSymbol)
@@ -289,6 +306,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateFileOfferMessageJsonDelegate>(createFileOfferMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<WriteFileArchiveZipDelegate>(writeFileArchiveZipSymbol),
+                Marshal.GetDelegateForFunctionPointer<DownloadFileArchiveDelegate>(downloadFileArchiveSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketBindDelegate>(udpSocketBindSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketFreeDelegate>(udpSocketFreeSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketLocalPortDelegate>(udpSocketLocalPortSymbol),
@@ -337,6 +355,7 @@ internal sealed class ClipPlusFfiBridge
             try
             {
                 lines.Add($"export_clipplus_derive_group_id={NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out _)}");
+                lines.Add($"export_clipplus_download_file_archive={NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out _)}");
                 lines.Add($"export_clipplus_udp_socket_bind={NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out _)}");
                 lines.Add($"export_clipplus_free_string={NativeLibrary.TryGetExport(handle, "clipplus_free_string", out _)}");
             }
@@ -501,6 +520,36 @@ internal sealed class ClipPlusFfiBridge
         {
             Marshal.FreeCoTaskMem(sourcePathsJsonPointer);
             Marshal.FreeCoTaskMem(archivePathPointer);
+        }
+    }
+
+    public bool DownloadFileArchive(string host, int port, string transferId, string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(host)
+            || string.IsNullOrWhiteSpace(transferId)
+            || string.IsNullOrWhiteSpace(destinationPath)
+            || port <= 0
+            || port > ushort.MaxValue)
+        {
+            return false;
+        }
+
+        var hostPointer = Marshal.StringToCoTaskMemUTF8(host);
+        var transferIdPointer = Marshal.StringToCoTaskMemUTF8(transferId);
+        var destinationPathPointer = Marshal.StringToCoTaskMemUTF8(destinationPath);
+        try
+        {
+            return downloadFileArchive(
+                hostPointer,
+                (ushort)port,
+                transferIdPointer,
+                destinationPathPointer);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(hostPointer);
+            Marshal.FreeCoTaskMem(transferIdPointer);
+            Marshal.FreeCoTaskMem(destinationPathPointer);
         }
     }
 
