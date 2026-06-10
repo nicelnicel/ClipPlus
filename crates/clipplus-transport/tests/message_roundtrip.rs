@@ -1,7 +1,7 @@
 use clipplus_transport::file_transfer::{FileTransferError, FileTransferRequest, TransferState};
 use clipplus_transport::message::{
     NativeClipboardMessage, NativeClipboardMessageError, NativeClipboardMessageKind,
-    TransportMessage, TransportMessageError, TransportMessageKind,
+    NativeFileTransferItem, TransportMessage, TransportMessageError, TransportMessageKind,
 };
 use clipplus_transport::session::{HandshakeState, PeerSession, SessionError};
 use serde_json::json;
@@ -186,6 +186,155 @@ fn native_clipboard_image_message_uses_current_shell_wire_format() {
     let decoded = NativeClipboardMessage::from_json(&json).unwrap();
     assert_eq!(decoded.kind, NativeClipboardMessageKind::Image);
     assert_eq!(decoded.image_byte_size, Some(8));
+}
+
+#[test]
+fn native_clipboard_file_offer_message_uses_current_shell_wire_format() {
+    let files = vec![
+        NativeFileTransferItem {
+            relative_path: "Reports/Q1.txt".to_string(),
+            byte_size: 12,
+            is_directory: false,
+        },
+        NativeFileTransferItem {
+            relative_path: "Screenshots".to_string(),
+            byte_size: 34,
+            is_directory: true,
+        },
+    ];
+    let message = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        files.clone(),
+        47_632,
+    )
+    .unwrap();
+    let json = message.to_json().unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(encoded["kind"], json!("fileOffer"));
+    assert_eq!(encoded["protocolVersion"], json!(1));
+    assert_eq!(encoded["groupId"], json!("group-1"));
+    assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
+    assert_eq!(encoded["transferId"], json!("transfer-1"));
+    assert_eq!(encoded["archivePort"], json!(47_632));
+    assert_eq!(encoded["files"][0]["relativePath"], json!("Reports/Q1.txt"));
+    assert_eq!(encoded["files"][0]["byteSize"], json!(12));
+    assert_eq!(encoded["files"][0]["isDirectory"], json!(false));
+    assert_eq!(encoded["files"][1]["relativePath"], json!("Screenshots"));
+    assert_eq!(encoded["files"][1]["isDirectory"], json!(true));
+    assert!(encoded.get("text").is_none());
+    assert!(encoded.get("imageBase64").is_none());
+    assert!(json.contains("Reports/Q1.txt"));
+    assert!(!json.contains("/Users/"));
+    assert!(!json.contains("C:\\"));
+
+    let decoded = NativeClipboardMessage::from_json(&json).unwrap();
+    assert_eq!(decoded.kind, NativeClipboardMessageKind::FileOffer);
+    assert_eq!(decoded.transfer_id.as_deref(), Some("transfer-1"));
+    assert_eq!(decoded.files.as_deref(), Some(files.as_slice()));
+}
+
+#[test]
+fn native_clipboard_file_offer_message_rejects_invalid_values() {
+    let valid_files = vec![NativeFileTransferItem {
+        relative_path: "Reports/Q1.txt".to_string(),
+        byte_size: 12,
+        is_directory: false,
+    }];
+    let blank_transfer = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        " ",
+        valid_files.clone(),
+        47_632,
+    )
+    .unwrap_err();
+    let empty_files = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        vec![],
+        47_632,
+    )
+    .unwrap_err();
+    let zero_port = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        valid_files.clone(),
+        0,
+    )
+    .unwrap_err();
+    let absolute_path = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        vec![NativeFileTransferItem {
+            relative_path: "/Users/cc/private.txt".to_string(),
+            byte_size: 12,
+            is_directory: false,
+        }],
+        47_632,
+    )
+    .unwrap_err();
+    let traversal_path = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        vec![NativeFileTransferItem {
+            relative_path: "../private.txt".to_string(),
+            byte_size: 12,
+            is_directory: false,
+        }],
+        47_632,
+    )
+    .unwrap_err();
+    let windows_path = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        vec![NativeFileTransferItem {
+            relative_path: r"C:\Users\cc\private.txt".to_string(),
+            byte_size: 12,
+            is_directory: false,
+        }],
+        47_632,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        blank_transfer,
+        NativeClipboardMessageError::InvalidField("transfer_id")
+    ));
+    assert!(matches!(
+        empty_files,
+        NativeClipboardMessageError::InvalidField("files")
+    ));
+    assert!(matches!(
+        zero_port,
+        NativeClipboardMessageError::InvalidField("archive_port")
+    ));
+    assert!(matches!(
+        absolute_path,
+        NativeClipboardMessageError::InvalidField("relative_path")
+    ));
+    assert!(matches!(
+        traversal_path,
+        NativeClipboardMessageError::InvalidField("relative_path")
+    ));
+    assert!(matches!(
+        windows_path,
+        NativeClipboardMessageError::InvalidField("relative_path")
+    ));
 }
 
 #[test]

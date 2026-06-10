@@ -81,16 +81,16 @@ public sealed class ClipPlusMessage
         IReadOnlyList<FileTransferItem> files,
         int archivePort)
     {
-        return new ClipPlusMessage
-        {
-            Kind = ClipPlusMessageKind.FileOffer,
-            GroupId = groupId,
-            SenderDeviceId = senderDeviceId,
-            SenderDeviceName = senderDeviceName,
-            TransferId = transferId,
-            Files = files,
-            ArchivePort = archivePort
-        };
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateFileOfferMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            transferId,
+            files,
+            archivePort
+        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create file offer message.");
+
+        return FromJson(json);
     }
 
     public static ClipPlusMessage? CreateImage(

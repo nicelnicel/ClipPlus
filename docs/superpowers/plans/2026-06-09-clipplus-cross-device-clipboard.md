@@ -3596,6 +3596,19 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充图片 FFI 真实符号调用、Windows bundled DLL 过滤测试、32 KiB inline PNG 限制、双向图片同步、防回环和日志脱敏检查，后续改动必须按该矩阵复验。
 - 剩余项更新：共享 Key、hello、text、trust、image 消息 JSON 生成已迁入 Rust FFI 并通过默认打包路径与真实双向同步；fileOffer 消息生成、UDP socket 运行时、文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。下一步优先 fileOffer。
 
+**2026-06-10 fileOffer 消息 JSON Rust FFI 迁移复验：**
+
+- 迁移范围：`clipplus-transport` 新增 `NativeClipboardMessage::file_offer`，统一生成当前原生壳 `fileOffer` wire format，并校验 `transferId`、非空文件列表、非 0 `archivePort` 和安全相对路径；`clipplus-ffi` 新增 `clipplus_create_file_offer_message_json`，以 `files_json` 传入文件数组；macOS `CoreBridge.createFileOfferMessageJSON` 与 Windows `CoreBridge.CreateFileOfferMessageJson` 加载该符号。`ClipPlusMessage.fileOffer` / `CreateFileOffer` 现在通过 Rust FFI 生成 JSON 后再解码回原生模型，不再走 Swift/C# 本地重复实现。
+- TDD 红灯：Rust transport 过滤测试先因缺少 `NativeClipboardMessage::file_offer` 编译失败；Rust FFI 过滤测试先因缺少 `clipplus_create_file_offer_message_json` 编译失败；Swift 过滤测试先因 `CoreBridge` 缺少 `createFileOfferMessageJSON` 编译失败；Windows VM 过滤测试先因 `CoreBridge` 缺少 `CreateFileOfferMessageJson` 编译失败。
+- 单元验证：`cargo test -p clipplus-transport native_clipboard_file_offer_` 通过 2/2；`cargo test -p clipplus-ffi file_offer_message_json` 通过 2/2；`./scripts/dev/check.sh` 通过，包含 Rust FFI 17/17、transport message 28/28 和 macOS Swift 28/28；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 27/27。
+- 默认打包路径 smoke test：`./scripts/dev/build-mac-app.sh` 通过，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；随后刷新 `/private/tmp/ClipPlusMac.app` 的可执行文件和 `Contents/Frameworks/libclipplus_ffi.dylib`，`nm` 证明该 dylib 导出 `_clipplus_create_file_offer_message_json`，`env -u CLIPPLUS_FFI_LIBRARY_PATH CLIPPLUS_COREBRIDGE_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac` 通过。
+- 端到端复验：Parallels `Windows 11` 运行中，`Shared clipboard mode: off`。macOS 和 Windows 两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，使用 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- Windows -> macOS 文件 offer：Windows 侧通过真实系统剪贴板 `Set-Clipboard -Path` 放入 `C:\Users\Administrator\AppData\Local\Temp\ClipPlusE2E\windows-source.txt`，源内容为 `file-offer-ffi-1781079046`；Windows 日志出现 `published file offer file_count=1`，macOS 日志出现 `received file offer file_count=1 byte_count=27`。
+- 真实 UI 接收：通过 macOS Accessibility 点击 `ClipPlusMac` 第二个 menu bar 中的状态项（AX 名称“粘贴”），在菜单栏面板点击 `CC4008：1 个文件可接收` 按钮。macOS `~/Downloads/ClipPlus-Received-0aa080ee-83d7-4cdb-b557-b2194c5eedc1.zip` 生成，解压后 `windows-source.txt` 内容为 `file-offer-ffi-1781079046`。
+- 日志与脱敏检查：macOS 新日志区间出现 `received file offer` 和 `downloaded file archive byte_count=163`；Windows 新日志区间出现 `published file offer` 和 `served file archive file_count=1 byte_count=163`。匹配检查未出现 `clipplus-test-key`、`windows-source`、`file-offer-ffi`、`C:` 或 `/Users/`。E2E 前后 Parallels `Shared clipboard mode` 均为 `off`，E2E 后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe` 测试进程。
+- 测试方案记录：`AGENTS.md` 已补充 fileOffer FFI 真实符号调用、Windows bundled DLL 过滤测试和 fail-fast 要求；后续涉及文件消息生成的改动必须继续覆盖真实 UI 接收和日志脱敏。
+- 剩余项更新：共享 Key、hello、text、trust、image、fileOffer 消息 JSON 生成已迁入 Rust FFI 并通过默认打包路径与真实跨系统验收；UDP socket 运行时、文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。
+
 ---
 
 ## 自查清单

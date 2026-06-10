@@ -142,6 +142,35 @@ impl NativeClipboardMessage {
         Ok(message)
     }
 
+    pub fn file_offer(
+        group_id: impl Into<String>,
+        sender_device_id: impl Into<String>,
+        sender_device_name: impl Into<String>,
+        transfer_id: impl Into<String>,
+        files: Vec<NativeFileTransferItem>,
+        archive_port: u16,
+    ) -> Result<Self, NativeClipboardMessageError> {
+        let message = Self {
+            kind: NativeClipboardMessageKind::FileOffer,
+            protocol_version: 1,
+            group_id: group_id.into(),
+            sender_device_id: sender_device_id.into(),
+            sender_device_name: sender_device_name.into(),
+            event_id: Uuid::new_v4(),
+            text: None,
+            image_base64: None,
+            image_byte_size: None,
+            image_content_hash: None,
+            approved_device_id: None,
+            transfer_id: Some(transfer_id.into()),
+            files: Some(files),
+            archive_port: Some(archive_port),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        };
+        message.validate()?;
+        Ok(message)
+    }
+
     fn new(
         kind: NativeClipboardMessageKind,
         group_id: impl Into<String>,
@@ -239,6 +268,30 @@ impl NativeClipboardMessage {
                 ));
             }
         }
+        if matches!(self.kind, NativeClipboardMessageKind::FileOffer) {
+            if self
+                .transfer_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(NativeClipboardMessageError::InvalidField("transfer_id"));
+            }
+            if self.archive_port.is_none_or(|value| value == 0) {
+                return Err(NativeClipboardMessageError::InvalidField("archive_port"));
+            }
+            let Some(files) = self.files.as_deref() else {
+                return Err(NativeClipboardMessageError::InvalidField("files"));
+            };
+            if files.is_empty() {
+                return Err(NativeClipboardMessageError::InvalidField("files"));
+            }
+            if files
+                .iter()
+                .any(|file| !is_safe_relative_file_offer_path(&file.relative_path))
+            {
+                return Err(NativeClipboardMessageError::InvalidField("relative_path"));
+            }
+        }
 
         Ok(())
     }
@@ -247,6 +300,22 @@ impl NativeClipboardMessage {
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn is_safe_relative_file_offer_path(value: &str) -> bool {
+    let path = value.trim();
+    if path.is_empty()
+        || path != value
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.contains('\0')
+    {
+        return false;
+    }
+
+    path.split('/')
+        .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

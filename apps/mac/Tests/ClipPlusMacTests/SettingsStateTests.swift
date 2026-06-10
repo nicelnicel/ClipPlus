@@ -303,6 +303,33 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(json.contains("C:\\\\"))
     }
 
+    func testCoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable() throws {
+        let item = FileTransferItem(
+            relativePath: "Reports/Q1.txt",
+            byteSize: 12,
+            isDirectory: false
+        )
+        let json = try XCTUnwrap(CoreBridge().createFileOfferMessageJSON(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            transferId: "transfer-1",
+            files: [item],
+            archivePort: 47_632
+        ))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .fileOffer)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.transferId, "transfer-1")
+        XCTAssertEqual(decoded.archivePort, 47_632)
+        XCTAssertEqual(decoded.files, [item])
+        XCTAssertFalse(json.contains("/Users/"))
+        XCTAssertFalse(json.contains("C:\\\\"))
+    }
+
     func testRemoteFileOfferCanRequestReceive() {
         let state = SettingsState(
             sharedKeyConfigured: true,

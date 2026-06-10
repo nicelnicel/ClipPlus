@@ -5,7 +5,7 @@ use std::ptr;
 
 use clipplus_crypto::key::SharedKeyMaterial;
 use clipplus_diagnostics::status::RuntimeStatus;
-use clipplus_transport::message::NativeClipboardMessage;
+use clipplus_transport::message::{NativeClipboardMessage, NativeFileTransferItem};
 
 use crate::types::{free_c_string, string_to_c_ptr};
 
@@ -164,6 +164,58 @@ pub unsafe extern "C" fn clipplus_create_image_message_json(
         NativeClipboardMessage::image(group_id, sender_device_id, sender_device_name, image_bytes)
             .and_then(|message| message.to_json())
             .map_or(ptr::null_mut(), string_to_c_ptr)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+/// Creates a file offer clipboard message JSON string using the native shell wire format.
+///
+/// # Safety
+///
+/// String pointer arguments must be non-null valid NUL-terminated UTF-8 C strings.
+/// `files_json` must be a JSON array of native file transfer items. Invalid,
+/// empty, unsafe path, zero-port, or serialization-failing values return null. The
+/// returned non-null pointer follows the same ownership rules as
+/// [`clipplus_get_status_json`] and must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_create_file_offer_message_json(
+    group_id: *const c_char,
+    sender_device_id: *const c_char,
+    sender_device_name: *const c_char,
+    transfer_id: *const c_char,
+    files_json: *const c_char,
+    archive_port: u16,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(group_id) = ffi_string(group_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_id) = ffi_string(sender_device_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_name) = ffi_string(sender_device_name) else {
+            return ptr::null_mut();
+        };
+        let Some(transfer_id) = ffi_string(transfer_id) else {
+            return ptr::null_mut();
+        };
+        let Some(files_json) = ffi_string(files_json) else {
+            return ptr::null_mut();
+        };
+        let Ok(files) = serde_json::from_str::<Vec<NativeFileTransferItem>>(&files_json) else {
+            return ptr::null_mut();
+        };
+
+        NativeClipboardMessage::file_offer(
+            group_id,
+            sender_device_id,
+            sender_device_name,
+            transfer_id,
+            files,
+            archive_port,
+        )
+        .and_then(|message| message.to_json())
+        .map_or(ptr::null_mut(), string_to_c_ptr)
     })
     .unwrap_or(ptr::null_mut())
 }

@@ -123,23 +123,18 @@ struct ClipPlusMessage: Codable, Equatable {
         files: [FileTransferItem],
         archivePort: Int
     ) -> Self {
-        Self(
-            kind: .fileOffer,
-            protocolVersion: 1,
+        guard let json = CoreBridge().createFileOfferMessageJSON(
             groupId: groupId,
             senderDeviceId: senderDeviceId,
             senderDeviceName: senderDeviceName,
-            eventId: UUID().uuidString,
-            text: nil,
-            imageBase64: nil,
-            imageByteSize: nil,
-            imageContentHash: nil,
-            approvedDeviceId: nil,
             transferId: transferId,
             files: files,
-            archivePort: archivePort,
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
+            archivePort: archivePort
+        ) else {
+            preconditionFailure("Rust 核心库不可用，无法创建文件剪贴板消息")
+        }
+
+        return decodeCoreMessageJSON(json)
     }
 
     private static func decodeCoreMessageJSON(_ json: String) -> Self {

@@ -50,6 +50,24 @@ struct CoreBridge {
         )
     }
 
+    func createFileOfferMessageJSON(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        transferId: String,
+        files: [FileTransferItem],
+        archivePort: Int
+    ) -> String? {
+        Self.ffiBridge?.createFileOfferMessageJSON(
+            groupId: groupId,
+            senderDeviceId: senderDeviceId,
+            senderDeviceName: senderDeviceName,
+            transferId: transferId,
+            files: files,
+            archivePort: archivePort
+        )
+    }
+
     func createTrustMessageJSON(
         groupId: String,
         senderDeviceId: String,
@@ -87,6 +105,14 @@ private final class ClipPlusFFIBridge {
         UnsafeRawPointer?,
         Int
     ) -> UnsafeMutablePointer<CChar>?
+    private typealias CreateFileOfferMessageJSONFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UInt16
+    ) -> UnsafeMutablePointer<CChar>?
     private typealias FreeStringFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let handle: UnsafeMutableRawPointer
@@ -94,6 +120,7 @@ private final class ClipPlusFFIBridge {
     private let createHelloMessageJSONFunction: CreateHelloMessageJSONFunction
     private let createTextMessageJSONFunction: CreateTextMessageJSONFunction
     private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
+    private let createFileOfferMessageJSONFunction: CreateFileOfferMessageJSONFunction
     private let createTrustMessageJSONFunction: CreateTextMessageJSONFunction
     private let freeStringFunction: FreeStringFunction
 
@@ -103,6 +130,7 @@ private final class ClipPlusFFIBridge {
         createHelloMessageJSONFunction: @escaping CreateHelloMessageJSONFunction,
         createTextMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
+        createFileOfferMessageJSONFunction: @escaping CreateFileOfferMessageJSONFunction,
         createTrustMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         freeStringFunction: @escaping FreeStringFunction
     ) {
@@ -111,6 +139,7 @@ private final class ClipPlusFFIBridge {
         self.createHelloMessageJSONFunction = createHelloMessageJSONFunction
         self.createTextMessageJSONFunction = createTextMessageJSONFunction
         self.createImageMessageJSONFunction = createImageMessageJSONFunction
+        self.createFileOfferMessageJSONFunction = createFileOfferMessageJSONFunction
         self.createTrustMessageJSONFunction = createTrustMessageJSONFunction
         self.freeStringFunction = freeStringFunction
     }
@@ -130,6 +159,7 @@ private final class ClipPlusFFIBridge {
                   let createHelloMessageJSONSymbol = dlsym(handle, "clipplus_create_hello_message_json"),
                   let createTextMessageJSONSymbol = dlsym(handle, "clipplus_create_text_message_json"),
                   let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
+                  let createFileOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_file_offer_message_json"),
                   let createTrustMessageJSONSymbol = dlsym(handle, "clipplus_create_trust_message_json"),
                   let freeSymbol = dlsym(handle, "clipplus_free_string") else {
                 dlclose(handle)
@@ -149,6 +179,10 @@ private final class ClipPlusFFIBridge {
                 createImageMessageJSONSymbol,
                 to: CreateImageMessageJSONFunction.self
             )
+            let createFileOfferMessageJSONFunction = unsafeBitCast(
+                createFileOfferMessageJSONSymbol,
+                to: CreateFileOfferMessageJSONFunction.self
+            )
             let createTrustMessageJSONFunction = unsafeBitCast(
                 createTrustMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
@@ -160,6 +194,7 @@ private final class ClipPlusFFIBridge {
                 createHelloMessageJSONFunction: createHelloMessageJSONFunction,
                 createTextMessageJSONFunction: createTextMessageJSONFunction,
                 createImageMessageJSONFunction: createImageMessageJSONFunction,
+                createFileOfferMessageJSONFunction: createFileOfferMessageJSONFunction,
                 createTrustMessageJSONFunction: createTrustMessageJSONFunction,
                 freeStringFunction: freeStringFunction
             )
@@ -256,6 +291,48 @@ private final class ClipPlusFFIBridge {
                             rawBuffer.baseAddress,
                             pngData.count
                         )
+                    }
+                }
+            }
+        }
+
+        guard let resultPointer else {
+            return nil
+        }
+        defer { freeStringFunction(resultPointer) }
+
+        return String(cString: resultPointer)
+    }
+
+    func createFileOfferMessageJSON(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        transferId: String,
+        files: [FileTransferItem],
+        archivePort: Int
+    ) -> String? {
+        guard archivePort > 0,
+              archivePort <= Int(UInt16.max),
+              let filesData = try? JSONEncoder().encode(files),
+              let filesJSON = String(data: filesData, encoding: .utf8) else {
+            return nil
+        }
+
+        let resultPointer = groupId.withCString { groupIdPointer in
+            senderDeviceId.withCString { senderDeviceIdPointer in
+                senderDeviceName.withCString { senderDeviceNamePointer in
+                    transferId.withCString { transferIdPointer in
+                        filesJSON.withCString { filesJSONPointer in
+                            createFileOfferMessageJSONFunction(
+                                groupIdPointer,
+                                senderDeviceIdPointer,
+                                senderDeviceNamePointer,
+                                transferIdPointer,
+                                filesJSONPointer,
+                                UInt16(archivePort)
+                            )
+                        }
                     }
                 }
             }

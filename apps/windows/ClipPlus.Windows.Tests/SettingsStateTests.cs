@@ -354,6 +354,35 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable()
+    {
+        var item = new ClipPlus.Windows.Sync.FileTransferItem(
+            RelativePath: @"Reports/Q1.txt",
+            ByteSize: 12,
+            IsDirectory: false
+        );
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateFileOfferMessageJson(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            transferId: "transfer-1",
+            files: new[] { item },
+            archivePort: 47_632
+        );
+
+        Assert.NotNull(json);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded.Kind);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("transfer-1", decoded.TransferId);
+        Assert.Equal(47_632, decoded.ArchivePort);
+        Assert.Equal(new[] { item }, decoded.Files);
+        Assert.DoesNotContain(@"C:\\", json);
+        Assert.DoesNotContain("/Users/", json);
+    }
+
+    [Fact]
     public void RemoteFileOfferCanRequestReceive()
     {
         var state = new SettingsState(

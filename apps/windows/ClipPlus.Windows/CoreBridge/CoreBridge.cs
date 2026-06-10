@@ -2,6 +2,7 @@ namespace ClipPlus.Windows.CoreBridge;
 
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 
 public sealed class CoreBridge
 {
@@ -39,6 +40,23 @@ public sealed class CoreBridge
         byte[] pngData)
     {
         return Ffi.Value?.CreateImageMessageJson(groupId, senderDeviceId, senderDeviceName, pngData);
+    }
+
+    public string? CreateFileOfferMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string transferId,
+        IReadOnlyList<ClipPlus.Windows.Sync.FileTransferItem> files,
+        int archivePort)
+    {
+        return Ffi.Value?.CreateFileOfferMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            transferId,
+            files,
+            archivePort);
     }
 
     public string? CreateTrustMessageJson(
@@ -80,12 +98,27 @@ internal sealed class ClipPlusFfiBridge
         UIntPtr imageLen);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr CreateFileOfferMessageJsonDelegate(
+        IntPtr groupId,
+        IntPtr senderDeviceId,
+        IntPtr senderDeviceName,
+        IntPtr transferId,
+        IntPtr filesJson,
+        ushort archivePort);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
+
+    private static readonly JsonSerializerOptions FilesJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     private readonly DeriveGroupIdDelegate deriveGroupId;
     private readonly CreateHelloMessageJsonDelegate createHelloMessageJson;
     private readonly CreateTextMessageJsonDelegate createTextMessageJson;
     private readonly CreateImageMessageJsonDelegate createImageMessageJson;
+    private readonly CreateFileOfferMessageJsonDelegate createFileOfferMessageJson;
     private readonly CreateTextMessageJsonDelegate createTrustMessageJson;
     private readonly FreeStringDelegate freeString;
 
@@ -94,6 +127,7 @@ internal sealed class ClipPlusFfiBridge
         CreateHelloMessageJsonDelegate createHelloMessageJson,
         CreateTextMessageJsonDelegate createTextMessageJson,
         CreateImageMessageJsonDelegate createImageMessageJson,
+        CreateFileOfferMessageJsonDelegate createFileOfferMessageJson,
         CreateTextMessageJsonDelegate createTrustMessageJson,
         FreeStringDelegate freeString)
     {
@@ -101,6 +135,7 @@ internal sealed class ClipPlusFfiBridge
         this.createHelloMessageJson = createHelloMessageJson;
         this.createTextMessageJson = createTextMessageJson;
         this.createImageMessageJson = createImageMessageJson;
+        this.createFileOfferMessageJson = createFileOfferMessageJson;
         this.createTrustMessageJson = createTrustMessageJson;
         this.freeString = freeString;
     }
@@ -123,6 +158,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_hello_message_json", out var createHelloMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_text_message_json", out var createTextMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_create_file_offer_message_json", out var createFileOfferMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_trust_message_json", out var createTrustMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
@@ -135,6 +171,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<CreateHelloMessageJsonDelegate>(createHelloMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTextMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
+                Marshal.GetDelegateForFunctionPointer<CreateFileOfferMessageJsonDelegate>(createFileOfferMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTrustMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
@@ -231,6 +268,45 @@ internal sealed class ClipPlusFfiBridge
             Marshal.FreeCoTaskMem(groupIdPointer);
             Marshal.FreeCoTaskMem(senderDeviceIdPointer);
             Marshal.FreeCoTaskMem(senderDeviceNamePointer);
+        }
+    }
+
+    public string? CreateFileOfferMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string transferId,
+        IReadOnlyList<ClipPlus.Windows.Sync.FileTransferItem> files,
+        int archivePort)
+    {
+        if (archivePort <= 0 || archivePort > ushort.MaxValue)
+        {
+            return null;
+        }
+
+        var filesJson = JsonSerializer.Serialize(files, FilesJsonOptions);
+        var groupIdPointer = Marshal.StringToCoTaskMemUTF8(groupId);
+        var senderDeviceIdPointer = Marshal.StringToCoTaskMemUTF8(senderDeviceId);
+        var senderDeviceNamePointer = Marshal.StringToCoTaskMemUTF8(senderDeviceName);
+        var transferIdPointer = Marshal.StringToCoTaskMemUTF8(transferId);
+        var filesJsonPointer = Marshal.StringToCoTaskMemUTF8(filesJson);
+        try
+        {
+            return TakeOwnedString(createFileOfferMessageJson(
+                groupIdPointer,
+                senderDeviceIdPointer,
+                senderDeviceNamePointer,
+                transferIdPointer,
+                filesJsonPointer,
+                (ushort)archivePort));
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(groupIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceNamePointer);
+            Marshal.FreeCoTaskMem(transferIdPointer);
+            Marshal.FreeCoTaskMem(filesJsonPointer);
         }
     }
 

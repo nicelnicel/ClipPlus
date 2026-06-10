@@ -2,11 +2,13 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use clipplus_ffi::api::{
-    clipplus_create_hello_message_json, clipplus_create_image_message_json,
-    clipplus_create_text_message_json, clipplus_create_trust_message_json,
-    clipplus_derive_group_id, clipplus_free_string, clipplus_get_status_json,
+    clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
+    clipplus_create_image_message_json, clipplus_create_text_message_json,
+    clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_free_string,
+    clipplus_get_status_json,
 };
 use clipplus_ffi::{
+    clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
     clipplus_create_hello_message_json as reexported_create_hello_message_json,
     clipplus_create_image_message_json as reexported_create_image_message_json,
     clipplus_create_text_message_json as reexported_create_text_message_json,
@@ -306,6 +308,140 @@ fn ffi_create_image_message_json_rejects_null_empty_and_oversized_values() {
             sender_device_name.as_ptr(),
             oversized.as_ptr(),
             oversized.len(),
+        )
+    }
+    .is_null());
+}
+
+#[test]
+fn ffi_creates_file_offer_message_json_for_native_shells() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let transfer_id = CString::new("transfer-1").unwrap();
+    let files_json = CString::new(
+        r#"[{"relativePath":"Reports/Q1.txt","byteSize":12,"isDirectory":false},{"relativePath":"Screenshots","byteSize":34,"isDirectory":true}]"#,
+    )
+    .unwrap();
+
+    let ptr = unsafe {
+        clipplus_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            files_json.as_ptr(),
+            47_632,
+        )
+    };
+    let json = unsafe { take_ffi_string(ptr) };
+    let value: Value = serde_json::from_str(&json).expect("message json should parse");
+
+    assert_eq!(value["kind"], "fileOffer");
+    assert_eq!(value["protocolVersion"], 1);
+    assert_eq!(value["groupId"], "group-1");
+    assert_eq!(value["senderDeviceId"], "mac-device");
+    assert_eq!(value["transferId"], "transfer-1");
+    assert_eq!(value["archivePort"], 47_632);
+    assert_eq!(value["files"][0]["relativePath"], "Reports/Q1.txt");
+    assert_eq!(value["files"][0]["byteSize"], 12);
+    assert_eq!(value["files"][0]["isDirectory"], false);
+    assert_eq!(value["files"][1]["relativePath"], "Screenshots");
+    assert!(!json.contains("/Users/"));
+    assert!(!json.contains("C:\\"));
+}
+
+#[test]
+fn ffi_create_file_offer_message_json_rejects_invalid_values() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let transfer_id = CString::new("transfer-1").unwrap();
+    let blank_transfer_id = CString::new(" ").unwrap();
+    let valid_files =
+        CString::new(r#"[{"relativePath":"Reports/Q1.txt","byteSize":12,"isDirectory":false}]"#)
+            .unwrap();
+    let empty_files = CString::new("[]").unwrap();
+    let invalid_files = CString::new("not-json").unwrap();
+    let absolute_file = CString::new(
+        r#"[{"relativePath":"/Users/cc/private.txt","byteSize":12,"isDirectory":false}]"#,
+    )
+    .unwrap();
+
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            ptr::null(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            valid_files.as_ptr(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            blank_transfer_id.as_ptr(),
+            valid_files.as_ptr(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            ptr::null(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            empty_files.as_ptr(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            invalid_files.as_ptr(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            absolute_file.as_ptr(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_file_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            valid_files.as_ptr(),
+            0,
         )
     }
     .is_null());
