@@ -46,8 +46,20 @@ public sealed class SettingsStateTests
         state.UpdateSharedKey("clipplus-test-key", "clipplus-test-key");
 
         Assert.True(state.SharedKeyConfigured);
-        Assert.Equal("OcePlqBkjK6NLJjtPRglTw", state.SharedGroupId);
+        Assert.Equal(ExpectedGroupId("clipplus-test-key"), state.SharedGroupId);
         Assert.DoesNotContain("clipplus-test-key", state.SharedGroupId);
+    }
+
+    [Fact]
+    public void CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable()
+    {
+        var groupId = new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId("clipplus-test-key");
+        if (groupId is null)
+        {
+            return;
+        }
+
+        Assert.Equal("21YR2N3_wcdRPmEMLiuLMA", groupId);
     }
 
     [Fact]
@@ -441,6 +453,11 @@ public sealed class SettingsStateTests
             "net8.0-windows",
             "ClipPlus.Windows.exe"
         ));
+    }
+
+    private static string ExpectedGroupId(string rawKey)
+    {
+        return new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId(rawKey) ?? "OcePlqBkjK6NLJjtPRglTw";
     }
 }
 

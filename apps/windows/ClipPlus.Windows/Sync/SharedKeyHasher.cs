@@ -7,6 +7,12 @@ public static class SharedKeyHasher
 {
     public static string GroupIdFor(string rawKey)
     {
+        var rustGroupId = new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId(rawKey);
+        if (!string.IsNullOrEmpty(rustGroupId))
+        {
+            return rustGroupId;
+        }
+
         var normalizedKey = rawKey.Trim();
         var input = Encoding.UTF8.GetBytes($"clipplus.shared-key.v1:{normalizedKey}");
         var digest = SHA256.HashData(input);

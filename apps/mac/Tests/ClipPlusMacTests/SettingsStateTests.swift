@@ -49,8 +49,16 @@ final class SettingsStateTests: XCTestCase {
         try state.updateSharedKey("clipplus-test-key", confirmation: "clipplus-test-key")
 
         XCTAssertTrue(state.sharedKeyConfigured)
-        XCTAssertEqual(state.sharedGroupId, "OcePlqBkjK6NLJjtPRglTw")
+        XCTAssertEqual(state.sharedGroupId, expectedGroupId(for: "clipplus-test-key"))
         XCTAssertFalse(state.sharedGroupId.contains("clipplus-test-key"))
+    }
+
+    func testCoreBridgeDerivesGroupIdWhenFFILibraryIsAvailable() {
+        guard let groupId = CoreBridge().deriveGroupId(for: "clipplus-test-key") else {
+            return
+        }
+
+        XCTAssertEqual(groupId, "21YR2N3_wcdRPmEMLiuLMA")
     }
 
     func testMismatchedSharedKeyConfirmationFails() {
@@ -347,6 +355,10 @@ private func unzip(_ archiveURL: URL, to destinationURL: URL) throws {
     try process.run()
     process.waitUntilExit()
     XCTAssertEqual(process.terminationStatus, 0)
+}
+
+private func expectedGroupId(for rawKey: String) -> String {
+    CoreBridge().deriveGroupId(for: rawKey) ?? "OcePlqBkjK6NLJjtPRglTw"
 }
 
 private final class FakeLoginItemService: LoginItemService {

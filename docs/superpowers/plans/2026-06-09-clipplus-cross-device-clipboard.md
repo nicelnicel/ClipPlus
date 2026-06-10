@@ -3514,6 +3514,16 @@ git commit -m "test: add parallels e2e checklist"
 - 意义：这一步把 Rust core 的共享 Key 派生能力暴露到 FFI，后续 Swift/C# 应切到该入口，替换当前原生壳内 SHA-256 派生，消除长期协议分叉。
 - 限制：Swift/C# 尚未链接并调用该 FFI；UDP 文本/图片/文件运行时仍在原生壳中，尚未迁入 Rust core/transport。
 
+**2026-06-10 原生壳共享 Key 派生桥接复验：**
+
+- macOS：`CoreBridge` 新增运行时加载 `clipplus_ffi` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或随 app 可执行文件/Frameworks 放置的 `libclipplus_ffi.dylib`；`SharedKeyHasher` 在 FFI 可用时使用 Rust 派生结果，否则保留旧 SHA-256 回退，避免未打包 FFI 库时 app 无法启动。
+- macOS 验证：`CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib swift test` 通过 21/21；测试确认 `clipplus-test-key` 通过 FFI 派生为 `21YR2N3_wcdRPmEMLiuLMA`。普通 `swift test` 也通过 21/21。
+- Windows：`CoreBridge` 新增 `NativeLibrary.TryLoad` 动态加载 `clipplus_ffi.dll` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或 app 输出目录下 `clipplus_ffi.dll`；`SharedKeyHasher` 在 DLL 可用时使用 Rust 派生结果，否则保留旧 SHA-256 回退。
+- Windows 验证：Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 21/21，证明动态加载接口和回退路径不破坏 WPF app/test 构建。
+- Windows FFI DLL 阻塞：Windows VM 内 Rust host 为 `aarch64-pc-windows-msvc`，但当前缺少 MSVC `link.exe`；`cargo build -p clipplus-ffi` 因 `link.exe not found` 失败。因此尚未完成 Windows 真实 `clipplus_ffi.dll` P/Invoke 运行证明，需要后续安装 Visual Studio Build Tools/VC++ Build Tools 或配置可用 Windows linker 后再补。
+- 风险控制：默认不再自动搜索仓库 `target/debug`；开发/端到端启用 Rust FFI 必须显式传 `CLIPPLUS_FFI_LIBRARY_PATH` 或把 native library 放在 app 旁边，避免 macOS 自动用 Rust 派生而 Windows 默默回退导致组 ID 分叉。
+- 剩余项更新：共享 Key 派生已有 Rust FFI 入口和 macOS 真实调用证明；Windows 真实 FFI 调用、Swift/C# 完全移除回退、以及 UDP 文本/图片/文件运行时迁入 Rust core/transport 仍未完成。
+
 ---
 
 ## 自查清单
