@@ -3525,6 +3525,15 @@ git commit -m "test: add parallels e2e checklist"
 - 风险控制：默认不再自动搜索仓库 `target/debug`；开发/端到端启用 Rust FFI 必须显式传 `CLIPPLUS_FFI_LIBRARY_PATH` 或把 native library 放在 app 旁边，避免 macOS 自动用 Rust 派生而 Windows 默默回退导致组 ID 分叉。
 - 剩余项更新：共享 Key 派生已有 Rust FFI 入口、macOS 真实调用证明和 Windows 真实 DLL/PInvoke 调用证明；Swift/C# 完全移除回退、native library 打包随 app 发布、以及 UDP 文本/图片/文件运行时迁入 Rust core/transport 仍未完成。
 
+**2026-06-10 FFI 路径端到端文本同步复验：**
+
+- 环境：Parallels `Windows 11` 运行中，`EFI Secure boot: off`，`Shared clipboard mode: off`，Windows IP `10.211.55.3`，macOS Parallels IP `10.211.55.2`。
+- 启动方式：macOS 端使用当前源码重新 `swift build` 后替换 `/private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac`，并设置 `CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib`。Windows 端使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll` 启动，并设置 `CLIPPLUS_FFI_LIBRARY_PATH=%TEMP%\ClipPlusRustTarget\debug\clipplus_ffi.dll`。直接启动 `ClipPlus.Windows.exe` 会因 VM 未注册全局 .NET runtime 报 `hostfxr.dll not found`，测试手册已记录该故障定位。
+- 发现和信任：两端使用 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`；macOS 与 Windows 日志均出现 `peer hello`，Windows 日志出现 `peer trust accepted`。
+- Mac -> Windows：macOS 写入 `ffi-mac-to-windows-1781073898`，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 日志出现 `received text clipboard byte_count=29`。
+- Windows -> Mac：Windows 写入 `ffi-windows-to-mac-1781073920`，macOS `pbpaste` 返回同一字符串；macOS 日志出现 `received text clipboard byte_count=29`。
+- 日志检查：macOS `~/Library/Logs/ClipPlus/clipplus.log` 和 Windows `%LOCALAPPDATA%\ClipPlus\logs\clipplus.log` 均有文本发布/接收记录；匹配检查未出现 `clipplus-test-key` 明文。
+
 ---
 
 ## 自查清单

@@ -58,9 +58,11 @@ Windows 端使用：
 set CLIPPLUS_SHARED_KEY=clipplus-test-key
 set CLIPPLUS_AUTO_TRUST=1
 set CLIPPLUS_PEER_HOSTS=10.211.55.2
-C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-windows\ClipPlus.Windows.exe
+cd /d C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-windows
+C:\dotnet\dotnet.exe ClipPlus.Windows.dll
 ```
 
+- Windows VM 内 `.NET` 目前安装在 `C:\dotnet`，没有注册为全局 runtime；自动化/E2E 启动 App 时优先使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`，不要直接运行 `ClipPlus.Windows.exe`。直接运行 apphost exe 可能报 `hostfxr.dll not found`。
 - 快速同步回归可以使用 `CLIPPLUS_AUTO_TRUST=1`；测试首次确认/设备信任时不要设置 `CLIPPLUS_AUTO_TRUST`。
 - 无 `CLIPPLUS_AUTO_TRUST` 的手动确认验收至少验证：
   - 双方日志只出现 `peer hello` 时，Mac 写入剪贴板不会覆盖 Windows 剪贴板基线值。
@@ -108,10 +110,21 @@ cd /Users/cc/proj/ClipPlus/apps/mac
 CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib swift test --filter CoreBridgeDerivesGroupIdWhenFFILibraryIsAvailable
 ```
 
-Windows FFI 验证命令：
+Windows FFI 验证命令分两步。先在 VM 内初始化 ARM64 MSVC 环境并构建 DLL：
 
-```bash
-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "$env:CARGO_TARGET_DIR=\"$env:TEMP/ClipPlusRustTarget\"; Set-Location C:/Mac/Home/proj/ClipPlus; cargo build -p clipplus-ffi; $dll=Join-Path $env:CARGO_TARGET_DIR \"debug/clipplus_ffi.dll\"; $env:CLIPPLUS_FFI_LIBRARY_PATH=$dll; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable"'
+```cmd
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" arm64
+set "CARGO_TARGET_DIR=%TEMP%\ClipPlusRustTarget"
+cd /d C:\Mac\Home\proj\ClipPlus
+cargo build -p clipplus-ffi
+```
+
+再运行 P/Invoke 测试：
+
+```powershell
+$env:CLIPPLUS_FFI_LIBRARY_PATH = Join-Path $env:TEMP "ClipPlusRustTarget\debug\clipplus_ffi.dll"
+cd C:\Mac\Home\proj\ClipPlus\apps\windows
+C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable
 ```
 
 - 在 Parallels Windows VM 内构建 Rust crate 时，必须设置 `CARGO_TARGET_DIR` 到 Windows 本机目录（例如 `$env:TEMP/ClipPlusRustTarget`），不要使用 `C:\Mac\Home\proj\ClipPlus\target`；共享目录上 Cargo/MSVC 可能出现临时目录删除失败或文件锁异常。
