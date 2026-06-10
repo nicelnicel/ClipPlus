@@ -3,6 +3,7 @@ namespace ClipPlus.Windows.CoreBridge;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 
 public sealed class CoreBridge
@@ -65,6 +66,11 @@ public sealed class CoreBridge
         return Ffi.Value?.WriteFileArchiveZip(sourcePaths, archivePath) == true;
     }
 
+    public RustUdpSocket? OpenUdpSocket(int bindPort)
+    {
+        return Ffi.Value?.OpenUdpSocket(bindPort);
+    }
+
     public string? CreateTrustMessageJson(
         string groupId,
         string senderDeviceId,
@@ -80,6 +86,48 @@ public sealed class CoreBridge
     }
 
     private static readonly Lazy<ClipPlusFfiBridge?> Ffi = new(ClipPlusFfiBridge.Load);
+}
+
+public sealed record RustUdpDatagram(byte[] Payload, string SourceHost, int SourcePort);
+
+public sealed class RustUdpSocket : IDisposable
+{
+    private readonly ClipPlusFfiBridge bridge;
+    private IntPtr handle;
+
+    internal RustUdpSocket(ClipPlusFfiBridge bridge, IntPtr handle)
+    {
+        this.bridge = bridge;
+        this.handle = handle;
+    }
+
+    public int LocalPort => handle == IntPtr.Zero ? 0 : bridge.UdpSocketLocalPort(handle);
+
+    public bool SendTo(byte[] payload, string targetHost, int targetPort)
+    {
+        return handle != IntPtr.Zero && bridge.UdpSocketSendTo(handle, payload, targetHost, targetPort);
+    }
+
+    public RustUdpDatagram? Receive()
+    {
+        return handle == IntPtr.Zero ? null : bridge.UdpSocketReceive(handle);
+    }
+
+    public void Dispose()
+    {
+        var currentHandle = System.Threading.Interlocked.Exchange(ref handle, IntPtr.Zero);
+        if (currentHandle != IntPtr.Zero)
+        {
+            bridge.UdpSocketFree(currentHandle);
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    ~RustUdpSocket()
+    {
+        Dispose();
+    }
 }
 
 internal sealed class ClipPlusFfiBridge
@@ -124,6 +172,33 @@ internal sealed class ClipPlusFfiBridge
         IntPtr archivePath);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr UdpSocketBindDelegate(ushort bindPort);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void UdpSocketFreeDelegate(IntPtr handle);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate ushort UdpSocketLocalPortDelegate(IntPtr handle);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool UdpSocketSendToDelegate(
+        IntPtr handle,
+        IntPtr payload,
+        UIntPtr payloadLen,
+        IntPtr targetHost,
+        ushort targetPort);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate UIntPtr UdpSocketRecvDelegate(
+        IntPtr handle,
+        IntPtr buffer,
+        UIntPtr bufferLen,
+        IntPtr sourceHostBuffer,
+        UIntPtr sourceHostLen,
+        out ushort sourcePort);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
 
     private static readonly JsonSerializerOptions FilesJsonOptions = new()
@@ -137,6 +212,11 @@ internal sealed class ClipPlusFfiBridge
     private readonly CreateImageMessageJsonDelegate createImageMessageJson;
     private readonly CreateFileOfferMessageJsonDelegate createFileOfferMessageJson;
     private readonly WriteFileArchiveZipDelegate writeFileArchiveZip;
+    private readonly UdpSocketBindDelegate udpSocketBind;
+    private readonly UdpSocketFreeDelegate udpSocketFree;
+    private readonly UdpSocketLocalPortDelegate udpSocketLocalPort;
+    private readonly UdpSocketSendToDelegate udpSocketSendTo;
+    private readonly UdpSocketRecvDelegate udpSocketRecv;
     private readonly CreateTextMessageJsonDelegate createTrustMessageJson;
     private readonly FreeStringDelegate freeString;
 
@@ -147,6 +227,11 @@ internal sealed class ClipPlusFfiBridge
         CreateImageMessageJsonDelegate createImageMessageJson,
         CreateFileOfferMessageJsonDelegate createFileOfferMessageJson,
         WriteFileArchiveZipDelegate writeFileArchiveZip,
+        UdpSocketBindDelegate udpSocketBind,
+        UdpSocketFreeDelegate udpSocketFree,
+        UdpSocketLocalPortDelegate udpSocketLocalPort,
+        UdpSocketSendToDelegate udpSocketSendTo,
+        UdpSocketRecvDelegate udpSocketRecv,
         CreateTextMessageJsonDelegate createTrustMessageJson,
         FreeStringDelegate freeString)
     {
@@ -156,6 +241,11 @@ internal sealed class ClipPlusFfiBridge
         this.createImageMessageJson = createImageMessageJson;
         this.createFileOfferMessageJson = createFileOfferMessageJson;
         this.writeFileArchiveZip = writeFileArchiveZip;
+        this.udpSocketBind = udpSocketBind;
+        this.udpSocketFree = udpSocketFree;
+        this.udpSocketLocalPort = udpSocketLocalPort;
+        this.udpSocketSendTo = udpSocketSendTo;
+        this.udpSocketRecv = udpSocketRecv;
         this.createTrustMessageJson = createTrustMessageJson;
         this.freeString = freeString;
     }
@@ -180,6 +270,11 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_file_offer_message_json", out var createFileOfferMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_write_file_archive_zip", out var writeFileArchiveZipSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out var udpSocketBindSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_free", out var udpSocketFreeSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_local_port", out var udpSocketLocalPortSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_send_to", out var udpSocketSendToSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_recv", out var udpSocketRecvSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_trust_message_json", out var createTrustMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
@@ -194,6 +289,11 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateFileOfferMessageJsonDelegate>(createFileOfferMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<WriteFileArchiveZipDelegate>(writeFileArchiveZipSymbol),
+                Marshal.GetDelegateForFunctionPointer<UdpSocketBindDelegate>(udpSocketBindSymbol),
+                Marshal.GetDelegateForFunctionPointer<UdpSocketFreeDelegate>(udpSocketFreeSymbol),
+                Marshal.GetDelegateForFunctionPointer<UdpSocketLocalPortDelegate>(udpSocketLocalPortSymbol),
+                Marshal.GetDelegateForFunctionPointer<UdpSocketSendToDelegate>(udpSocketSendToSymbol),
+                Marshal.GetDelegateForFunctionPointer<UdpSocketRecvDelegate>(udpSocketRecvSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTrustMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
@@ -237,6 +337,7 @@ internal sealed class ClipPlusFfiBridge
             try
             {
                 lines.Add($"export_clipplus_derive_group_id={NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out _)}");
+                lines.Add($"export_clipplus_udp_socket_bind={NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out _)}");
                 lines.Add($"export_clipplus_free_string={NativeLibrary.TryGetExport(handle, "clipplus_free_string", out _)}");
             }
             finally
@@ -401,6 +502,89 @@ internal sealed class ClipPlusFfiBridge
             Marshal.FreeCoTaskMem(sourcePathsJsonPointer);
             Marshal.FreeCoTaskMem(archivePathPointer);
         }
+    }
+
+    public RustUdpSocket? OpenUdpSocket(int bindPort)
+    {
+        if (bindPort < 0 || bindPort > ushort.MaxValue)
+        {
+            return null;
+        }
+
+        var handle = udpSocketBind((ushort)bindPort);
+        return handle == IntPtr.Zero ? null : new RustUdpSocket(this, handle);
+    }
+
+    internal int UdpSocketLocalPort(IntPtr handle)
+    {
+        return udpSocketLocalPort(handle);
+    }
+
+    internal bool UdpSocketSendTo(IntPtr handle, byte[] payload, string targetHost, int targetPort)
+    {
+        if (payload.Length == 0 || string.IsNullOrWhiteSpace(targetHost) || targetPort <= 0 || targetPort > ushort.MaxValue)
+        {
+            return false;
+        }
+
+        var payloadHandle = GCHandle.Alloc(payload, GCHandleType.Pinned);
+        var targetHostPointer = Marshal.StringToCoTaskMemUTF8(targetHost);
+        try
+        {
+            return udpSocketSendTo(
+                handle,
+                payloadHandle.AddrOfPinnedObject(),
+                new UIntPtr((ulong)payload.LongLength),
+                targetHostPointer,
+                (ushort)targetPort);
+        }
+        finally
+        {
+            payloadHandle.Free();
+            Marshal.FreeCoTaskMem(targetHostPointer);
+        }
+    }
+
+    internal RustUdpDatagram? UdpSocketReceive(IntPtr handle)
+    {
+        var payload = new byte[65_535];
+        var sourceHostBytes = new byte[64];
+        var payloadHandle = GCHandle.Alloc(payload, GCHandleType.Pinned);
+        var sourceHostHandle = GCHandle.Alloc(sourceHostBytes, GCHandleType.Pinned);
+        try
+        {
+            var byteCount = udpSocketRecv(
+                handle,
+                payloadHandle.AddrOfPinnedObject(),
+                new UIntPtr((ulong)payload.LongLength),
+                sourceHostHandle.AddrOfPinnedObject(),
+                new UIntPtr((ulong)sourceHostBytes.LongLength),
+                out var sourcePort);
+            if (byteCount == UIntPtr.Zero)
+            {
+                return null;
+            }
+
+            var length = checked((int)byteCount.ToUInt64());
+            var terminatorIndex = Array.IndexOf(sourceHostBytes, (byte)0);
+            if (terminatorIndex <= 0)
+            {
+                return null;
+            }
+
+            var sourceHost = Encoding.UTF8.GetString(sourceHostBytes, 0, terminatorIndex);
+            return new RustUdpDatagram(payload.Take(length).ToArray(), sourceHost, sourcePort);
+        }
+        finally
+        {
+            payloadHandle.Free();
+            sourceHostHandle.Free();
+        }
+    }
+
+    internal void UdpSocketFree(IntPtr handle)
+    {
+        udpSocketFree(handle);
     }
 
     private string? CreateFourStringMessageJson(

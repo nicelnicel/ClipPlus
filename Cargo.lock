@@ -265,6 +265,7 @@ dependencies = [
  "clipplus-core",
  "clipplus-crypto",
  "clipplus-diagnostics",
+ "clipplus-discovery",
  "clipplus-transport",
  "serde",
  "serde_json",

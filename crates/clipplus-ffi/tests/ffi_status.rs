@@ -7,7 +7,9 @@ use clipplus_ffi::api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
     clipplus_create_image_message_json, clipplus_create_text_message_json,
     clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_free_string,
-    clipplus_get_status_json, clipplus_write_file_archive_zip,
+    clipplus_get_status_json, clipplus_udp_socket_bind, clipplus_udp_socket_free,
+    clipplus_udp_socket_local_port, clipplus_udp_socket_recv, clipplus_udp_socket_send_to,
+    clipplus_write_file_archive_zip,
 };
 use clipplus_ffi::{
     clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
@@ -18,6 +20,7 @@ use clipplus_ffi::{
     clipplus_derive_group_id as reexported_derive_group_id,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
+    clipplus_udp_socket_bind as reexported_udp_socket_bind,
     clipplus_write_file_archive_zip as reexported_write_file_archive_zip,
 };
 use serde_json::Value;
@@ -502,6 +505,94 @@ fn ffi_write_file_archive_zip_rejects_invalid_values() {
         reexported_write_file_archive_zip(invalid_sources.as_ptr(), archive_path.as_ptr())
     });
     assert!(!unsafe { reexported_write_file_archive_zip(empty_sources.as_ptr(), ptr::null()) });
+}
+
+#[test]
+fn ffi_udp_socket_sends_and_receives_datagrams_for_native_shells() {
+    let receiver = unsafe { clipplus_udp_socket_bind(0) };
+    let sender = unsafe { clipplus_udp_socket_bind(0) };
+    assert!(!receiver.is_null());
+    assert!(!sender.is_null());
+
+    let receiver_port = unsafe { clipplus_udp_socket_local_port(receiver) };
+    assert_ne!(receiver_port, 0);
+    let target_host = CString::new("127.0.0.1").unwrap();
+    let payload = b"hello from udp ffi";
+    assert!(unsafe {
+        clipplus_udp_socket_send_to(
+            sender,
+            payload.as_ptr(),
+            payload.len(),
+            target_host.as_ptr(),
+            receiver_port,
+        )
+    });
+
+    let mut buffer = [0_u8; 128];
+    let mut source_host = [0_i8; 64];
+    let mut source_port = 0_u16;
+    let byte_count = unsafe {
+        clipplus_udp_socket_recv(
+            receiver,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            source_host.as_mut_ptr(),
+            source_host.len(),
+            &mut source_port,
+        )
+    };
+
+    assert_eq!(&buffer[..byte_count], payload);
+    let source_host = unsafe { CStr::from_ptr(source_host.as_ptr()) }
+        .to_str()
+        .unwrap();
+    assert_eq!(source_host, "127.0.0.1");
+    assert_ne!(source_port, 0);
+
+    unsafe {
+        clipplus_udp_socket_free(sender);
+        clipplus_udp_socket_free(receiver);
+    }
+}
+
+#[test]
+fn ffi_udp_socket_rejects_invalid_values() {
+    let socket = unsafe { reexported_udp_socket_bind(0) };
+    assert!(!socket.is_null());
+    let target_host = CString::new("127.0.0.1").unwrap();
+    let payload = b"hello";
+    assert!(!unsafe {
+        clipplus_udp_socket_send_to(
+            ptr::null_mut(),
+            payload.as_ptr(),
+            payload.len(),
+            target_host.as_ptr(),
+            47_631,
+        )
+    });
+    assert!(!unsafe {
+        clipplus_udp_socket_send_to(
+            socket,
+            ptr::null(),
+            payload.len(),
+            target_host.as_ptr(),
+            47_631,
+        )
+    });
+    assert_eq!(
+        unsafe {
+            clipplus_udp_socket_recv(
+                ptr::null_mut(),
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+            )
+        },
+        0
+    );
+    unsafe { clipplus_udp_socket_free(socket) };
 }
 
 fn unique_temp_dir() -> PathBuf {

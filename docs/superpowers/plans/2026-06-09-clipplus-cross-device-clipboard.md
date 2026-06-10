@@ -3639,6 +3639,19 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充调试 apphost 与 self-contained single-file exe 的启动区别、Windows 单文件发布命令、无 `CLIPPLUS_FFI_LIBRARY_PATH` 的 smoke 命令，以及 RID 与 Rust target triple 必须匹配的约束。
 - 剩余项更新：Windows 单 exe 封装已完成并通过 VM smoke；文件 offer 消息和 zip 正文归档已迁入 Rust FFI。仍需继续处理 TCP 文件归档服务/下载 socket、UDP bind/send/receive 接入原生壳。
 
+**2026-06-10 Windows UDP socket 接入 Rust FFI 复验：**
+
+- 迁移范围：`clipplus-discovery` 新增阻塞式 `BlockingDiscoveryUdpSocket`，用于 FFI/native shell 后台线程；`clipplus-ffi` 新增 `clipplus_udp_socket_bind`、`clipplus_udp_socket_local_port`、`clipplus_udp_socket_send_to`、`clipplus_udp_socket_recv`、`clipplus_udp_socket_free`；Windows `CoreBridge` 新增 `RustUdpSocket` wrapper；Windows `UdpTextSyncService` 的 UDP bind/send/recv 从 `UdpClient` 切换到 Rust FFI socket。TCP 文件归档服务/下载仍保持 C# 原实现。
+- TDD 红灯：Rust FFI 过滤测试先因缺少 `clipplus_udp_socket_*` 编译失败；Windows VM 过滤测试先因 `CoreBridge.OpenUdpSocket` 不存在编译失败。
+- 单元验证：`cargo test -p clipplus-ffi udp_socket --test ffi_status` 通过 2/2；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable` 通过 1/1；Windows 全量测试通过 29/29。
+- 发布验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 21/21 和 macOS Swift 29/29；Windows single-file 重新发布为 `win-arm64` 后，不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 直接运行 `target/windows-single-exe/ClipPlus.Windows.exe`，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。
+- 端到端复验：Parallels `Windows 11` 运行中，`Shared clipboard mode: off`。macOS 和 Windows 两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，使用 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- macOS -> Windows 文本同步：macOS `pbcopy` 写入 `rust-udp-windows-from-mac-1781082198`，Windows `Get-Clipboard -Raw` 读回同值；Windows 侧新日志出现 `received text clipboard byte_count=36`。
+- Windows -> macOS 文本同步：Windows `Set-Clipboard` 写入 `rust-udp-windows-to-mac-1781082213`，macOS `pbpaste` 读回同值；macOS 侧新日志出现 `received text clipboard byte_count=34`。
+- 日志与清理：macOS 与 Windows 日志匹配检查均未出现 `clipplus-test-key`、`rust-udp-windows-from-mac` 或 `rust-udp-windows-to-mac`；E2E 后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe` 测试进程；E2E 前后 Parallels `Shared clipboard mode` 均为 `off`。
+- 测试方案记录：`AGENTS.md` 已补充 UDP FFI 真实符号调用、Rust FFI UDP 测试和 Windows CoreBridge UDP 测试要求。
+- 剩余项更新：Windows UDP bind/send/receive 已接入 Rust FFI；macOS UDP 仍使用 Swift `socket/recvfrom/sendto`；TCP 文件归档服务/下载 socket 仍未迁入 Rust transport。
+
 ---
 
 ## 自查清单

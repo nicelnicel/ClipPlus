@@ -1,4 +1,6 @@
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::io::ErrorKind;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket as StdUdpSocket};
+use std::time::Duration;
 
 use thiserror::Error;
 use tokio::net::UdpSocket;
@@ -89,5 +91,54 @@ impl DiscoveryUdpSocket {
             payload: buffer,
             source,
         })
+    }
+}
+
+pub struct BlockingDiscoveryUdpSocket {
+    socket: StdUdpSocket,
+    broadcast_addr: SocketAddrV4,
+}
+
+impl BlockingDiscoveryUdpSocket {
+    pub fn bind(config: DiscoverySocketConfig) -> Result<Self, DiscoveryUdpError> {
+        let socket = StdUdpSocket::bind(SocketAddrV4::new(config.bind_addr, config.bind_port))?;
+        socket.set_broadcast(true)?;
+        socket.set_read_timeout(Some(Duration::from_millis(250)))?;
+
+        Ok(Self {
+            socket,
+            broadcast_addr: config.broadcast_addr,
+        })
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.socket
+            .local_addr()
+            .expect("bound UDP socket should expose a local address")
+    }
+
+    pub fn send_to(&self, payload: &[u8], target: SocketAddr) -> Result<usize, DiscoveryUdpError> {
+        Ok(self.socket.send_to(payload, target)?)
+    }
+
+    pub fn broadcast(&self, payload: &[u8]) -> Result<usize, DiscoveryUdpError> {
+        Ok(self.socket.send_to(payload, self.broadcast_addr)?)
+    }
+
+    pub fn recv_datagram(&self) -> Result<Option<DiscoveryDatagram>, DiscoveryUdpError> {
+        let mut buffer = vec![0; 65_535];
+        match self.socket.recv_from(&mut buffer) {
+            Ok((byte_count, source)) => {
+                buffer.truncate(byte_count);
+                Ok(Some(DiscoveryDatagram {
+                    payload: buffer,
+                    source,
+                }))
+            }
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }

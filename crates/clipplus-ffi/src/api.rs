@@ -1,4 +1,5 @@
 use std::ffi::CStr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::panic;
 use std::path::Path;
@@ -6,10 +7,17 @@ use std::ptr;
 
 use clipplus_crypto::key::SharedKeyMaterial;
 use clipplus_diagnostics::status::RuntimeStatus;
+use clipplus_discovery::udp::{
+    BlockingDiscoveryUdpSocket, DiscoverySocketConfig, DISCOVERY_BROADCAST,
+};
 use clipplus_transport::file_transfer::FileTransferArchive;
 use clipplus_transport::message::{NativeClipboardMessage, NativeFileTransferItem};
 
 use crate::types::{free_c_string, string_to_c_ptr};
+
+pub struct ClipPlusUdpSocketHandle {
+    socket: BlockingDiscoveryUdpSocket,
+}
 
 #[no_mangle]
 /// Returns the current runtime status as an owned JSON C string.
@@ -250,6 +258,166 @@ pub unsafe extern "C" fn clipplus_write_file_archive_zip(
         FileTransferArchive::write_zip(&source_paths, Path::new(&archive_path)).is_ok()
     })
     .unwrap_or(false)
+}
+
+#[no_mangle]
+/// Binds a Rust UDP discovery socket for native shells.
+///
+/// # Safety
+///
+/// Returns an opaque non-null handle on success. The handle must be passed back to
+/// [`clipplus_udp_socket_free`] exactly once. `bind_port` may be `0` for an
+/// ephemeral test port.
+pub unsafe extern "C" fn clipplus_udp_socket_bind(bind_port: u16) -> *mut ClipPlusUdpSocketHandle {
+    panic::catch_unwind(|| {
+        let config = DiscoverySocketConfig {
+            bind_addr: Ipv4Addr::UNSPECIFIED,
+            bind_port,
+            broadcast_addr: DISCOVERY_BROADCAST,
+        };
+        let Ok(socket) = BlockingDiscoveryUdpSocket::bind(config) else {
+            return ptr::null_mut();
+        };
+
+        Box::into_raw(Box::new(ClipPlusUdpSocketHandle { socket }))
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+/// Releases a Rust UDP discovery socket handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a pointer previously returned by
+/// [`clipplus_udp_socket_bind`] that has not already been freed.
+pub unsafe extern "C" fn clipplus_udp_socket_free(handle: *mut ClipPlusUdpSocketHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let _ = panic::catch_unwind(|| unsafe { drop(Box::from_raw(handle)) });
+}
+
+#[no_mangle]
+/// Returns the local UDP port for a Rust discovery socket handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a valid pointer returned by
+/// [`clipplus_udp_socket_bind`]. Invalid handles return `0`.
+pub unsafe extern "C" fn clipplus_udp_socket_local_port(
+    handle: *mut ClipPlusUdpSocketHandle,
+) -> u16 {
+    panic::catch_unwind(|| {
+        if handle.is_null() {
+            return 0;
+        }
+
+        let handle = unsafe { &*handle };
+        handle.socket.local_addr().port()
+    })
+    .unwrap_or(0)
+}
+
+#[no_mangle]
+/// Sends a UDP datagram through a Rust discovery socket.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`clipplus_udp_socket_bind`].
+/// `payload` must be valid for `payload_len` bytes. `target_host` must be a
+/// valid NUL-terminated IPv4 string. Invalid input or IO failures return false.
+pub unsafe extern "C" fn clipplus_udp_socket_send_to(
+    handle: *mut ClipPlusUdpSocketHandle,
+    payload: *const u8,
+    payload_len: usize,
+    target_host: *const c_char,
+    target_port: u16,
+) -> bool {
+    panic::catch_unwind(|| {
+        if handle.is_null() || payload.is_null() || payload_len == 0 || target_port == 0 {
+            return false;
+        }
+        let Some(target_host) = ffi_string(target_host) else {
+            return false;
+        };
+        let Ok(target_ip) = target_host.parse::<Ipv4Addr>() else {
+            return false;
+        };
+
+        let handle = unsafe { &*handle };
+        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) };
+        handle
+            .socket
+            .send_to(
+                payload,
+                SocketAddr::V4(SocketAddrV4::new(target_ip, target_port)),
+            )
+            .is_ok()
+    })
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+/// Receives one UDP datagram through a Rust discovery socket.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`clipplus_udp_socket_bind`].
+/// `buffer` must be valid for `buffer_len` bytes. `source_host_buffer` must be
+/// valid for `source_host_len` bytes and receives a NUL-terminated IPv4 string.
+/// `source_port` must be writable. The function returns the payload byte count,
+/// or `0` on timeout, invalid input, truncation, or IO failure.
+pub unsafe extern "C" fn clipplus_udp_socket_recv(
+    handle: *mut ClipPlusUdpSocketHandle,
+    buffer: *mut u8,
+    buffer_len: usize,
+    source_host_buffer: *mut c_char,
+    source_host_len: usize,
+    source_port: *mut u16,
+) -> usize {
+    panic::catch_unwind(|| {
+        if handle.is_null()
+            || buffer.is_null()
+            || buffer_len == 0
+            || source_host_buffer.is_null()
+            || source_host_len == 0
+            || source_port.is_null()
+        {
+            return 0;
+        }
+
+        let handle = unsafe { &*handle };
+        let Ok(Some(datagram)) = handle.socket.recv_datagram() else {
+            return 0;
+        };
+        if datagram.payload.len() > buffer_len {
+            return 0;
+        }
+
+        let SocketAddr::V4(source_addr) = datagram.source else {
+            return 0;
+        };
+        let source_host = source_addr.ip().to_string();
+        if source_host.len() + 1 > source_host_len {
+            return 0;
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(datagram.payload.as_ptr(), buffer, datagram.payload.len());
+            ptr::copy_nonoverlapping(
+                source_host.as_ptr().cast::<c_char>(),
+                source_host_buffer,
+                source_host.len(),
+            );
+            *source_host_buffer.add(source_host.len()) = 0;
+            *source_port = source_addr.port();
+        }
+
+        datagram.payload.len()
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]

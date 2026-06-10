@@ -5,6 +5,7 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Windows.Threading;
 using ClipPlus.Windows.Clipboard;
+using ClipPlus.Windows.CoreBridge;
 using ClipPlus.Windows.Diagnostics;
 using ClipPlus.Windows.Settings;
 
@@ -24,9 +25,9 @@ public sealed class UdpTextSyncService : IDisposable
     private readonly string deviceName;
     private readonly bool autoTrustPeers;
     private readonly IReadOnlyList<string> peerHosts;
+    private readonly object udpSocketLock = new();
 
-    private UdpClient? receiveClient;
-    private UdpClient? sendClient;
+    private RustUdpSocket? udpSocket;
     private TcpListener? archiveListener;
     private CancellationTokenSource? cancellation;
     private string? lastLocalText;
@@ -59,7 +60,7 @@ public sealed class UdpTextSyncService : IDisposable
 
     public void Start()
     {
-        if (receiveClient is not null)
+        if (udpSocket is not null)
         {
             return;
         }
@@ -69,17 +70,8 @@ public sealed class UdpTextSyncService : IDisposable
         try
         {
             cancellation = new CancellationTokenSource();
-            receiveClient = new UdpClient
-            {
-                EnableBroadcast = true
-            };
-            receiveClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            receiveClient.Client.Bind(new IPEndPoint(IPAddress.Any, Port));
-
-            sendClient = new UdpClient
-            {
-                EnableBroadcast = true
-            };
+            udpSocket = new ClipPlus.Windows.CoreBridge.CoreBridge().OpenUdpSocket(Port)
+                ?? throw new InvalidOperationException("Rust UDP socket is unavailable.");
             archiveListener = new TcpListener(IPAddress.Any, ArchivePort);
             archiveListener.Start();
 
@@ -103,8 +95,14 @@ public sealed class UdpTextSyncService : IDisposable
         timer.Stop();
         cancellation?.Cancel();
         archiveListener?.Stop();
-        receiveClient?.Dispose();
-        sendClient?.Dispose();
+        RustUdpSocket? socketToDispose;
+        lock (udpSocketLock)
+        {
+            socketToDispose = udpSocket;
+            udpSocket = null;
+        }
+
+        socketToDispose?.Dispose();
         cancellation?.Dispose();
     }
 
@@ -129,14 +127,29 @@ public sealed class UdpTextSyncService : IDisposable
 
     private async Task ReceiveLoopAsync(CancellationToken token)
     {
-        while (!token.IsCancellationRequested && receiveClient is not null)
+        while (!token.IsCancellationRequested)
         {
             try
             {
-                var result = await receiveClient.ReceiveAsync(token);
-                var json = Encoding.UTF8.GetString(result.Buffer);
+                RustUdpDatagram? datagram;
+                lock (udpSocketLock)
+                {
+                    if (udpSocket is null)
+                    {
+                        return;
+                    }
+
+                    datagram = udpSocket.Receive();
+                }
+
+                if (datagram is null)
+                {
+                    continue;
+                }
+
+                var json = Encoding.UTF8.GetString(datagram.Payload);
                 var message = ClipPlusMessage.FromJson(json);
-                var sourceHost = result.RemoteEndPoint.Address.ToString();
+                var sourceHost = datagram.SourceHost;
                 await dispatcher.InvokeAsync(() => Handle(message, sourceHost));
             }
             catch (OperationCanceledException)
@@ -545,21 +558,23 @@ public sealed class UdpTextSyncService : IDisposable
 
     private void Send(ClipPlusMessage message)
     {
-        var client = receiveClient ?? sendClient;
-        if (client is null)
-        {
-            return;
-        }
-
         var bytes = Encoding.UTF8.GetBytes(message.ToJson());
         try
         {
-            _ = client.SendAsync(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, Port));
-            foreach (var peerHost in peerHosts)
+            lock (udpSocketLock)
             {
-                if (IPAddress.TryParse(peerHost, out var address))
+                if (udpSocket is null)
                 {
-                    _ = client.SendAsync(bytes, bytes.Length, new IPEndPoint(address, Port));
+                    return;
+                }
+
+                _ = udpSocket.SendTo(bytes, IPAddress.Broadcast.ToString(), Port);
+                foreach (var peerHost in peerHosts)
+                {
+                    if (IPAddress.TryParse(peerHost, out var address))
+                    {
+                        _ = udpSocket.SendTo(bytes, address.ToString(), Port);
+                    }
                 }
             }
         }

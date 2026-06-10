@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text;
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
 using ClipPlus.Windows.Diagnostics;
@@ -454,6 +455,28 @@ public sealed class SettingsStateTests
 
         Assert.Equal("alpha", File.ReadAllText(Path.Combine(extractedDirectory, "a.txt")));
         Assert.Equal("beta", File.ReadAllText(Path.Combine(extractedDirectory, "Nested", "b.txt")));
+    }
+
+    [Fact]
+    public void CoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable()
+    {
+        var bridge = new ClipPlus.Windows.CoreBridge.CoreBridge();
+        using var receiver = bridge.OpenUdpSocket(0);
+        using var sender = bridge.OpenUdpSocket(0);
+
+        Assert.NotNull(receiver);
+        Assert.NotNull(sender);
+        Assert.NotEqual(0, receiver.LocalPort);
+
+        var payload = Encoding.UTF8.GetBytes("hello from windows udp ffi");
+        Assert.True(sender.SendTo(payload, "127.0.0.1", receiver.LocalPort));
+
+        var datagram = receiver.Receive();
+
+        Assert.NotNull(datagram);
+        Assert.Equal(payload, datagram.Payload);
+        Assert.Equal("127.0.0.1", datagram.SourceHost);
+        Assert.NotEqual(0, datagram.SourcePort);
     }
 
     [Fact]
