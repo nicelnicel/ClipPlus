@@ -72,6 +72,10 @@ struct CoreBridge {
         Self.ffiBridge?.writeFileArchiveZip(sourcePaths: sourcePaths, archivePath: archivePath) ?? false
     }
 
+    func openUdpSocket(bindPort: Int) -> RustUdpSocket? {
+        Self.ffiBridge?.openUdpSocket(bindPort: bindPort)
+    }
+
     func createTrustMessageJSON(
         groupId: String,
         senderDeviceId: String,
@@ -87,6 +91,68 @@ struct CoreBridge {
     }
 
     private static let ffiBridge = ClipPlusFFIBridge.load()
+}
+
+struct RustUdpDatagram: Equatable {
+    let payload: Data
+    let sourceHost: String
+    let sourcePort: Int
+}
+
+final class RustUdpSocket {
+    private let bridge: ClipPlusFFIBridge
+    private let lock = NSLock()
+    private var handle: UnsafeMutableRawPointer?
+
+    fileprivate init(bridge: ClipPlusFFIBridge, handle: UnsafeMutableRawPointer) {
+        self.bridge = bridge
+        self.handle = handle
+    }
+
+    var localPort: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let handle else {
+            return 0
+        }
+
+        return bridge.udpSocketLocalPort(handle)
+    }
+
+    func send(_ payload: Data, to host: String, port: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let handle else {
+            return false
+        }
+
+        return bridge.udpSocketSendTo(handle, payload: payload, host: host, port: port)
+    }
+
+    func receive() -> RustUdpDatagram? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let handle else {
+            return nil
+        }
+
+        return bridge.udpSocketReceive(handle)
+    }
+
+    func close() {
+        lock.lock()
+        let handleToClose = handle
+        handle = nil
+        lock.unlock()
+
+        if let handleToClose {
+            bridge.udpSocketFree(handleToClose)
+        }
+    }
+
+    deinit {
+        close()
+    }
 }
 
 private final class ClipPlusFFIBridge {
@@ -121,6 +187,24 @@ private final class ClipPlusFFIBridge {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> Bool
+    private typealias UdpSocketBindFunction = @convention(c) (UInt16) -> UnsafeMutableRawPointer?
+    private typealias UdpSocketFreeFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    private typealias UdpSocketLocalPortFunction = @convention(c) (UnsafeMutableRawPointer?) -> UInt16
+    private typealias UdpSocketSendToFunction = @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafeRawPointer?,
+        Int,
+        UnsafePointer<CChar>?,
+        UInt16
+    ) -> Bool
+    private typealias UdpSocketRecvFunction = @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafeMutableRawPointer?,
+        Int,
+        UnsafeMutablePointer<CChar>?,
+        Int,
+        UnsafeMutablePointer<UInt16>?
+    ) -> Int
     private typealias FreeStringFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let handle: UnsafeMutableRawPointer
@@ -130,6 +214,11 @@ private final class ClipPlusFFIBridge {
     private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
     private let createFileOfferMessageJSONFunction: CreateFileOfferMessageJSONFunction
     private let writeFileArchiveZipFunction: WriteFileArchiveZipFunction
+    private let udpSocketBindFunction: UdpSocketBindFunction
+    private let udpSocketFreeFunction: UdpSocketFreeFunction
+    private let udpSocketLocalPortFunction: UdpSocketLocalPortFunction
+    private let udpSocketSendToFunction: UdpSocketSendToFunction
+    private let udpSocketRecvFunction: UdpSocketRecvFunction
     private let createTrustMessageJSONFunction: CreateTextMessageJSONFunction
     private let freeStringFunction: FreeStringFunction
 
@@ -141,6 +230,11 @@ private final class ClipPlusFFIBridge {
         createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
         createFileOfferMessageJSONFunction: @escaping CreateFileOfferMessageJSONFunction,
         writeFileArchiveZipFunction: @escaping WriteFileArchiveZipFunction,
+        udpSocketBindFunction: @escaping UdpSocketBindFunction,
+        udpSocketFreeFunction: @escaping UdpSocketFreeFunction,
+        udpSocketLocalPortFunction: @escaping UdpSocketLocalPortFunction,
+        udpSocketSendToFunction: @escaping UdpSocketSendToFunction,
+        udpSocketRecvFunction: @escaping UdpSocketRecvFunction,
         createTrustMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         freeStringFunction: @escaping FreeStringFunction
     ) {
@@ -151,6 +245,11 @@ private final class ClipPlusFFIBridge {
         self.createImageMessageJSONFunction = createImageMessageJSONFunction
         self.createFileOfferMessageJSONFunction = createFileOfferMessageJSONFunction
         self.writeFileArchiveZipFunction = writeFileArchiveZipFunction
+        self.udpSocketBindFunction = udpSocketBindFunction
+        self.udpSocketFreeFunction = udpSocketFreeFunction
+        self.udpSocketLocalPortFunction = udpSocketLocalPortFunction
+        self.udpSocketSendToFunction = udpSocketSendToFunction
+        self.udpSocketRecvFunction = udpSocketRecvFunction
         self.createTrustMessageJSONFunction = createTrustMessageJSONFunction
         self.freeStringFunction = freeStringFunction
     }
@@ -172,6 +271,11 @@ private final class ClipPlusFFIBridge {
                   let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
                   let createFileOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_file_offer_message_json"),
                   let writeFileArchiveZipSymbol = dlsym(handle, "clipplus_write_file_archive_zip"),
+                  let udpSocketBindSymbol = dlsym(handle, "clipplus_udp_socket_bind"),
+                  let udpSocketFreeSymbol = dlsym(handle, "clipplus_udp_socket_free"),
+                  let udpSocketLocalPortSymbol = dlsym(handle, "clipplus_udp_socket_local_port"),
+                  let udpSocketSendToSymbol = dlsym(handle, "clipplus_udp_socket_send_to"),
+                  let udpSocketRecvSymbol = dlsym(handle, "clipplus_udp_socket_recv"),
                   let createTrustMessageJSONSymbol = dlsym(handle, "clipplus_create_trust_message_json"),
                   let freeSymbol = dlsym(handle, "clipplus_free_string") else {
                 dlclose(handle)
@@ -199,6 +303,20 @@ private final class ClipPlusFFIBridge {
                 writeFileArchiveZipSymbol,
                 to: WriteFileArchiveZipFunction.self
             )
+            let udpSocketBindFunction = unsafeBitCast(udpSocketBindSymbol, to: UdpSocketBindFunction.self)
+            let udpSocketFreeFunction = unsafeBitCast(udpSocketFreeSymbol, to: UdpSocketFreeFunction.self)
+            let udpSocketLocalPortFunction = unsafeBitCast(
+                udpSocketLocalPortSymbol,
+                to: UdpSocketLocalPortFunction.self
+            )
+            let udpSocketSendToFunction = unsafeBitCast(
+                udpSocketSendToSymbol,
+                to: UdpSocketSendToFunction.self
+            )
+            let udpSocketRecvFunction = unsafeBitCast(
+                udpSocketRecvSymbol,
+                to: UdpSocketRecvFunction.self
+            )
             let createTrustMessageJSONFunction = unsafeBitCast(
                 createTrustMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
@@ -212,6 +330,11 @@ private final class ClipPlusFFIBridge {
                 createImageMessageJSONFunction: createImageMessageJSONFunction,
                 createFileOfferMessageJSONFunction: createFileOfferMessageJSONFunction,
                 writeFileArchiveZipFunction: writeFileArchiveZipFunction,
+                udpSocketBindFunction: udpSocketBindFunction,
+                udpSocketFreeFunction: udpSocketFreeFunction,
+                udpSocketLocalPortFunction: udpSocketLocalPortFunction,
+                udpSocketSendToFunction: udpSocketSendToFunction,
+                udpSocketRecvFunction: udpSocketRecvFunction,
                 createTrustMessageJSONFunction: createTrustMessageJSONFunction,
                 freeStringFunction: freeStringFunction
             )
@@ -374,6 +497,80 @@ private final class ClipPlusFFIBridge {
                 writeFileArchiveZipFunction(sourcePathsPointer, archivePathPointer)
             }
         }
+    }
+
+    func openUdpSocket(bindPort: Int) -> RustUdpSocket? {
+        guard bindPort >= 0,
+              bindPort <= Int(UInt16.max),
+              let handle = udpSocketBindFunction(UInt16(bindPort)) else {
+            return nil
+        }
+
+        return RustUdpSocket(bridge: self, handle: handle)
+    }
+
+    fileprivate func udpSocketLocalPort(_ handle: UnsafeMutableRawPointer) -> Int {
+        Int(udpSocketLocalPortFunction(handle))
+    }
+
+    fileprivate func udpSocketSendTo(
+        _ handle: UnsafeMutableRawPointer,
+        payload: Data,
+        host: String,
+        port: Int
+    ) -> Bool {
+        guard !payload.isEmpty,
+              !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              port > 0,
+              port <= Int(UInt16.max) else {
+            return false
+        }
+
+        return payload.withUnsafeBytes { rawBuffer in
+            host.withCString { hostPointer in
+                udpSocketSendToFunction(
+                    handle,
+                    rawBuffer.baseAddress,
+                    payload.count,
+                    hostPointer,
+                    UInt16(port)
+                )
+            }
+        }
+    }
+
+    fileprivate func udpSocketReceive(_ handle: UnsafeMutableRawPointer) -> RustUdpDatagram? {
+        var payload = [UInt8](repeating: 0, count: 65_535)
+        var sourceHost = [CChar](repeating: 0, count: 64)
+        var sourcePort: UInt16 = 0
+        let payloadCapacity = payload.count
+        let sourceHostCapacity = sourceHost.count
+        let byteCount = payload.withUnsafeMutableBytes { payloadBuffer in
+            sourceHost.withUnsafeMutableBufferPointer { sourceHostBuffer in
+                udpSocketRecvFunction(
+                    handle,
+                    payloadBuffer.baseAddress,
+                    payloadCapacity,
+                    sourceHostBuffer.baseAddress,
+                    sourceHostCapacity,
+                    &sourcePort
+                )
+            }
+        }
+        guard byteCount > 0,
+              byteCount <= payload.count else {
+            return nil
+        }
+
+        return RustUdpDatagram(
+            payload: Data(payload.prefix(byteCount)),
+            sourceHost: String(cString: sourceHost),
+            sourcePort: Int(sourcePort)
+        )
+    }
+
+    fileprivate func udpSocketFree(_ handle: UnsafeMutableRawPointer) {
+        udpSocketFreeFunction(handle)
     }
 
     func createTrustMessageJSON(

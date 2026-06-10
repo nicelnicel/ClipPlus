@@ -410,6 +410,26 @@ final class SettingsStateTests: XCTestCase {
         )
     }
 
+    func testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable() throws {
+        let bridge = CoreBridge()
+        let receiver = try XCTUnwrap(bridge.openUdpSocket(bindPort: 0))
+        let sender = try XCTUnwrap(bridge.openUdpSocket(bindPort: 0))
+        defer {
+            receiver.close()
+            sender.close()
+        }
+
+        XCTAssertNotEqual(receiver.localPort, 0)
+        let payload = Data("hello from mac udp ffi".utf8)
+        XCTAssertTrue(sender.send(payload, to: "127.0.0.1", port: receiver.localPort))
+
+        let datagram = try XCTUnwrap(receiver.receive())
+
+        XCTAssertEqual(datagram.payload, payload)
+        XCTAssertEqual(datagram.sourceHost, "127.0.0.1")
+        XCTAssertNotEqual(datagram.sourcePort, 0)
+    }
+
     func testClipPlusMessageRejectsOversizedInlineImagePayload() {
         let pngData = Data(repeating: 0xFF, count: ClipPlusMessage.maxInlineImageBytes + 1)
 

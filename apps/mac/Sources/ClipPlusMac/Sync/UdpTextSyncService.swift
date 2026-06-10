@@ -14,8 +14,7 @@ final class UdpTextSyncService {
     private let autoTrustPeers: Bool
     private let peerHosts: [String]
 
-    private var listenSocket: Int32 = -1
-    private var sendSocket: Int32 = -1
+    private var udpSocket: RustUdpSocket?
     private var fileServerSocket: Int32 = -1
     private var running = false
     private var timer: Timer?
@@ -82,14 +81,8 @@ final class UdpTextSyncService {
         timer?.invalidate()
         timer = nil
 
-        if listenSocket >= 0 {
-            close(listenSocket)
-            listenSocket = -1
-        }
-        if sendSocket >= 0 {
-            close(sendSocket)
-            sendSocket = -1
-        }
+        udpSocket?.close()
+        udpSocket = nil
         if fileServerSocket >= 0 {
             close(fileServerSocket)
             fileServerSocket = -1
@@ -112,35 +105,11 @@ final class UdpTextSyncService {
     }
 
     private func openSockets() throws {
-        listenSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard listenSocket >= 0 else {
+        guard let udpSocket = CoreBridge().openUdpSocket(bindPort: Int(port)) else {
             throw SocketError.openFailed
         }
 
-        var yes: Int32 = 1
-        setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout.size(ofValue: yes)))
-        setsockopt(listenSocket, SOL_SOCKET, SO_BROADCAST, &yes, socklen_t(MemoryLayout.size(ofValue: yes)))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        address.sin_addr = in_addr(s_addr: INADDR_ANY)
-
-        let bindResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                bind(listenSocket, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bindResult == 0 else {
-            throw SocketError.bindFailed
-        }
-
-        sendSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard sendSocket >= 0 else {
-            throw SocketError.openFailed
-        }
-        setsockopt(sendSocket, SOL_SOCKET, SO_BROADCAST, &yes, socklen_t(MemoryLayout.size(ofValue: yes)))
+        self.udpSocket = udpSocket
     }
 
     private func openFileServer() throws {
@@ -171,25 +140,16 @@ final class UdpTextSyncService {
     }
 
     private func receiveLoop() {
-        var buffer = [UInt8](repeating: 0, count: 65_535)
-
         while running {
-            var remoteAddress = sockaddr_in()
-            var remoteLength = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let count = withUnsafeMutablePointer(to: &remoteAddress) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                    recvfrom(listenSocket, &buffer, buffer.count, 0, socketAddress, &remoteLength)
-                }
-            }
-            guard count > 0 else {
+            guard let datagram = udpSocket?.receive() else {
                 continue
             }
 
-            let data = Data(buffer.prefix(count))
+            let data = datagram.payload
             guard let message = try? JSONDecoder().decode(ClipPlusMessage.self, from: data) else {
                 continue
             }
-            let sourceHost = Self.hostString(from: remoteAddress)
+            let sourceHost = datagram.sourceHost
 
             DispatchQueue.main.async { [weak self] in
                 self?.handle(message, sourceHost: sourceHost)
@@ -578,20 +538,6 @@ final class UdpTextSyncService {
         return result == byteCount ? data : nil
     }
 
-    private static func hostString(from address: sockaddr_in) -> String {
-        var address = address
-        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-        let result = withUnsafePointer(to: &address.sin_addr) { pointer in
-            inet_ntop(AF_INET, pointer, &buffer, socklen_t(INET_ADDRSTRLEN))
-        }
-
-        guard result != nil else {
-            return ""
-        }
-
-        return String(cString: buffer)
-    }
-
     private func sendHello() {
         guard state.sharedKeyConfigured else {
             return
@@ -622,7 +568,7 @@ final class UdpTextSyncService {
     }
 
     private func send(_ message: ClipPlusMessage) {
-        guard sendSocket >= 0,
+        guard let udpSocket,
               let data = try? JSONEncoder().encode(message) else {
             return
         }
@@ -631,30 +577,7 @@ final class UdpTextSyncService {
         targets.append(contentsOf: peerHosts)
 
         for target in targets {
-            send(data, to: target)
-        }
-    }
-
-    private func send(_ data: Data, to host: String) {
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        address.sin_addr = in_addr(s_addr: inet_addr(host))
-
-        _ = data.withUnsafeBytes { rawBuffer in
-            withUnsafePointer(to: &address) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                    sendto(
-                        sendSocket,
-                        rawBuffer.baseAddress,
-                        data.count,
-                        0,
-                        socketAddress,
-                        socklen_t(MemoryLayout<sockaddr_in>.size)
-                    )
-                }
-            }
+            _ = udpSocket.send(data, to: target, port: Int(port))
         }
     }
 }
