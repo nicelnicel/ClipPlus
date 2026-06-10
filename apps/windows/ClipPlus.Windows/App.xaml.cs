@@ -4,7 +4,7 @@ using ClipPlus.Windows.Tray;
 
 namespace ClipPlus.Windows;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     private TrayController? trayController;
 

@@ -3297,13 +3297,14 @@ git commit -m "feat: add windows tray shell"
 
 - 规格审查：通过。解决方案、WPF app、xUnit 测试、托盘、设置窗口、剪贴板、开机启动和 CoreBridge 骨架文件均覆盖计划要求。
 - 代码质量审查：通过。WPF/WinForms 托盘互操作配置、`NotifyIcon` 生命周期、WPF `Application` 与 WinForms 命名空间冲突处理、项目引用结构和设置状态测试均未发现静态阻塞问题。
-- 环境限制：macOS 本机没有 `dotnet`，因此未在本机运行 `dotnet test`；真实编译、测试和托盘显示验证将在 Parallels Windows 阶段完成。
+- 运行复验修复：Parallels Windows 首次真实编译发现 `App.xaml.cs` 中 `Application` 在 WPF 和 WinForms 命名空间之间存在歧义；已改为显式继承 `System.Windows.Application`。
 
 **验证记录：**
 
 - `git diff --check HEAD~1..HEAD`：通过。
 - `./scripts/dev/check.sh`：通过。
-- `dotnet test apps/windows/ClipPlus.Windows.sln`：macOS 本机未运行，原因是 `dotnet` 命令不存在；待 Windows VM 验证。
+- `dotnet test apps/windows/ClipPlus.Windows.sln`：已在 Parallels Windows VM 中使用 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 运行，通过 2/2。
+- Windows 桌面启动验证：已在 Parallels Windows VM 的当前桌面用户会话中启动 `ClipPlus.Windows.dll`；设置窗口可见，系统托盘展开区可见 ClipPlus 托盘图标。
 
 ---
 
@@ -3432,6 +3433,16 @@ git commit -m "test: add parallels e2e checklist"
 - Parallels Windows：`prlctl list --all --info` 显示 `Windows 11` 仍为 `stopped`，`EFI Secure boot: on`，`Shared clipboard mode: on`，IP 为空。
 - Parallels 日志：`/Users/cc/Library/Logs/parallels.log` 记录 VM 启动后从 `VMS_RUNNING` 立刻进入 `VMS_STOPPING`/`VMS_STOPPED`，并出现 `PRL_ERR_SECURE_BOOT_VIOLATION`，中文提示为“安全启动功能防止操作系统启动”。调整 Parallels 安全启动或共享剪贴板属于系统/VM 设置变更，继续操作前需要用户明确确认。
 - 后续确认后命令：关闭安全启动为 `prlctl set "Windows 11" --efi-secure-boot off`；关闭 Parallels 自带剪贴板共享为 `prlctl set "Windows 11" --shared-clipboard off`。
+
+**2026-06-10 Windows VM 运行复验：**
+
+- Parallels Windows：用户关闭 EFI Secure Boot 后，`Windows 11` VM 可正常启动；`prlctl list --all --info` 显示 `State: running`、`EFI Secure boot: off`、IP 为 `10.211.55.3`。
+- Parallels 剪贴板：复验发现 `Shared clipboard mode` 仍为 `on`，已按测试目标切换为 `off` 并复核通过，避免污染 ClipPlus 剪贴板同步测试。
+- Windows SDK：VM 内原本没有 `dotnet`；已安装官方 .NET SDK 8.0.422 到 `C:\dotnet`，用于运行 Windows WPF/xUnit 验证。
+- Windows 测试：`cd C:\Mac\Home\proj\ClipPlus\apps\windows && C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过，2/2。
+- Windows App：使用当前桌面用户会话启动 WPF App，设置窗口可见；系统托盘展开区可见 ClipPlus 托盘图标。
+- macOS App：`ClipPlusMac` 进程存在，Accessibility 能识别菜单栏项 `粘贴`；宿主机在部分截图时回到锁屏界面，因此菜单栏弹出面板仍需一次解锁后的视觉截图补证。
+- 未完成项：真实双向剪贴板同步、共享 Key 输入/设备确认和诊断包不含 `clipplus-test-key` 仍未完成端到端验证。
 
 ---
 
