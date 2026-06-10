@@ -3496,8 +3496,16 @@ git commit -m "test: add parallels e2e checklist"
 - 内容校验：解压 zip 后包含 `windows-source.txt`；其内容 `1781061387` 与 Windows 源文件 `C:\Users\Administrator\AppData\Local\Temp\ClipPlusE2E\windows-source.txt` 读回内容一致。
 - 日志证据：Windows 日志出现 `served file transfer file_count=1 byte_count=148`；macOS 日志出现 `downloaded file transfer byte_count=148`。随后日志文案已统一调整为 `served file archive` 和 `downloaded file archive`。
 - 限制：归档当前一次性读入内存，并设置 512 MiB 上限；尚未做流式传输、hash 校验、断点续传、冲突文件选择、接收目录选择、原生延迟粘贴或 Rust core/FFI 统一实现。
-- 最终验证：`cd apps/mac && swift test` 通过 20/20；Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 19/19；`./scripts/dev/check.sh` 通过；`git diff --check` 通过；macOS 和 Windows 日志未发现 `clipplus-test-key` 明文。
+- 最终验证：`cd apps/mac && swift test` 通过 20/20；Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 20/20；`./scripts/dev/check.sh` 通过；`git diff --check` 通过；macOS 和 Windows 日志未发现 `clipplus-test-key` 明文。
 - 剩余项更新：文件按需传输已有 MVP 可运行闭环；仍需完成开机启动真实系统写入开关的人工验证，以及文本/图片/文件运行时迁入 Rust core/FFI。
+
+**2026-06-10 Windows 开机启动真实读回复验：**
+
+- 实现范围：Windows 测试新增 `StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled`，默认不写系统；只有设置 `CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST=1` 时才写入 HKCU Run，并在 `finally` 中恢复原有 `ClipPlus` 值。
+- 路径选择：真实启动项使用 `ClipPlus.Windows.exe`，避免开发期 `dotnet ClipPlus.Windows.dll` 启动时 `Environment.ProcessPath` 只指向 `dotnet.exe`。
+- 复验命令：Windows VM 内运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled`，并传入 `CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST=1` 与 `CLIPPLUS_SYSTEM_STARTUP_EXE=C:/Mac/Home/proj/ClipPlus/apps/windows/ClipPlus.Windows/bin/Debug/net8.0-windows/ClipPlus.Windows.exe`。
+- 验证结果：该真实注册表测试通过 1/1；随后显式读取 `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run` 下 `ClipPlus` 值，结果为 `ClipPlus Run entry absent`，确认测试未遗留开机启动项。
+- 剩余项更新：Windows 开机启动已有真实系统写入/读回/清理验证；macOS Login Item 仍需在合适签名/打包形态下做真实系统读回复验。文本/图片/文件运行时仍需迁入 Rust core/FFI。
 
 ---
 

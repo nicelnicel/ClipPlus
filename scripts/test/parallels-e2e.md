@@ -41,7 +41,13 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
     - 接收端 `Downloads` 生成 `ClipPlus-Received-<transferId>.zip`。
     - 解压 zip，确认文件名和内容与发送端源文件一致。
     - 两端日志分别出现 `served file archive` 和 `downloaded file archive`。
-14. 导出诊断包，确认 zip 内包含 `status.json` 和 `clipplus.log`，且不包含 `clipplus-test-key`。
+14. 开机启动改动要做系统读回验证；Windows 可用显式环境变量触发 HKCU Run 真实写入/读回/清理测试：
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "$env:CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST='\''1'\''; $env:CLIPPLUS_SYSTEM_STARTUP_EXE='\''C:/Mac/Home/proj/ClipPlus/apps/windows/ClipPlus.Windows/bin/Debug/net8.0-windows/ClipPlus.Windows.exe'\''; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled"'
+```
+
+15. 导出诊断包，确认 zip 内包含 `status.json` 和 `clipplus.log`，且不包含 `clipplus-test-key`。
 
 ## 文件传输示例命令
 

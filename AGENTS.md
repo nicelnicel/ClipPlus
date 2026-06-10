@@ -58,7 +58,7 @@ Windows 端使用：
 set CLIPPLUS_SHARED_KEY=clipplus-test-key
 set CLIPPLUS_AUTO_TRUST=1
 set CLIPPLUS_PEER_HOSTS=10.211.55.2
-C:\dotnet\dotnet.exe C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-windows\ClipPlus.Windows.dll
+C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-windows\ClipPlus.Windows.exe
 ```
 
 - 快速同步回归可以使用 `CLIPPLUS_AUTO_TRUST=1`；测试首次确认/设备信任时不要设置 `CLIPPLUS_AUTO_TRUST`。
@@ -105,5 +105,11 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/
 - 开机启动相关改动必须做系统读回验证：
   - macOS 读回 Login Item 或对应系统状态，不能只检查内存开关值。
   - Windows 读回 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 或实际启动项状态，不能只检查 UI 绑定值。
+  - Windows 真实注册表测试默认不写系统；需要显式开启：
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "$env:CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST='\''1'\''; $env:CLIPPLUS_SYSTEM_STARTUP_EXE='\''C:/Mac/Home/proj/ClipPlus/apps/windows/ClipPlus.Windows/bin/Debug/net8.0-windows/ClipPlus.Windows.exe'\''; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled"'
+```
+
 - 诊断导出验收必须打开生成的 `ClipPlus-Diagnostics-*.zip`，检查至少包含 `status.json` 和 `clipplus.log`，并确认共享 Key、设备私钥、本地绝对文件路径不会明文泄漏。
 - 做 Parallels 端到端测试前后都要确认 Parallels 自带剪贴板共享仍为 `off`。

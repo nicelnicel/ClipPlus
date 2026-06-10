@@ -340,6 +340,46 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void StartupManagerWritesAndDeletesRealRunEntryWhenExplicitlyEnabled()
+    {
+        if (Environment.GetEnvironmentVariable("CLIPPLUS_ENABLE_SYSTEM_STARTUP_TEST") != "1")
+        {
+            return;
+        }
+
+        const string entryName = "ClipPlus";
+        var store = new RegistryStartupEntryStore();
+        var originalValue = store.ReadValue(entryName);
+        var executablePath = ResolveStartupExecutablePath();
+        Assert.True(File.Exists(executablePath), $"Startup executable does not exist: {executablePath}");
+        var manager = new StartupManager(store, executablePath);
+
+        try
+        {
+            manager.SetEnabled(true);
+
+            Assert.Equal($"\"{executablePath}\"", store.ReadValue(entryName));
+            Assert.True(manager.IsEnabled());
+
+            manager.SetEnabled(false);
+
+            Assert.Null(store.ReadValue(entryName));
+            Assert.False(manager.IsEnabled());
+        }
+        finally
+        {
+            if (originalValue is null)
+            {
+                store.DeleteValue(entryName);
+            }
+            else
+            {
+                store.SetValue(entryName, originalValue);
+            }
+        }
+    }
+
+    [Fact]
     public void DiagnosticsExporterWritesRedactedStatusAndLogZip()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
@@ -379,6 +419,28 @@ public sealed class SettingsStateTests
         Assert.NotNull(entry);
         using var reader = new StreamReader(entry.Open());
         return reader.ReadToEnd();
+    }
+
+    private static string ResolveStartupExecutablePath()
+    {
+        var configuredPath = Environment.GetEnvironmentVariable("CLIPPLUS_SYSTEM_STARTUP_EXE");
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return configuredPath;
+        }
+
+        return Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "bin",
+            "Debug",
+            "net8.0-windows",
+            "ClipPlus.Windows.exe"
+        ));
     }
 }
 
