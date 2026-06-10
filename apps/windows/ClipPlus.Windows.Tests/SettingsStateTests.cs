@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
 using ClipPlus.Windows.Diagnostics;
@@ -260,7 +261,7 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
-    public void DiagnosticsExporterWritesRedactedStatusAndLog()
+    public void DiagnosticsExporterWritesRedactedStatusAndLogZip()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -279,16 +280,26 @@ public sealed class SettingsStateTests
             new[] { "clipplus-test-key", "secret-value" }
         );
 
-        var exportDirectory = exporter.Export(state);
-        var status = File.ReadAllText(Path.Combine(exportDirectory, "status.json"));
-        var log = File.ReadAllText(Path.Combine(exportDirectory, "clipplus.log"));
+        var exportPath = exporter.Export(state);
+        using var archive = ZipFile.OpenRead(exportPath);
+        var status = ReadZipEntry(archive, "status.json");
+        var log = ReadZipEntry(archive, "clipplus.log");
 
+        Assert.EndsWith(".zip", exportPath);
         Assert.Contains("shared_key_configured", status);
         Assert.Contains("pending_peer_count", status);
         Assert.DoesNotContain("clipplus-test-key", status);
         Assert.DoesNotContain("clipplus-test-key", log);
         Assert.DoesNotContain("secret-value", log);
         Assert.Contains("<redacted>", log);
+    }
+
+    private static string ReadZipEntry(ZipArchive archive, string entryName)
+    {
+        var entry = archive.GetEntry(entryName);
+        Assert.NotNull(entry);
+        using var reader = new StreamReader(entry.Open());
+        return reader.ReadToEnd();
     }
 }
 

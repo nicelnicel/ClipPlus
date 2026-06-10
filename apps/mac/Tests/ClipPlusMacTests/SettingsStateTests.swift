@@ -220,7 +220,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(manager.isEnabled())
     }
 
-    func testDiagnosticsExporterWritesRedactedStatusAndLog() throws {
+    func testDiagnosticsExporterWritesRedactedStatusAndLogZip() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -240,15 +240,19 @@ final class SettingsStateTests: XCTestCase {
         )
 
         let exportURL = try exporter.export(state: state)
+        let extractedDirectory = temporaryDirectory.appendingPathComponent("unzipped", isDirectory: true)
+        try FileManager.default.createDirectory(at: extractedDirectory, withIntermediateDirectories: true)
+        try unzip(exportURL, to: extractedDirectory)
         let status = try String(
-            contentsOf: exportURL.appendingPathComponent("status.json"),
+            contentsOf: extractedDirectory.appendingPathComponent("status.json"),
             encoding: .utf8
         )
         let log = try String(
-            contentsOf: exportURL.appendingPathComponent("clipplus.log"),
+            contentsOf: extractedDirectory.appendingPathComponent("clipplus.log"),
             encoding: .utf8
         )
 
+        XCTAssertEqual(exportURL.pathExtension, "zip")
         XCTAssertTrue(status.contains("\"shared_key_configured\""))
         XCTAssertTrue(status.contains("\"pending_peer_count\""))
         XCTAssertFalse(status.contains("clipplus-test-key"))
@@ -256,6 +260,15 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(log.contains("secret-value"))
         XCTAssertTrue(log.contains("<redacted>"))
     }
+}
+
+private func unzip(_ archiveURL: URL, to destinationURL: URL) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+    process.arguments = ["-q", archiveURL.path, "-d", destinationURL.path]
+    try process.run()
+    process.waitUntilExit()
+    XCTAssertEqual(process.terminationStatus, 0)
 }
 
 private final class FakeLoginItemService: LoginItemService {

@@ -3476,7 +3476,14 @@ git commit -m "test: add parallels e2e checklist"
 - 确认测试：点击 macOS 菜单栏 `允许全部待确认设备（1）` 后，Windows 日志出现 `peer trust accepted`，随后收到 Mac 端文本；Mac 日志后续也记录来自 Windows 的 `peer trust accepted`。重复 trust 已做幂等处理，避免周期性刷新状态和刷日志。
 - 确认后双向文本同步：Mac 写入 `manual-after-approval-mac-1781059556` 后，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 写入 `manual-after-approval-windows-1781059570` 后，macOS `pbpaste` 返回同一字符串。
 - 测试：macOS `swift test` 通过 17/17；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 16/16。
-- 仍未完成项：文件按需传输、开机启动真实系统写入开关的人工验证、诊断目录打包为 zip、文本/图片同步运行时迁入 Rust core/FFI。
+
+**2026-06-10 诊断 zip 导出复验：**
+
+- macOS：`DiagnosticsExporter.export` 从导出目录改为直接生成 `ClipPlus-Diagnostics-*.zip`；zip 内包含 `status.json` 和 `clipplus.log`，测试使用 `/usr/bin/unzip` 解包验证字段和脱敏。
+- Windows：`DiagnosticsExporter.Export` 从导出目录改为直接生成 `ClipPlus-Diagnostics-*.zip`；zip 内包含 `status.json` 和 `clipplus.log`，测试使用 `System.IO.Compression.ZipFile` 读取条目并验证脱敏。
+- 脱敏：两端测试继续验证 `clipplus-test-key` 和剪贴板敏感文本不会出现在 status/log 条目里。
+- 测试：macOS `swift test` 通过 17/17；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 16/16。
+- 仍未完成项：文件按需传输、开机启动真实系统写入开关的人工验证、文本/图片同步运行时迁入 Rust core/FFI。
 
 ---
 

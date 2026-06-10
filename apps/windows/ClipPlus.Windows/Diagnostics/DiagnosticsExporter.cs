@@ -1,4 +1,5 @@
 using System.IO;
+using System.IO.Compression;
 using System.Text.Json;
 using ClipPlus.Windows.Settings;
 
@@ -27,11 +28,11 @@ public sealed class DiagnosticsExporter
 
     public string Export(SettingsState state)
     {
-        var exportDirectory = Path.Combine(
+        Directory.CreateDirectory(destinationDirectory);
+        var exportPath = Path.Combine(
             destinationDirectory,
-            $"ClipPlus-Diagnostics-{Timestamp()}"
+            $"ClipPlus-Diagnostics-{Timestamp()}.zip"
         );
-        Directory.CreateDirectory(exportDirectory);
 
         var status = new DiagnosticsStatus(
             ExportedAt: DateTimeOffset.UtcNow.ToString("O"),
@@ -40,6 +41,7 @@ public sealed class DiagnosticsExporter
             SharingEnabled: state.SharingEnabled,
             StartupEnabled: state.StartupEnabled,
             PendingPeerCount: state.PendingPeerCount,
+            TrustedPeerCount: state.TrustedPeerCount,
             LastStatusMessage: Redact(state.LastStatusMessage)
         );
 
@@ -51,12 +53,20 @@ public sealed class DiagnosticsExporter
                 WriteIndented = true
             }
         );
-        File.WriteAllText(Path.Combine(exportDirectory, "status.json"), json);
 
         var log = File.Exists(logPath) ? File.ReadAllText(logPath) : string.Empty;
-        File.WriteAllText(Path.Combine(exportDirectory, "clipplus.log"), Redact(log));
+        if (File.Exists(exportPath))
+        {
+            File.Delete(exportPath);
+        }
 
-        return exportDirectory;
+        using (var archive = ZipFile.Open(exportPath, ZipArchiveMode.Create))
+        {
+            WriteEntry(archive, "status.json", json);
+            WriteEntry(archive, "clipplus.log", Redact(log));
+        }
+
+        return exportPath;
     }
 
     private string Redact(string value)
@@ -82,7 +92,14 @@ public sealed class DiagnosticsExporter
 
     private static string Timestamp()
     {
-        return DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+        return DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
+    }
+
+    private static void WriteEntry(ZipArchive archive, string entryName, string contents)
+    {
+        var entry = archive.CreateEntry(entryName);
+        using var writer = new StreamWriter(entry.Open());
+        writer.Write(contents);
     }
 }
 
@@ -93,5 +110,6 @@ internal sealed record DiagnosticsStatus(
     bool SharingEnabled,
     bool StartupEnabled,
     int PendingPeerCount,
+    int TrustedPeerCount,
     string LastStatusMessage
 );
