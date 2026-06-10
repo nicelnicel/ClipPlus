@@ -25,17 +25,31 @@ public sealed class SettingsState : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    public event Action<string>? PeerApproved;
 
     public bool SharedKeyConfigured
     {
         get => sharedKeyConfigured;
-        set => SetField(ref sharedKeyConfigured, value);
+        set
+        {
+            if (SetField(ref sharedKeyConfigured, value))
+            {
+                OnPropertyChanged(nameof(RequiresKeySetup));
+                OnPropertyChanged(nameof(CanPublishClipboardContent));
+            }
+        }
     }
 
     public bool SharingEnabled
     {
         get => sharingEnabled;
-        set => SetField(ref sharingEnabled, value);
+        set
+        {
+            if (SetField(ref sharingEnabled, value))
+            {
+                OnPropertyChanged(nameof(CanPublishClipboardContent));
+            }
+        }
     }
 
     public bool StartupEnabled
@@ -70,6 +84,16 @@ public sealed class SettingsState : INotifyPropertyChanged
 
     public bool RequiresKeySetup => !SharedKeyConfigured;
     public int PendingPeerCount => pendingPeers.Count;
+    public int TrustedPeerCount => trustedPeerIds.Count;
+    public bool CanPublishClipboardContent => SharedKeyConfigured && SharingEnabled && trustedPeerIds.Count > 0;
+
+    public IReadOnlyCollection<string> TrustedPeerIds => trustedPeerIds.ToArray();
+
+    public IReadOnlyList<PendingPeerSummary> PendingPeerSummaries => pendingPeers
+        .Select(peer => new PendingPeerSummary(peer.Key, peer.Value))
+        .OrderBy(peer => peer.DeviceName, StringComparer.CurrentCultureIgnoreCase)
+        .ThenBy(peer => peer.DeviceId, StringComparer.Ordinal)
+        .ToArray();
 
     public void UpdateSharedKey(string rawKey, string confirmation)
     {
@@ -91,7 +115,6 @@ public sealed class SettingsState : INotifyPropertyChanged
         SharedKeyInput = string.Empty;
         SharedKeyConfirmationInput = string.Empty;
         LastStatusMessage = "共享 Key 已设置";
-        OnPropertyChanged(nameof(RequiresKeySetup));
     }
 
     public void MarkPeerPending(string deviceId, string deviceName)
@@ -104,11 +127,13 @@ public sealed class SettingsState : INotifyPropertyChanged
         pendingPeers[deviceId] = string.IsNullOrEmpty(deviceName) ? deviceId : deviceName;
         LastStatusMessage = $"发现 {pendingPeers.Count} 台待确认设备";
         OnPropertyChanged(nameof(PendingPeerCount));
+        OnPropertyChanged(nameof(PendingPeerSummaries));
     }
 
     public void ApprovePendingPeers()
     {
-        foreach (var deviceId in pendingPeers.Keys)
+        var approvedDeviceIds = pendingPeers.Keys.ToArray();
+        foreach (var deviceId in approvedDeviceIds)
         {
             trustedPeerIds.Add(deviceId);
         }
@@ -116,6 +141,54 @@ public sealed class SettingsState : INotifyPropertyChanged
         pendingPeers.Clear();
         LastStatusMessage = "待确认设备已允许";
         OnPropertyChanged(nameof(PendingPeerCount));
+        OnPropertyChanged(nameof(PendingPeerSummaries));
+        OnPropertyChanged(nameof(TrustedPeerCount));
+        OnPropertyChanged(nameof(CanPublishClipboardContent));
+
+        foreach (var deviceId in approvedDeviceIds)
+        {
+            PeerApproved?.Invoke(deviceId);
+        }
+    }
+
+    public void ApprovePendingPeer(string deviceId)
+    {
+        if (!pendingPeers.Remove(deviceId))
+        {
+            return;
+        }
+
+        trustedPeerIds.Add(deviceId);
+        LastStatusMessage = pendingPeers.Count == 0
+            ? "设备已允许"
+            : $"设备已允许，仍有 {pendingPeers.Count} 台待确认设备";
+        OnPropertyChanged(nameof(PendingPeerCount));
+        OnPropertyChanged(nameof(PendingPeerSummaries));
+        OnPropertyChanged(nameof(TrustedPeerCount));
+        OnPropertyChanged(nameof(CanPublishClipboardContent));
+        PeerApproved?.Invoke(deviceId);
+    }
+
+    public bool TrustPeer(string deviceId, string deviceName)
+    {
+        if (string.IsNullOrEmpty(deviceId))
+        {
+            return false;
+        }
+
+        if (trustedPeerIds.Contains(deviceId))
+        {
+            return false;
+        }
+
+        pendingPeers.Remove(deviceId);
+        trustedPeerIds.Add(deviceId);
+        LastStatusMessage = $"设备 {(string.IsNullOrEmpty(deviceName) ? deviceId : deviceName)} 已信任";
+        OnPropertyChanged(nameof(PendingPeerCount));
+        OnPropertyChanged(nameof(PendingPeerSummaries));
+        OnPropertyChanged(nameof(TrustedPeerCount));
+        OnPropertyChanged(nameof(CanPublishClipboardContent));
+        return true;
     }
 
     public bool IsPeerTrusted(string deviceId)
@@ -123,19 +196,25 @@ public sealed class SettingsState : INotifyPropertyChanged
         return trustedPeerIds.Contains(deviceId);
     }
 
-    private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
         {
-            return;
+            return false;
         }
 
         field = value;
         OnPropertyChanged(propertyName);
+        return true;
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
+}
+
+public sealed record PendingPeerSummary(string DeviceId, string DeviceName)
+{
+    public string ShortDeviceId => DeviceId.Length <= 8 ? DeviceId : DeviceId[..8];
 }

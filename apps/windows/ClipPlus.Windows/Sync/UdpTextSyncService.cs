@@ -42,6 +42,7 @@ public sealed class UdpTextSyncService : IDisposable
         autoTrustPeers = Environment.GetEnvironmentVariable("CLIPPLUS_AUTO_TRUST") == "1";
         peerHosts = (Environment.GetEnvironmentVariable("CLIPPLUS_PEER_HOSTS") ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        state.PeerApproved += SendTrust;
         timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
         {
             Interval = TimeSpan.FromMilliseconds(750)
@@ -87,6 +88,7 @@ public sealed class UdpTextSyncService : IDisposable
 
     public void Dispose()
     {
+        state.PeerApproved -= SendTrust;
         timer.Stop();
         cancellation?.Cancel();
         receiveClient?.Dispose();
@@ -152,6 +154,11 @@ public sealed class UdpTextSyncService : IDisposable
             SendHello();
         }
 
+        if (!state.CanPublishClipboardContent)
+        {
+            return;
+        }
+
         var text = clipboard.ReadText();
         if (!string.IsNullOrEmpty(text)
             && !string.Equals(text, lastLocalText, StringComparison.Ordinal)
@@ -210,6 +217,17 @@ public sealed class UdpTextSyncService : IDisposable
                 }
                 logger.Info($"peer hello device_id_prefix={message.SenderDeviceId[..Math.Min(8, message.SenderDeviceId.Length)]}");
                 break;
+            case ClipPlusMessageKind.Trust:
+                if (!string.Equals(message.ApprovedDeviceId, deviceId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (state.TrustPeer(message.SenderDeviceId, message.SenderDeviceName))
+                {
+                    logger.Info($"peer trust accepted device_id_prefix={message.SenderDeviceId[..Math.Min(8, message.SenderDeviceId.Length)]}");
+                }
+                break;
             case ClipPlusMessageKind.Text:
                 if (!state.SharingEnabled
                     || !state.IsPeerTrusted(message.SenderDeviceId)
@@ -255,6 +273,26 @@ public sealed class UdpTextSyncService : IDisposable
             state.SharedGroupId,
             deviceId,
             deviceName
+        ));
+
+        foreach (var trustedPeerId in state.TrustedPeerIds)
+        {
+            SendTrust(trustedPeerId);
+        }
+    }
+
+    private void SendTrust(string approvedDeviceId)
+    {
+        if (!state.SharedKeyConfigured)
+        {
+            return;
+        }
+
+        Send(ClipPlusMessage.CreateTrust(
+            state.SharedGroupId,
+            deviceId,
+            deviceName,
+            approvedDeviceId
         ));
     }
 

@@ -61,6 +61,12 @@ set CLIPPLUS_PEER_HOSTS=10.211.55.2
 C:\dotnet\dotnet.exe C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-windows\ClipPlus.Windows.dll
 ```
 
+- 快速同步回归可以使用 `CLIPPLUS_AUTO_TRUST=1`；测试首次确认/设备信任时不要设置 `CLIPPLUS_AUTO_TRUST`。
+- 无 `CLIPPLUS_AUTO_TRUST` 的手动确认验收至少验证：
+  - 双方日志只出现 `peer hello` 时，Mac 写入剪贴板不会覆盖 Windows 剪贴板基线值。
+  - macOS 菜单栏 ClipPlus 面板显示 `允许全部待确认设备（1）`，点击后 Windows 日志出现 `peer trust accepted`。
+  - 确认后再验证 macOS -> Windows、Windows -> macOS 两个方向文本同步。
+  - 复验前后保持 Parallels 自带剪贴板共享为 `off`。
 - 文本同步验收至少验证两个方向：
   - macOS `pbcopy` 写入后，Windows `Get-Clipboard -Raw` 返回相同字符串。
   - Windows `Set-Clipboard` 写入后，macOS `pbpaste` 返回相同字符串。

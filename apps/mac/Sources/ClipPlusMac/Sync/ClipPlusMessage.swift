@@ -3,6 +3,7 @@ import CryptoKit
 
 enum ClipPlusMessageKind: String, Codable {
     case hello
+    case trust
     case text
     case image
 }
@@ -20,6 +21,7 @@ struct ClipPlusMessage: Codable, Equatable {
     let imageBase64: String?
     let imageByteSize: Int?
     let imageContentHash: String?
+    let approvedDeviceId: String?
     let createdAt: String
 
     var decodedImageData: Data? {
@@ -46,6 +48,29 @@ struct ClipPlusMessage: Codable, Equatable {
             imageBase64: nil,
             imageByteSize: nil,
             imageContentHash: nil,
+            approvedDeviceId: nil,
+            createdAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    static func trust(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        approvedDeviceId: String
+    ) -> Self {
+        Self(
+            kind: .trust,
+            protocolVersion: 1,
+            groupId: groupId,
+            senderDeviceId: senderDeviceId,
+            senderDeviceName: senderDeviceName,
+            eventId: UUID().uuidString,
+            text: nil,
+            imageBase64: nil,
+            imageByteSize: nil,
+            imageContentHash: nil,
+            approvedDeviceId: approvedDeviceId,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }
@@ -67,6 +92,7 @@ struct ClipPlusMessage: Codable, Equatable {
             imageBase64: nil,
             imageByteSize: nil,
             imageContentHash: nil,
+            approvedDeviceId: nil,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }
@@ -94,6 +120,7 @@ struct ClipPlusMessage: Codable, Equatable {
             imageContentHash: SHA256.hash(data: pngData)
                 .map { String(format: "%02x", $0) }
                 .joined(),
+            approvedDeviceId: nil,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
     }

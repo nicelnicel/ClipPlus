@@ -7,6 +7,7 @@ namespace ClipPlus.Windows.Sync;
 public enum ClipPlusMessageKind
 {
     Hello,
+    Trust,
     Text,
     Image
 }
@@ -31,6 +32,7 @@ public sealed class ClipPlusMessage
     public string? ImageBase64 { get; init; }
     public int? ImageByteSize { get; init; }
     public string? ImageContentHash { get; init; }
+    public string? ApprovedDeviceId { get; init; }
     public string CreatedAt { get; init; } = DateTimeOffset.UtcNow.ToString("O");
 
     [JsonIgnore]
@@ -47,6 +49,22 @@ public sealed class ClipPlusMessage
             GroupId = groupId,
             SenderDeviceId = senderDeviceId,
             SenderDeviceName = senderDeviceName
+        };
+    }
+
+    public static ClipPlusMessage CreateTrust(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string approvedDeviceId)
+    {
+        return new ClipPlusMessage
+        {
+            Kind = ClipPlusMessageKind.Trust,
+            GroupId = groupId,
+            SenderDeviceId = senderDeviceId,
+            SenderDeviceName = senderDeviceName,
+            ApprovedDeviceId = approvedDeviceId
         };
     }
 

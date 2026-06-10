@@ -14,6 +14,19 @@ enum SettingsStateError: LocalizedError, Equatable {
     }
 }
 
+struct PendingPeerSummary: Identifiable, Equatable {
+    let deviceId: String
+    let deviceName: String
+
+    var id: String {
+        deviceId
+    }
+
+    var shortDeviceId: String {
+        String(deviceId.prefix(8))
+    }
+}
+
 final class SettingsState: ObservableObject, Equatable {
     @Published var sharedKeyConfigured: Bool
     @Published var sharingEnabled: Bool
@@ -32,6 +45,7 @@ final class SettingsState: ObservableObject, Equatable {
     @Published var sharedKeyConfirmationInput: String
     @Published var lastStatusMessage: String
     var startupEnabledChanged: ((Bool) -> Void)?
+    var peerApproved: ((String) -> Void)?
 
     var requiresKeySetup: Bool {
         !sharedKeyConfigured
@@ -39,6 +53,27 @@ final class SettingsState: ObservableObject, Equatable {
 
     var pendingPeerCount: Int {
         pendingPeers.count
+    }
+
+    var trustedPeerCount: Int {
+        trustedPeerIds.count
+    }
+
+    var pendingPeerSummaries: [PendingPeerSummary] {
+        pendingPeers
+            .map { PendingPeerSummary(deviceId: $0.key, deviceName: $0.value) }
+            .sorted { lhs, rhs in
+                let nameOrder = lhs.deviceName.localizedCaseInsensitiveCompare(rhs.deviceName)
+                if nameOrder == .orderedSame {
+                    return lhs.deviceId < rhs.deviceId
+                }
+
+                return nameOrder == .orderedAscending
+            }
+    }
+
+    var canPublishClipboardContent: Bool {
+        sharedKeyConfigured && sharingEnabled && !trustedPeerIds.isEmpty
     }
 
     init(
@@ -96,13 +131,43 @@ final class SettingsState: ObservableObject, Equatable {
     }
 
     func approvePendingPeers() {
-        trustedPeerIds.formUnion(pendingPeers.keys)
+        let approvedDeviceIds = Array(pendingPeers.keys)
+        trustedPeerIds.formUnion(approvedDeviceIds)
         pendingPeers.removeAll()
         lastStatusMessage = "待确认设备已允许"
+        approvedDeviceIds.forEach { peerApproved?($0) }
+    }
+
+    func approvePendingPeer(deviceId: String) {
+        guard pendingPeers.removeValue(forKey: deviceId) != nil else {
+            return
+        }
+
+        trustedPeerIds.insert(deviceId)
+        lastStatusMessage = pendingPeers.isEmpty
+            ? "设备已允许"
+            : "设备已允许，仍有 \(pendingPeers.count) 台待确认设备"
+        peerApproved?(deviceId)
     }
 
     func isPeerTrusted(_ deviceId: String) -> Bool {
         trustedPeerIds.contains(deviceId)
+    }
+
+    @discardableResult
+    func trustPeer(deviceId: String, deviceName: String) -> Bool {
+        guard !deviceId.isEmpty else {
+            return false
+        }
+
+        guard !trustedPeerIds.contains(deviceId) else {
+            return false
+        }
+
+        pendingPeers.removeValue(forKey: deviceId)
+        trustedPeerIds.insert(deviceId)
+        lastStatusMessage = "设备 \(deviceName.isEmpty ? deviceId : deviceName) 已信任"
+        return true
     }
 }
 
@@ -145,6 +210,28 @@ struct SettingsView: View {
                 LabeledContent("待确认设备") {
                     Text("\(state.pendingPeerCount)")
                         .foregroundStyle(state.pendingPeerCount == 0 ? .secondary : .primary)
+                }
+
+                if state.pendingPeerSummaries.isEmpty {
+                    Text("暂无待确认设备")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(state.pendingPeerSummaries) { peer in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(peer.deviceName)
+                                Text("ID \(peer.shortDeviceId)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button("允许") {
+                                state.approvePendingPeer(deviceId: peer.deviceId)
+                            }
+                        }
+                    }
                 }
 
                 Button("允许全部待确认设备") {

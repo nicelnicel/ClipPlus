@@ -79,6 +79,58 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(state.isPeerTrusted("windows-device"))
     }
 
+    func testPendingPeerDoesNotAllowPublishingClipboardContentUntilApproved() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+
+        state.markPeerPending(deviceId: "windows-device", deviceName: "Windows 11")
+
+        XCTAssertFalse(state.canPublishClipboardContent)
+
+        state.approvePendingPeer(deviceId: "windows-device")
+
+        XCTAssertTrue(state.canPublishClipboardContent)
+        XCTAssertEqual(state.trustedPeerCount, 1)
+    }
+
+    func testPendingPeerSummariesAreSortedAndAllowSingleApproval() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+
+        state.markPeerPending(deviceId: "z-device", deviceName: "Windows")
+        state.markPeerPending(deviceId: "a-device", deviceName: "MacBook")
+
+        XCTAssertEqual(state.pendingPeerSummaries.map(\.deviceName), ["MacBook", "Windows"])
+
+        state.approvePendingPeer(deviceId: "a-device")
+
+        XCTAssertEqual(state.pendingPeerCount, 1)
+        XCTAssertTrue(state.isPeerTrusted("a-device"))
+        XCTAssertFalse(state.isPeerTrusted("z-device"))
+    }
+
+    func testRepeatedTrustForAlreadyTrustedPeerDoesNotRewriteStatus() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+
+        XCTAssertTrue(state.trustPeer(deviceId: "windows-device", deviceName: "Windows"))
+        state.lastStatusMessage = "稳定状态"
+
+        XCTAssertFalse(state.trustPeer(deviceId: "windows-device", deviceName: "Windows"))
+
+        XCTAssertEqual(state.trustedPeerCount, 1)
+        XCTAssertEqual(state.lastStatusMessage, "稳定状态")
+    }
+
     func testClipPlusMessageRoundTripsTextPayload() throws {
         let message = ClipPlusMessage.text(
             groupId: "group-1",
@@ -117,6 +169,24 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.imageBase64, pngData.base64EncodedString())
         XCTAssertEqual(decoded.decodedImageData, pngData)
         XCTAssertFalse(decoded.imageContentHash?.isEmpty ?? true)
+    }
+
+    func testClipPlusMessageRoundTripsTrustPayload() throws {
+        let message = ClipPlusMessage.trust(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            approvedDeviceId: "windows-device"
+        )
+
+        let data = try JSONEncoder().encode(message)
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .trust)
+        XCTAssertEqual(decoded.protocolVersion, 1)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.approvedDeviceId, "windows-device")
     }
 
     func testClipPlusMessageRejectsOversizedInlineImagePayload() {

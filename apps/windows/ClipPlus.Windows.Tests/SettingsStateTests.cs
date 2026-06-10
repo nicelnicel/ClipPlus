@@ -84,6 +84,64 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void PendingPeerDoesNotAllowPublishingClipboardContentUntilApproved()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+
+        state.MarkPeerPending("mac-device", "MacBook");
+
+        Assert.False(state.CanPublishClipboardContent);
+
+        state.ApprovePendingPeer("mac-device");
+
+        Assert.True(state.CanPublishClipboardContent);
+        Assert.Equal(1, state.TrustedPeerCount);
+    }
+
+    [Fact]
+    public void PendingPeerSummariesAreSortedAndAllowSingleApproval()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+
+        state.MarkPeerPending("z-device", "Windows");
+        state.MarkPeerPending("a-device", "MacBook");
+
+        Assert.Equal(new[] { "MacBook", "Windows" }, state.PendingPeerSummaries.Select(peer => peer.DeviceName));
+
+        state.ApprovePendingPeer("a-device");
+
+        Assert.Equal(1, state.PendingPeerCount);
+        Assert.True(state.IsPeerTrusted("a-device"));
+        Assert.False(state.IsPeerTrusted("z-device"));
+    }
+
+    [Fact]
+    public void RepeatedTrustForAlreadyTrustedPeerDoesNotRewriteStatus()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+
+        Assert.True(state.TrustPeer("mac-device", "MacBook"));
+        state.LastStatusMessage = "稳定状态";
+
+        Assert.False(state.TrustPeer("mac-device", "MacBook"));
+
+        Assert.Equal(1, state.TrustedPeerCount);
+        Assert.Equal("稳定状态", state.LastStatusMessage);
+    }
+
+    [Fact]
     public void ClipPlusMessageRoundTripsTextPayload()
     {
         var message = ClipPlus.Windows.Sync.ClipPlusMessage.CreateText(
@@ -126,6 +184,26 @@ public sealed class SettingsStateTests
         Assert.Equal(Convert.ToBase64String(pngData), decoded.ImageBase64);
         Assert.Equal(pngData, decoded.DecodedImageData);
         Assert.False(string.IsNullOrEmpty(decoded.ImageContentHash));
+    }
+
+    [Fact]
+    public void ClipPlusMessageRoundTripsTrustPayload()
+    {
+        var message = ClipPlus.Windows.Sync.ClipPlusMessage.CreateTrust(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            approvedDeviceId: "mac-device"
+        );
+
+        var json = message.ToJson();
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Trust, decoded.Kind);
+        Assert.Equal(1, decoded.ProtocolVersion);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("mac-device", decoded.ApprovedDeviceId);
     }
 
     [Fact]

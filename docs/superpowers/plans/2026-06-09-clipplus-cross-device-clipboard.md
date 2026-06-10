@@ -3467,7 +3467,16 @@ git commit -m "test: add parallels e2e checklist"
 - 开机启动：macOS 端接入 `SMAppService.mainApp`；Windows 端接入 HKCU `Software\Microsoft\Windows\CurrentVersion\Run`。单元测试使用可替换服务/注册表存储验证启用、禁用和状态读取逻辑。
 - 诊断导出：macOS 和 Windows 设置页按钮已能导出 `status.json` 与脱敏后的 `clipplus.log` 到 Downloads 下的 `ClipPlus-Diagnostics-*` 目录。测试覆盖状态字段输出和 `clipplus-test-key`、剪贴板敏感文本脱敏。
 - 验证：`./scripts/dev/check.sh` 通过；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 12/12。
-- 仍未完成项：文件按需传输、真实 UI 手动设备确认、开机启动真实系统写入开关的人工验证、诊断目录打包为 zip、文本/图片同步运行时迁入 Rust core/FFI。
+
+**2026-06-10 手动设备确认复验：**
+
+- 实现范围：macOS 与 Windows 原生壳新增 `trust` 消息；未确认设备只进入待确认列表，剪贴板文本/图片发布需要 `sharedKeyConfigured && sharingEnabled && trustedPeerCount > 0`。批准设备后，批准方发送面向该设备的 `trust` 消息；被批准方收到后反向信任批准方。
+- UI：macOS 菜单栏 ClipPlus 面板在发现 Windows 后显示 `允许全部待确认设备（1）`；通过 Accessibility 点击该按钮完成一次真实 UI 手动确认。macOS 设置页和 Windows 设置窗口都已展示待确认设备列表，并支持逐个允许和全部允许。
+- 负向测试：不设置 `CLIPPLUS_AUTO_TRUST`，两端只记录 `peer hello` 时，Mac 写入 `manual-before-approval-mac` 后，Windows 剪贴板仍保持基线值 `windows-baseline`，证明未确认前不发布剪贴板内容。
+- 确认测试：点击 macOS 菜单栏 `允许全部待确认设备（1）` 后，Windows 日志出现 `peer trust accepted`，随后收到 Mac 端文本；Mac 日志后续也记录来自 Windows 的 `peer trust accepted`。重复 trust 已做幂等处理，避免周期性刷新状态和刷日志。
+- 确认后双向文本同步：Mac 写入 `manual-after-approval-mac-1781059556` 后，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 写入 `manual-after-approval-windows-1781059570` 后，macOS `pbpaste` 返回同一字符串。
+- 测试：macOS `swift test` 通过 17/17；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 16/16。
+- 仍未完成项：文件按需传输、开机启动真实系统写入开关的人工验证、诊断目录打包为 zip、文本/图片同步运行时迁入 Rust core/FFI。
 
 ---
 

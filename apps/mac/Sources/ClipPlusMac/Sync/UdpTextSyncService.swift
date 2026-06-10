@@ -36,6 +36,9 @@ final class UdpTextSyncService {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty } ?? []
+        state.peerApproved = { [weak self] approvedDeviceId in
+            self?.sendTrust(approvedDeviceId: approvedDeviceId)
+        }
     }
 
     func start() {
@@ -153,6 +156,10 @@ final class UdpTextSyncService {
             sendHello()
         }
 
+        guard state.canPublishClipboardContent else {
+            return
+        }
+
         if let text = clipboard.readText(),
            !text.isEmpty,
            text != lastLocalText,
@@ -205,6 +212,18 @@ final class UdpTextSyncService {
                 state.approvePendingPeers()
             }
             logger.info("peer hello device_id_prefix=\(message.senderDeviceId.prefix(8))")
+        case .trust:
+            guard message.approvedDeviceId == deviceId else {
+                return
+            }
+
+            let newlyTrusted = state.trustPeer(
+                deviceId: message.senderDeviceId,
+                deviceName: message.senderDeviceName
+            )
+            if newlyTrusted {
+                logger.info("peer trust accepted device_id_prefix=\(message.senderDeviceId.prefix(8))")
+            }
         case .text:
             guard state.sharingEnabled,
                   state.isPeerTrusted(message.senderDeviceId),
@@ -244,6 +263,23 @@ final class UdpTextSyncService {
             groupId: state.sharedGroupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName
+        ))
+
+        for trustedPeerId in state.trustedPeerIds {
+            sendTrust(approvedDeviceId: trustedPeerId)
+        }
+    }
+
+    private func sendTrust(approvedDeviceId: String) {
+        guard state.sharedKeyConfigured else {
+            return
+        }
+
+        send(.trust(
+            groupId: state.sharedGroupId,
+            senderDeviceId: deviceId,
+            senderDeviceName: deviceName,
+            approvedDeviceId: approvedDeviceId
         ))
     }
 

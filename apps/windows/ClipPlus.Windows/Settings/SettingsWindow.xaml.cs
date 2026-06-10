@@ -38,6 +38,14 @@ public partial class SettingsWindow : Window
         state.ApprovePendingPeers();
     }
 
+    private void ApprovePendingPeer_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: string deviceId })
+        {
+            state.ApprovePendingPeer(deviceId);
+        }
+    }
+
     private void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
     {
         var sensitiveValues = new[]
