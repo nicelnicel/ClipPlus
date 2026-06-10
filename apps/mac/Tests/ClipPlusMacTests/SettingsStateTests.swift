@@ -96,4 +96,36 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.senderDeviceId, "mac-device")
         XCTAssertEqual(decoded.text, "hello from mac")
     }
+
+    func testLoginItemManagerReportsServiceState() {
+        let service = FakeLoginItemService(enabled: true)
+        let manager = LoginItemManager(service: service)
+
+        XCTAssertTrue(manager.isEnabled())
+    }
+
+    func testLoginItemManagerForwardsEnableAndDisable() throws {
+        let service = FakeLoginItemService(enabled: false)
+        let manager = LoginItemManager(service: service)
+
+        try manager.setEnabled(true)
+        try manager.setEnabled(false)
+
+        XCTAssertEqual(service.requests, [true, false])
+        XCTAssertFalse(manager.isEnabled())
+    }
+}
+
+private final class FakeLoginItemService: LoginItemService {
+    var enabled: Bool
+    var requests: [Bool] = []
+
+    init(enabled: Bool) {
+        self.enabled = enabled
+    }
+
+    func setEnabled(_ enabled: Bool) throws {
+        requests.append(enabled)
+        self.enabled = enabled
+    }
 }

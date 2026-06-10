@@ -1,4 +1,5 @@
 using ClipPlus.Windows.Settings;
+using ClipPlus.Windows.Startup;
 using Xunit;
 
 namespace ClipPlus.Windows.Tests;
@@ -99,5 +100,67 @@ public sealed class SettingsStateTests
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("hello from windows", decoded.Text);
+    }
+
+    [Fact]
+    public void StartupManagerReportsEnabledWhenRunEntryMatchesExecutable()
+    {
+        var store = new FakeStartupEntryStore();
+        var manager = new StartupManager(store, @"C:\ClipPlus\ClipPlus.Windows.exe");
+        store.Value = "\"C:\\ClipPlus\\ClipPlus.Windows.exe\"";
+
+        Assert.True(manager.IsEnabled());
+    }
+
+    [Fact]
+    public void StartupManagerWritesQuotedExecutablePathWhenEnabled()
+    {
+        var store = new FakeStartupEntryStore();
+        var manager = new StartupManager(store, @"C:\ClipPlus\ClipPlus.Windows.exe");
+
+        manager.SetEnabled(true);
+
+        Assert.Equal("ClipPlus", store.Name);
+        Assert.Equal("\"C:\\ClipPlus\\ClipPlus.Windows.exe\"", store.Value);
+    }
+
+    [Fact]
+    public void StartupManagerDeletesRunEntryWhenDisabled()
+    {
+        var store = new FakeStartupEntryStore
+        {
+            Value = "\"C:\\ClipPlus\\ClipPlus.Windows.exe\""
+        };
+        var manager = new StartupManager(store, @"C:\ClipPlus\ClipPlus.Windows.exe");
+
+        manager.SetEnabled(false);
+
+        Assert.Equal("ClipPlus", store.DeletedName);
+        Assert.Null(store.Value);
+    }
+}
+
+internal sealed class FakeStartupEntryStore : IStartupEntryStore
+{
+    public string? Name { get; private set; }
+    public string? Value { get; set; }
+    public string? DeletedName { get; private set; }
+
+    public string? ReadValue(string name)
+    {
+        Name = name;
+        return Value;
+    }
+
+    public void SetValue(string name, string value)
+    {
+        Name = name;
+        Value = value;
+    }
+
+    public void DeleteValue(string name)
+    {
+        DeletedName = name;
+        Value = null;
     }
 }

@@ -17,13 +17,21 @@ enum SettingsStateError: LocalizedError, Equatable {
 final class SettingsState: ObservableObject, Equatable {
     @Published var sharedKeyConfigured: Bool
     @Published var sharingEnabled: Bool
-    @Published var startupEnabled: Bool
+    @Published var startupEnabled: Bool {
+        didSet {
+            guard startupEnabled != oldValue else {
+                return
+            }
+            startupEnabledChanged?(startupEnabled)
+        }
+    }
     @Published private(set) var sharedGroupId: String
     @Published private(set) var pendingPeers: [String: String]
     @Published private(set) var trustedPeerIds: Set<String>
     @Published var sharedKeyInput: String
     @Published var sharedKeyConfirmationInput: String
     @Published var lastStatusMessage: String
+    var startupEnabledChanged: ((Bool) -> Void)?
 
     var requiresKeySetup: Bool {
         !sharedKeyConfigured
