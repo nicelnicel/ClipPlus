@@ -163,6 +163,23 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.text, "hello from mac")
     }
 
+    func testCoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable() throws {
+        let json = try XCTUnwrap(CoreBridge().createTextMessageJSON(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            text: "hello from ffi"
+        ))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .text)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.senderDeviceName, "Mac")
+        XCTAssertEqual(decoded.text, "hello from ffi")
+    }
+
     func testClipPlusMessageRoundTripsInlinePngImagePayload() throws {
         let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
         let message = try XCTUnwrap(ClipPlusMessage.image(

@@ -97,23 +97,18 @@ struct ClipPlusMessage: Codable, Equatable {
         senderDeviceName: String,
         text: String
     ) -> Self {
-        Self(
-            kind: .text,
-            protocolVersion: 1,
+        guard let json = CoreBridge().createTextMessageJSON(
             groupId: groupId,
             senderDeviceId: senderDeviceId,
             senderDeviceName: senderDeviceName,
-            eventId: UUID().uuidString,
-            text: text,
-            imageBase64: nil,
-            imageByteSize: nil,
-            imageContentHash: nil,
-            approvedDeviceId: nil,
-            transferId: nil,
-            files: nil,
-            archivePort: nil,
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
+            text: text
+        ),
+              let data = json.data(using: .utf8),
+              let message = try? JSONDecoder().decode(Self.self, from: data) else {
+            preconditionFailure("Rust 核心库不可用，无法创建文本剪贴板消息")
+        }
+
+        return message
     }
 
     static func image(

@@ -3556,6 +3556,18 @@ git commit -m "test: add parallels e2e checklist"
 - Windows -> Mac：Windows 写入 `default-ffi-windows-to-mac-1781075249`，macOS `pbpaste` 返回同一字符串；macOS 日志出现 `received text clipboard byte_count=37`。
 - 日志检查：macOS 和 Windows 日志均有文本发布/接收记录；匹配检查未出现 `clipplus-test-key` 明文。
 
+**2026-06-10 文本消息 JSON Rust FFI 迁移复验：**
+
+- 迁移范围：`clipplus-transport` 新增当前原生壳 wire format 的 `NativeClipboardMessage`，`clipplus-ffi` 新增 `clipplus_create_text_message_json`；macOS `CoreBridge.createTextMessageJSON` 和 Windows `CoreBridge.CreateTextMessageJson` 加载该符号。`ClipPlusMessage.text` / `ClipPlusMessage.CreateText` 现在通过 Rust FFI 生成 JSON 后再解码回原生模型，文本消息创建不再走 Swift/C# 本地重复实现。
+- TDD 红灯：Rust FFI 测试先因缺少 `clipplus_create_text_message_json` 编译失败；Swift 测试先因 `CoreBridge` 没有 `createTextMessageJSON` 编译失败；Windows VM 过滤测试先因 `CoreBridge` 没有 `CreateTextMessageJson` 编译失败。
+- 单元验证：`./scripts/dev/check.sh` 通过，包含 Rust workspace 测试、`ffi_creates_text_message_json_for_native_shells`、`native_clipboard_text_message_uses_current_shell_wire_format` 和 macOS Swift 24/24；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 23/23。
+- 默认打包路径 smoke test：`./scripts/dev/build-mac-app.sh` 通过，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；随后 `env -u CLIPPLUS_FFI_LIBRARY_PATH CLIPPLUS_COREBRIDGE_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac` 也通过，证明新符号所在 dylib 能从 bundle 默认路径加载。Windows VM 继续依赖 `apps/windows/Directory.Build.targets` 把新 `clipplus_ffi.dll` 复制到 App/Test 输出目录。
+- 端到端复验：Parallels `Windows 11` 运行中，`EFI Secure boot: off`，`Shared clipboard mode: off`。macOS 和 Windows 两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，使用同一 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- Mac -> Windows：macOS 写入 `rust-ffi-text-mac-to-windows-1781076371`，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 日志出现 `received text clipboard byte_count=39`。
+- Windows -> Mac：Windows 写入 `rust-ffi-text-windows-to-mac-1781076396`，macOS `pbpaste` 返回同一字符串；macOS 日志出现 `received text clipboard byte_count=39`。
+- 日志检查：macOS 和 Windows 日志只返回 `published text clipboard` / `received text clipboard` 摘要；匹配检查未出现 `clipplus-test-key`、`rust-ffi-text-mac-to-windows-1781076371` 或 `rust-ffi-text-windows-to-mac-1781076396` 明文。
+- 剩余项更新：文本消息 JSON 生成已迁入 Rust FFI 并通过真实双向同步；hello/trust/image/file offer 消息生成、UDP socket 运行时、图片/文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。
+
 ---
 
 ## 自查清单

@@ -15,6 +15,15 @@ public sealed class CoreBridge
         return Ffi.Value?.DeriveGroupId(rawKey);
     }
 
+    public string? CreateTextMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string text)
+    {
+        return Ffi.Value?.CreateTextMessageJson(groupId, senderDeviceId, senderDeviceName, text);
+    }
+
     private static readonly Lazy<ClipPlusFfiBridge?> Ffi = new(ClipPlusFfiBridge.Load);
 }
 
@@ -24,14 +33,26 @@ internal sealed class ClipPlusFfiBridge
     private delegate IntPtr DeriveGroupIdDelegate(IntPtr rawKey);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr CreateTextMessageJsonDelegate(
+        IntPtr groupId,
+        IntPtr senderDeviceId,
+        IntPtr senderDeviceName,
+        IntPtr text);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
 
     private readonly DeriveGroupIdDelegate deriveGroupId;
+    private readonly CreateTextMessageJsonDelegate createTextMessageJson;
     private readonly FreeStringDelegate freeString;
 
-    private ClipPlusFfiBridge(DeriveGroupIdDelegate deriveGroupId, FreeStringDelegate freeString)
+    private ClipPlusFfiBridge(
+        DeriveGroupIdDelegate deriveGroupId,
+        CreateTextMessageJsonDelegate createTextMessageJson,
+        FreeStringDelegate freeString)
     {
         this.deriveGroupId = deriveGroupId;
+        this.createTextMessageJson = createTextMessageJson;
         this.freeString = freeString;
     }
 
@@ -50,6 +71,7 @@ internal sealed class ClipPlusFfiBridge
             }
 
             if (!NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out var deriveSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_create_text_message_json", out var createTextMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
                 NativeLibrary.Free(handle);
@@ -58,6 +80,7 @@ internal sealed class ClipPlusFfiBridge
 
             return new ClipPlusFfiBridge(
                 Marshal.GetDelegateForFunctionPointer<DeriveGroupIdDelegate>(deriveSymbol),
+                Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTextMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
         }
@@ -88,6 +111,46 @@ internal sealed class ClipPlusFfiBridge
         finally
         {
             Marshal.FreeCoTaskMem(rawKeyPointer);
+        }
+    }
+
+    public string? CreateTextMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string text)
+    {
+        var groupIdPointer = Marshal.StringToCoTaskMemUTF8(groupId);
+        var senderDeviceIdPointer = Marshal.StringToCoTaskMemUTF8(senderDeviceId);
+        var senderDeviceNamePointer = Marshal.StringToCoTaskMemUTF8(senderDeviceName);
+        var textPointer = Marshal.StringToCoTaskMemUTF8(text);
+        try
+        {
+            var resultPointer = createTextMessageJson(
+                groupIdPointer,
+                senderDeviceIdPointer,
+                senderDeviceNamePointer,
+                textPointer);
+            if (resultPointer == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Marshal.PtrToStringUTF8(resultPointer);
+            }
+            finally
+            {
+                freeString(resultPointer);
+            }
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(groupIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceNamePointer);
+            Marshal.FreeCoTaskMem(textPointer);
         }
     }
 

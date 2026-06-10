@@ -5,6 +5,7 @@ use std::ptr;
 
 use clipplus_crypto::key::SharedKeyMaterial;
 use clipplus_diagnostics::status::RuntimeStatus;
+use clipplus_transport::message::NativeClipboardMessage;
 
 use crate::types::{free_c_string, string_to_c_ptr};
 
@@ -58,6 +59,45 @@ pub unsafe extern "C" fn clipplus_derive_group_id(raw_key: *const c_char) -> *mu
 }
 
 #[no_mangle]
+/// Creates a text clipboard message JSON string using the native shell wire format.
+///
+/// # Safety
+///
+/// All pointer arguments must be non-null valid NUL-terminated UTF-8 C strings.
+/// Invalid, empty required fields or serialization failures return null. The returned
+/// non-null pointer follows the same ownership rules as [`clipplus_get_status_json`]
+/// and must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_create_text_message_json(
+    group_id: *const c_char,
+    sender_device_id: *const c_char,
+    sender_device_name: *const c_char,
+    text: *const c_char,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(group_id) = ffi_string(group_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_id) = ffi_string(sender_device_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_name) = ffi_string(sender_device_name) else {
+            return ptr::null_mut();
+        };
+        let Some(text) = ffi_string(text) else {
+            return ptr::null_mut();
+        };
+
+        match NativeClipboardMessage::text(group_id, sender_device_id, sender_device_name, text)
+            .and_then(|message| message.to_json())
+        {
+            Ok(json) => string_to_c_ptr(json),
+            Err(_) => ptr::null_mut(),
+        }
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
 /// Releases a string allocated by this FFI crate.
 ///
 /// # Safety
@@ -72,4 +112,13 @@ pub unsafe extern "C" fn clipplus_free_string(ptr: *mut c_char) {
     let _ = panic::catch_unwind(|| unsafe {
         free_c_string(ptr);
     });
+}
+
+fn ffi_string(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+
+    let value = unsafe { CStr::from_ptr(ptr) }.to_str().ok()?;
+    Some(value.to_string())
 }

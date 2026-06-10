@@ -123,14 +123,14 @@ public sealed class ClipPlusMessage
         string senderDeviceName,
         string text)
     {
-        return new ClipPlusMessage
-        {
-            Kind = ClipPlusMessageKind.Text,
-            GroupId = groupId,
-            SenderDeviceId = senderDeviceId,
-            SenderDeviceName = senderDeviceName,
-            Text = text
-        };
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateTextMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            text
+        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create text clipboard message.");
+
+        return FromJson(json);
     }
 
     public string ToJson()

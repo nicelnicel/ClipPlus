@@ -1,5 +1,8 @@
 use clipplus_transport::file_transfer::{FileTransferError, FileTransferRequest, TransferState};
-use clipplus_transport::message::{TransportMessage, TransportMessageError, TransportMessageKind};
+use clipplus_transport::message::{
+    NativeClipboardMessage, NativeClipboardMessageError, NativeClipboardMessageKind,
+    TransportMessage, TransportMessageError, TransportMessageKind,
+};
 use clipplus_transport::session::{HandshakeState, PeerSession, SessionError};
 use serde_json::json;
 
@@ -94,6 +97,42 @@ fn transport_message_unknown_kind_is_rejected() {
     let error = TransportMessage::from_json(&json);
 
     assert!(matches!(error, Err(TransportMessageError::Json(_))));
+}
+
+#[test]
+fn native_clipboard_text_message_uses_current_shell_wire_format() {
+    let message =
+        NativeClipboardMessage::text("group-1", "mac-device", "Mac", "hello from rust transport")
+            .unwrap();
+    let json = message.to_json().unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(encoded["kind"], json!("text"));
+    assert_eq!(encoded["protocolVersion"], json!(1));
+    assert_eq!(encoded["groupId"], json!("group-1"));
+    assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
+    assert_eq!(encoded["senderDeviceName"], json!("Mac"));
+    assert_eq!(encoded["text"], json!("hello from rust transport"));
+    assert!(encoded["eventId"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(encoded["createdAt"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+
+    let decoded = NativeClipboardMessage::from_json(&json).unwrap();
+    assert_eq!(decoded.kind, NativeClipboardMessageKind::Text);
+    assert_eq!(decoded.text.as_deref(), Some("hello from rust transport"));
+}
+
+#[test]
+fn native_clipboard_text_message_rejects_blank_required_fields() {
+    let error = NativeClipboardMessage::text(" ", "mac-device", "Mac", "hello").unwrap_err();
+
+    assert!(matches!(
+        error,
+        NativeClipboardMessageError::InvalidField("group_id")
+    ));
 }
 
 #[test]

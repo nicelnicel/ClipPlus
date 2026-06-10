@@ -200,6 +200,25 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable()
+    {
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateTextMessageJson(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            text: "hello from ffi"
+        );
+
+        Assert.NotNull(json);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Text, decoded.Kind);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("Windows", decoded.SenderDeviceName);
+        Assert.Equal("hello from ffi", decoded.Text);
+    }
+
+    [Fact]
     public void ClipPlusMessageRoundTripsInlinePngImagePayload()
     {
         var pngData = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
