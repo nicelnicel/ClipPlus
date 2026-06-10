@@ -130,6 +130,45 @@ pub unsafe extern "C" fn clipplus_create_text_message_json(
 }
 
 #[no_mangle]
+/// Creates an image clipboard message JSON string using the native shell wire format.
+///
+/// # Safety
+///
+/// String pointer arguments must be non-null valid NUL-terminated UTF-8 C strings.
+/// `image_bytes` must be non-null and valid for `image_len` bytes. Invalid,
+/// empty, oversized, or serialization-failing values return null. The returned
+/// non-null pointer follows the same ownership rules as [`clipplus_get_status_json`]
+/// and must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_create_image_message_json(
+    group_id: *const c_char,
+    sender_device_id: *const c_char,
+    sender_device_name: *const c_char,
+    image_bytes: *const u8,
+    image_len: usize,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(group_id) = ffi_string(group_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_id) = ffi_string(sender_device_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_name) = ffi_string(sender_device_name) else {
+            return ptr::null_mut();
+        };
+        if image_bytes.is_null() || image_len == 0 {
+            return ptr::null_mut();
+        }
+        let image_bytes = unsafe { std::slice::from_raw_parts(image_bytes, image_len) };
+
+        NativeClipboardMessage::image(group_id, sender_device_id, sender_device_name, image_bytes)
+            .and_then(|message| message.to_json())
+            .map_or(ptr::null_mut(), string_to_c_ptr)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
 /// Creates a trust message JSON string using the native shell wire format.
 ///
 /// # Safety

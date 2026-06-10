@@ -32,6 +32,15 @@ public sealed class CoreBridge
         return Ffi.Value?.CreateTextMessageJson(groupId, senderDeviceId, senderDeviceName, text);
     }
 
+    public string? CreateImageMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        byte[] pngData)
+    {
+        return Ffi.Value?.CreateImageMessageJson(groupId, senderDeviceId, senderDeviceName, pngData);
+    }
+
     public string? CreateTrustMessageJson(
         string groupId,
         string senderDeviceId,
@@ -63,11 +72,20 @@ internal sealed class ClipPlusFfiBridge
         IntPtr text);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr CreateImageMessageJsonDelegate(
+        IntPtr groupId,
+        IntPtr senderDeviceId,
+        IntPtr senderDeviceName,
+        IntPtr imageBytes,
+        UIntPtr imageLen);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
 
     private readonly DeriveGroupIdDelegate deriveGroupId;
     private readonly CreateHelloMessageJsonDelegate createHelloMessageJson;
     private readonly CreateTextMessageJsonDelegate createTextMessageJson;
+    private readonly CreateImageMessageJsonDelegate createImageMessageJson;
     private readonly CreateTextMessageJsonDelegate createTrustMessageJson;
     private readonly FreeStringDelegate freeString;
 
@@ -75,12 +93,14 @@ internal sealed class ClipPlusFfiBridge
         DeriveGroupIdDelegate deriveGroupId,
         CreateHelloMessageJsonDelegate createHelloMessageJson,
         CreateTextMessageJsonDelegate createTextMessageJson,
+        CreateImageMessageJsonDelegate createImageMessageJson,
         CreateTextMessageJsonDelegate createTrustMessageJson,
         FreeStringDelegate freeString)
     {
         this.deriveGroupId = deriveGroupId;
         this.createHelloMessageJson = createHelloMessageJson;
         this.createTextMessageJson = createTextMessageJson;
+        this.createImageMessageJson = createImageMessageJson;
         this.createTrustMessageJson = createTrustMessageJson;
         this.freeString = freeString;
     }
@@ -102,6 +122,7 @@ internal sealed class ClipPlusFfiBridge
             if (!NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out var deriveSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_hello_message_json", out var createHelloMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_text_message_json", out var createTextMessageJsonSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_trust_message_json", out var createTrustMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
@@ -113,6 +134,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<DeriveGroupIdDelegate>(deriveSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateHelloMessageJsonDelegate>(createHelloMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTextMessageJsonSymbol),
+                Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTrustMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
@@ -173,6 +195,39 @@ internal sealed class ClipPlusFfiBridge
         }
         finally
         {
+            Marshal.FreeCoTaskMem(groupIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceNamePointer);
+        }
+    }
+
+    public string? CreateImageMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        byte[] pngData)
+    {
+        if (pngData.Length == 0)
+        {
+            return null;
+        }
+
+        var groupIdPointer = Marshal.StringToCoTaskMemUTF8(groupId);
+        var senderDeviceIdPointer = Marshal.StringToCoTaskMemUTF8(senderDeviceId);
+        var senderDeviceNamePointer = Marshal.StringToCoTaskMemUTF8(senderDeviceName);
+        var imageHandle = GCHandle.Alloc(pngData, GCHandleType.Pinned);
+        try
+        {
+            return TakeOwnedString(createImageMessageJson(
+                groupIdPointer,
+                senderDeviceIdPointer,
+                senderDeviceNamePointer,
+                imageHandle.AddrOfPinnedObject(),
+                new UIntPtr((ulong)pngData.LongLength)));
+        }
+        finally
+        {
+            imageHandle.Free();
             Marshal.FreeCoTaskMem(groupIdPointer);
             Marshal.FreeCoTaskMem(senderDeviceIdPointer);
             Marshal.FreeCoTaskMem(senderDeviceNamePointer);

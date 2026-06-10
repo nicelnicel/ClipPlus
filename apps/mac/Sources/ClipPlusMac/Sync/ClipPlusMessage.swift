@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 enum ClipPlusMessageKind: String, Codable {
     case hello
@@ -104,25 +103,16 @@ struct ClipPlusMessage: Codable, Equatable {
             return nil
         }
 
-        return Self(
-            kind: .image,
-            protocolVersion: 1,
+        guard let json = CoreBridge().createImageMessageJSON(
             groupId: groupId,
             senderDeviceId: senderDeviceId,
             senderDeviceName: senderDeviceName,
-            eventId: UUID().uuidString,
-            text: nil,
-            imageBase64: pngData.base64EncodedString(),
-            imageByteSize: pngData.count,
-            imageContentHash: SHA256.hash(data: pngData)
-                .map { String(format: "%02x", $0) }
-                .joined(),
-            approvedDeviceId: nil,
-            transferId: nil,
-            files: nil,
-            archivePort: nil,
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
+            pngData: pngData
+        ) else {
+            preconditionFailure("Rust 核心库不可用，无法创建图片剪贴板消息")
+        }
+
+        return decodeCoreMessageJSON(json)
     }
 
     static func fileOffer(

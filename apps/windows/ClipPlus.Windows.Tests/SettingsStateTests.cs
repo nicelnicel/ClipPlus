@@ -275,7 +275,34 @@ public sealed class SettingsStateTests
         Assert.Equal(pngData.Length, decoded.ImageByteSize);
         Assert.Equal(Convert.ToBase64String(pngData), decoded.ImageBase64);
         Assert.Equal(pngData, decoded.DecodedImageData);
-        Assert.False(string.IsNullOrEmpty(decoded.ImageContentHash));
+        Assert.Equal(
+            "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6",
+            decoded.ImageContentHash
+        );
+    }
+
+    [Fact]
+    public void CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable()
+    {
+        var pngData = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateImageMessageJson(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            pngData: pngData
+        );
+
+        Assert.NotNull(json);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Image, decoded.Kind);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal(pngData.Length, decoded.ImageByteSize);
+        Assert.Equal(Convert.ToBase64String(pngData), decoded.ImageBase64);
+        Assert.Equal(
+            "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6",
+            decoded.ImageContentHash
+        );
     }
 
     [Fact]

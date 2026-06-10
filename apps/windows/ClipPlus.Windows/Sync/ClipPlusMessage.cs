@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -105,16 +104,14 @@ public sealed class ClipPlusMessage
             return null;
         }
 
-        return new ClipPlusMessage
-        {
-            Kind = ClipPlusMessageKind.Image,
-            GroupId = groupId,
-            SenderDeviceId = senderDeviceId,
-            SenderDeviceName = senderDeviceName,
-            ImageBase64 = Convert.ToBase64String(pngData),
-            ImageByteSize = pngData.Length,
-            ImageContentHash = Convert.ToHexString(SHA256.HashData(pngData)).ToLowerInvariant()
-        };
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateImageMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            pngData
+        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create image clipboard message.");
+
+        return FromJson(json);
     }
 
     public static ClipPlusMessage CreateText(

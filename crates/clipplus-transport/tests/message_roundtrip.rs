@@ -164,12 +164,99 @@ fn native_clipboard_trust_message_uses_current_shell_wire_format() {
 }
 
 #[test]
+fn native_clipboard_image_message_uses_current_shell_wire_format() {
+    let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    let message =
+        NativeClipboardMessage::image("group-1", "mac-device", "Mac", &png_bytes).unwrap();
+    let json = message.to_json().unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(encoded["kind"], json!("image"));
+    assert_eq!(encoded["protocolVersion"], json!(1));
+    assert_eq!(encoded["groupId"], json!("group-1"));
+    assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
+    assert_eq!(encoded["imageBase64"], json!("iVBORw0KGgo="));
+    assert_eq!(encoded["imageByteSize"], json!(8));
+    assert_eq!(
+        encoded["imageContentHash"],
+        json!("4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6")
+    );
+    assert!(encoded.get("text").is_none());
+
+    let decoded = NativeClipboardMessage::from_json(&json).unwrap();
+    assert_eq!(decoded.kind, NativeClipboardMessageKind::Image);
+    assert_eq!(decoded.image_byte_size, Some(8));
+}
+
+#[test]
 fn native_clipboard_text_message_rejects_blank_required_fields() {
     let error = NativeClipboardMessage::text(" ", "mac-device", "Mac", "hello").unwrap_err();
 
     assert!(matches!(
         error,
         NativeClipboardMessageError::InvalidField("group_id")
+    ));
+}
+
+#[test]
+fn native_clipboard_image_message_rejects_empty_and_oversized_payloads() {
+    let empty = NativeClipboardMessage::image("group-1", "mac-device", "Mac", &[]).unwrap_err();
+    let oversized = vec![0xFF; NativeClipboardMessage::MAX_INLINE_IMAGE_BYTES + 1];
+    let oversized =
+        NativeClipboardMessage::image("group-1", "mac-device", "Mac", &oversized).unwrap_err();
+
+    assert!(matches!(
+        empty,
+        NativeClipboardMessageError::InvalidField("image_bytes")
+    ));
+    assert!(matches!(
+        oversized,
+        NativeClipboardMessageError::InvalidField("image_byte_size")
+    ));
+}
+
+#[test]
+fn native_clipboard_image_message_allows_exact_inline_limit() {
+    let payload = vec![0xAA; NativeClipboardMessage::MAX_INLINE_IMAGE_BYTES];
+    let message = NativeClipboardMessage::image("group-1", "mac-device", "Mac", &payload).unwrap();
+
+    assert_eq!(
+        message.image_byte_size,
+        Some(NativeClipboardMessage::MAX_INLINE_IMAGE_BYTES)
+    );
+}
+
+#[test]
+fn native_clipboard_image_message_rejects_tampered_metadata() {
+    let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    let message =
+        NativeClipboardMessage::image("group-1", "mac-device", "Mac", &png_bytes).unwrap();
+
+    let mut encoded: serde_json::Value = serde_json::from_str(&message.to_json().unwrap()).unwrap();
+    encoded["imageByteSize"] = json!(9);
+    let error =
+        NativeClipboardMessage::from_json(&serde_json::to_string(&encoded).unwrap()).unwrap_err();
+    assert!(matches!(
+        error,
+        NativeClipboardMessageError::InvalidField("image_byte_size")
+    ));
+
+    let mut encoded: serde_json::Value = serde_json::from_str(&message.to_json().unwrap()).unwrap();
+    encoded["imageContentHash"] = json!("bad");
+    let error =
+        NativeClipboardMessage::from_json(&serde_json::to_string(&encoded).unwrap()).unwrap_err();
+    assert!(matches!(
+        error,
+        NativeClipboardMessageError::InvalidField("image_content_hash")
+    ));
+
+    let mut encoded: serde_json::Value = serde_json::from_str(&message.to_json().unwrap()).unwrap();
+    encoded["imageBase64"] = json!("not base64");
+    let error =
+        NativeClipboardMessage::from_json(&serde_json::to_string(&encoded).unwrap()).unwrap_err();
+    assert!(matches!(
+        error,
+        NativeClipboardMessageError::InvalidField("image_base64")
     ));
 }
 

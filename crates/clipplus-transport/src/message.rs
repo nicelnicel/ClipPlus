@@ -1,4 +1,6 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -57,6 +59,8 @@ pub enum NativeClipboardMessageError {
 }
 
 impl NativeClipboardMessage {
+    pub const MAX_INLINE_IMAGE_BYTES: usize = 32 * 1024;
+
     pub fn hello(
         group_id: impl Into<String>,
         sender_device_id: impl Into<String>,
@@ -102,6 +106,40 @@ impl NativeClipboardMessage {
             Some(text.into()),
             None,
         )
+    }
+
+    pub fn image(
+        group_id: impl Into<String>,
+        sender_device_id: impl Into<String>,
+        sender_device_name: impl Into<String>,
+        image_bytes: &[u8],
+    ) -> Result<Self, NativeClipboardMessageError> {
+        if image_bytes.is_empty() {
+            return Err(NativeClipboardMessageError::InvalidField("image_bytes"));
+        }
+        if image_bytes.len() > Self::MAX_INLINE_IMAGE_BYTES {
+            return Err(NativeClipboardMessageError::InvalidField("image_byte_size"));
+        }
+
+        let message = Self {
+            kind: NativeClipboardMessageKind::Image,
+            protocol_version: 1,
+            group_id: group_id.into(),
+            sender_device_id: sender_device_id.into(),
+            sender_device_name: sender_device_name.into(),
+            event_id: Uuid::new_v4(),
+            text: None,
+            image_base64: Some(base64::engine::general_purpose::STANDARD.encode(image_bytes)),
+            image_byte_size: Some(image_bytes.len()),
+            image_content_hash: Some(sha256_hex(image_bytes)),
+            approved_device_id: None,
+            transfer_id: None,
+            files: None,
+            archive_port: None,
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        };
+        message.validate()?;
+        Ok(message)
     }
 
     fn new(
@@ -178,9 +216,37 @@ impl NativeClipboardMessage {
                 "approved_device_id",
             ));
         }
+        if matches!(self.kind, NativeClipboardMessageKind::Image) {
+            let Some(image_base64) = self.image_base64.as_deref() else {
+                return Err(NativeClipboardMessageError::InvalidField("image_base64"));
+            };
+            let image_bytes = base64::engine::general_purpose::STANDARD
+                .decode(image_base64)
+                .map_err(|_| NativeClipboardMessageError::InvalidField("image_base64"))?;
+            let Some(image_byte_size) = self.image_byte_size else {
+                return Err(NativeClipboardMessageError::InvalidField("image_byte_size"));
+            };
+            if image_bytes.is_empty() || image_byte_size != image_bytes.len() {
+                return Err(NativeClipboardMessageError::InvalidField("image_byte_size"));
+            }
+            if image_byte_size > Self::MAX_INLINE_IMAGE_BYTES {
+                return Err(NativeClipboardMessageError::InvalidField("image_byte_size"));
+            }
+            let expected_hash = sha256_hex(&image_bytes);
+            if self.image_content_hash.as_deref() != Some(expected_hash.as_str()) {
+                return Err(NativeClipboardMessageError::InvalidField(
+                    "image_content_hash",
+                ));
+            }
+        }
 
         Ok(())
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,12 +2,13 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use clipplus_ffi::api::{
-    clipplus_create_hello_message_json, clipplus_create_text_message_json,
-    clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_free_string,
-    clipplus_get_status_json,
+    clipplus_create_hello_message_json, clipplus_create_image_message_json,
+    clipplus_create_text_message_json, clipplus_create_trust_message_json,
+    clipplus_derive_group_id, clipplus_free_string, clipplus_get_status_json,
 };
 use clipplus_ffi::{
     clipplus_create_hello_message_json as reexported_create_hello_message_json,
+    clipplus_create_image_message_json as reexported_create_image_message_json,
     clipplus_create_text_message_json as reexported_create_text_message_json,
     clipplus_create_trust_message_json as reexported_create_trust_message_json,
     clipplus_derive_group_id as reexported_derive_group_id,
@@ -224,6 +225,87 @@ fn ffi_create_hello_and_trust_message_json_reject_missing_required_values() {
             sender_device_id.as_ptr(),
             sender_device_name.as_ptr(),
             ptr::null(),
+        )
+    }
+    .is_null());
+}
+
+#[test]
+fn ffi_creates_image_message_json_for_native_shells() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    let ptr = unsafe {
+        clipplus_create_image_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            png_bytes.as_ptr(),
+            png_bytes.len(),
+        )
+    };
+    let json = unsafe { take_ffi_string(ptr) };
+    let value: Value = serde_json::from_str(&json).expect("message json should parse");
+
+    assert_eq!(value["kind"], "image");
+    assert_eq!(value["protocolVersion"], 1);
+    assert_eq!(value["groupId"], "group-1");
+    assert_eq!(value["senderDeviceId"], "mac-device");
+    assert_eq!(value["imageBase64"], "iVBORw0KGgo=");
+    assert_eq!(value["imageByteSize"], 8);
+    assert_eq!(
+        value["imageContentHash"],
+        "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"
+    );
+}
+
+#[test]
+fn ffi_create_image_message_json_rejects_null_empty_and_oversized_values() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    let oversized = vec![0xFF; 32 * 1024 + 1];
+
+    assert!(unsafe {
+        reexported_create_image_message_json(
+            ptr::null(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            png_bytes.as_ptr(),
+            png_bytes.len(),
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_image_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            ptr::null(),
+            png_bytes.len(),
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_image_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            png_bytes.as_ptr(),
+            0,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_image_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            oversized.as_ptr(),
+            oversized.len(),
         )
     }
     .is_null());

@@ -255,6 +255,20 @@ final class UdpTextSyncService {
         logger.info("published image clipboard byte_count=\(pngData.count)")
     }
 
+    private func localImageHashAfterClipboardWrite() -> String? {
+        guard let writtenPngData = clipboard.readPngImageData(),
+              let message = ClipPlusMessage.image(
+                groupId: state.sharedGroupId,
+                senderDeviceId: deviceId,
+                senderDeviceName: deviceName,
+                pngData: writtenPngData
+              ) else {
+            return nil
+        }
+
+        return message.imageContentHash
+    }
+
     private func handle(_ message: ClipPlusMessage, sourceHost: String) {
         guard state.sharedKeyConfigured,
               message.protocolVersion == 1,
@@ -310,6 +324,9 @@ final class UdpTextSyncService {
             lastRemoteImageHash = imageHash
             lastLocalImageHash = imageHash
             clipboard.writePngImageData(imageData)
+            if let writtenImageHash = localImageHashAfterClipboardWrite() {
+                lastLocalImageHash = writtenImageHash
+            }
             state.lastStatusMessage = "已接收远端图片剪贴板"
             logger.info("received image clipboard byte_count=\(imageData.count)")
         case .fileOffer:

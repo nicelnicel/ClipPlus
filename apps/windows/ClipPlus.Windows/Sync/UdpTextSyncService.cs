@@ -223,6 +223,22 @@ public sealed class UdpTextSyncService : IDisposable
         logger.Info($"published image clipboard byte_count={pngData!.Length}");
     }
 
+    private string? LocalImageHashAfterClipboardWrite()
+    {
+        var writtenPngData = clipboard.ReadPngImageData();
+        if (writtenPngData is null)
+        {
+            return null;
+        }
+
+        return ClipPlusMessage.CreateImage(
+            state.SharedGroupId,
+            deviceId,
+            deviceName,
+            writtenPngData
+        )?.ImageContentHash;
+    }
+
     private void Handle(ClipPlusMessage message, string sourceHost)
     {
         if (!state.SharedKeyConfigured
@@ -282,6 +298,7 @@ public sealed class UdpTextSyncService : IDisposable
                 lastRemoteImageHash = message.ImageContentHash;
                 lastLocalImageHash = message.ImageContentHash;
                 clipboard.WritePngImageData(imageData);
+                lastLocalImageHash = LocalImageHashAfterClipboardWrite() ?? lastLocalImageHash;
                 state.LastStatusMessage = "已接收远端图片剪贴板";
                 logger.Info($"received image clipboard byte_count={imageData.Length}");
                 break;

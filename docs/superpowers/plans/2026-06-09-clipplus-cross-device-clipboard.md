@@ -3581,6 +3581,21 @@ git commit -m "test: add parallels e2e checklist"
 - 日志检查：macOS 和 Windows 日志只返回 `published text clipboard` / `received text clipboard` 摘要；匹配检查未出现 `clipplus-test-key`、`rust-ffi-hello-trust-mac-to-windows-1781077117` 或 `rust-ffi-hello-trust-windows-to-mac-1781077135` 明文。E2E 后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe` 测试进程。
 - 剩余项更新：共享 Key、hello、text、trust 消息 JSON 生成已迁入 Rust FFI 并通过默认打包路径与真实双向同步；image、fileOffer 消息生成、UDP socket 运行时、图片/文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。下一步优先 image。
 
+**2026-06-10 image 消息 JSON Rust FFI 迁移复验：**
+
+- 子代理审查：只读子代理建议先迁移 image，再迁移 fileOffer。image 需要由 Rust 统一完成 base64、字节数和 SHA-256 内容 hash，避免 Swift/C# 各自重复实现；fileOffer 另需独立处理 files JSON、transferId、archivePort、路径脱敏和接收端路径安全。
+- 迁移范围：`clipplus-transport` 新增 `NativeClipboardMessage::image`、32 KiB inline PNG 限制、base64 解码校验、`imageByteSize` 校验和 SHA-256 `imageContentHash` 校验；`clipplus-ffi` 新增 `clipplus_create_image_message_json`；macOS `CoreBridge.createImageMessageJSON` 和 Windows `CoreBridge.CreateImageMessageJson` 加载该符号。`ClipPlusMessage.image` / `CreateImage` 现在通过 Rust FFI 生成 JSON 后再解码回原生模型，不再走 Swift/C# 本地 base64/hash 实现。
+- TDD 红灯：Rust transport 图片测试先因缺少 `NativeClipboardMessage::image` 与 `MAX_INLINE_IMAGE_BYTES` 编译失败；Rust FFI 图片测试先因缺少 `clipplus_create_image_message_json` 编译失败；Swift 过滤测试先因 `CoreBridge` 缺少 `createImageMessageJSON` 编译失败；Windows VM 过滤测试先因 `CoreBridge` 缺少 `CreateImageMessageJson` 编译失败。
+- 单元验证：`cargo test -p clipplus-transport native_clipboard_image_` 通过 4 个图片消息测试；`cargo test -p clipplus-ffi ffi_create_image...` 与 `ffi_creates_image...` 通过；`./scripts/dev/check.sh` 通过，包含 Rust FFI 15/15、transport message 26/26 和 macOS Swift 27/27；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 26/26。
+- 默认打包路径 smoke test：`./scripts/dev/build-mac-app.sh` 通过，随后将当前 bundle 放入 `/private/tmp/ClipPlusMac.app` 并运行 `env -u CLIPPLUS_FFI_LIBRARY_PATH CLIPPLUS_COREBRIDGE_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。Windows VM 继续依赖 `apps/windows/Directory.Build.targets` 把新 `clipplus_ffi.dll` 复制到 App/Test 输出目录，图片 FFI 测试在 bundled DLL 路径下通过。
+- 防回环修复：首次图片 E2E 发现 Windows 接收 68 字节 PNG 后，系统剪贴板会重编码为 120/136 字节 PNG 并被下一轮轮询误认为新图片重新发布。macOS 与 Windows 接收图片写入系统剪贴板后，现在立即读取平台剪贴板中的实际 PNG 数据，用 Rust FFI 生成 image 消息并把写入后的 `imageContentHash` 作为本地防回环基线。
+- 端到端复验：Parallels `Windows 11` 运行中，`Shared clipboard mode: off`。macOS 和 Windows 两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，使用 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- Mac -> Windows：macOS 将 `/Users/cc/proj/ClipPlus/target/test-assets/clipplus-one.png` 写入 NSPasteboard，输出 `MAC_IMAGE_SET=68 bytes`；Windows 读取系统剪贴板返回 `WINDOWS_IMAGE=1x1`。Windows 新日志区间出现 `received image clipboard byte_count=68`。
+- Windows -> Mac：Windows 将 `C:/Mac/Home/proj/ClipPlus/target/test-assets/clipplus-two.png` 写入系统剪贴板，输出 `WINDOWS_IMAGE_SET=3401 bytes`；macOS 读取 NSPasteboard 返回 `MAC_IMAGE=4x2`。macOS 新日志区间出现 `received image clipboard byte_count=136`。
+- 日志与回弹检查：macOS 新日志区间只出现 `published image clipboard byte_count=68` 和 `received image clipboard byte_count=136`，没有接收后的再次发布；Windows 新日志区间只出现 `received image clipboard byte_count=68` 和 `published image clipboard byte_count=136`，没有接收后的再次发布。两端匹配检查未出现 `clipplus-test-key`、`clipplus-one` 或 `clipplus-two`。E2E 前后 Parallels `Shared clipboard mode` 均为 `off`，E2E 后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe` 测试进程。
+- 测试方案记录：`AGENTS.md` 已补充图片 FFI 真实符号调用、Windows bundled DLL 过滤测试、32 KiB inline PNG 限制、双向图片同步、防回环和日志脱敏检查，后续改动必须按该矩阵复验。
+- 剩余项更新：共享 Key、hello、text、trust、image 消息 JSON 生成已迁入 Rust FFI 并通过默认打包路径与真实双向同步；fileOffer 消息生成、UDP socket 运行时、文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。下一步优先 fileOffer。
+
 ---
 
 ## 自查清单

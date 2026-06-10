@@ -36,6 +36,20 @@ struct CoreBridge {
         )
     }
 
+    func createImageMessageJSON(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        pngData: Data
+    ) -> String? {
+        Self.ffiBridge?.createImageMessageJSON(
+            groupId: groupId,
+            senderDeviceId: senderDeviceId,
+            senderDeviceName: senderDeviceName,
+            pngData: pngData
+        )
+    }
+
     func createTrustMessageJSON(
         groupId: String,
         senderDeviceId: String,
@@ -66,12 +80,20 @@ private final class ClipPlusFFIBridge {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> UnsafeMutablePointer<CChar>?
+    private typealias CreateImageMessageJSONFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafeRawPointer?,
+        Int
+    ) -> UnsafeMutablePointer<CChar>?
     private typealias FreeStringFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let handle: UnsafeMutableRawPointer
     private let deriveGroupIdFunction: DeriveGroupIdFunction
     private let createHelloMessageJSONFunction: CreateHelloMessageJSONFunction
     private let createTextMessageJSONFunction: CreateTextMessageJSONFunction
+    private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
     private let createTrustMessageJSONFunction: CreateTextMessageJSONFunction
     private let freeStringFunction: FreeStringFunction
 
@@ -80,6 +102,7 @@ private final class ClipPlusFFIBridge {
         deriveGroupIdFunction: @escaping DeriveGroupIdFunction,
         createHelloMessageJSONFunction: @escaping CreateHelloMessageJSONFunction,
         createTextMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
+        createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
         createTrustMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         freeStringFunction: @escaping FreeStringFunction
     ) {
@@ -87,6 +110,7 @@ private final class ClipPlusFFIBridge {
         self.deriveGroupIdFunction = deriveGroupIdFunction
         self.createHelloMessageJSONFunction = createHelloMessageJSONFunction
         self.createTextMessageJSONFunction = createTextMessageJSONFunction
+        self.createImageMessageJSONFunction = createImageMessageJSONFunction
         self.createTrustMessageJSONFunction = createTrustMessageJSONFunction
         self.freeStringFunction = freeStringFunction
     }
@@ -105,6 +129,7 @@ private final class ClipPlusFFIBridge {
             guard let deriveSymbol = dlsym(handle, "clipplus_derive_group_id"),
                   let createHelloMessageJSONSymbol = dlsym(handle, "clipplus_create_hello_message_json"),
                   let createTextMessageJSONSymbol = dlsym(handle, "clipplus_create_text_message_json"),
+                  let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
                   let createTrustMessageJSONSymbol = dlsym(handle, "clipplus_create_trust_message_json"),
                   let freeSymbol = dlsym(handle, "clipplus_free_string") else {
                 dlclose(handle)
@@ -120,6 +145,10 @@ private final class ClipPlusFFIBridge {
                 createTextMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
             )
+            let createImageMessageJSONFunction = unsafeBitCast(
+                createImageMessageJSONSymbol,
+                to: CreateImageMessageJSONFunction.self
+            )
             let createTrustMessageJSONFunction = unsafeBitCast(
                 createTrustMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
@@ -130,6 +159,7 @@ private final class ClipPlusFFIBridge {
                 deriveGroupIdFunction: deriveGroupIdFunction,
                 createHelloMessageJSONFunction: createHelloMessageJSONFunction,
                 createTextMessageJSONFunction: createTextMessageJSONFunction,
+                createImageMessageJSONFunction: createImageMessageJSONFunction,
                 createTrustMessageJSONFunction: createTrustMessageJSONFunction,
                 freeStringFunction: freeStringFunction
             )
@@ -191,6 +221,40 @@ private final class ClipPlusFFIBridge {
                             senderDeviceIdPointer,
                             senderDeviceNamePointer,
                             textPointer
+                        )
+                    }
+                }
+            }
+        }
+
+        guard let resultPointer else {
+            return nil
+        }
+        defer { freeStringFunction(resultPointer) }
+
+        return String(cString: resultPointer)
+    }
+
+    func createImageMessageJSON(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        pngData: Data
+    ) -> String? {
+        guard !pngData.isEmpty else {
+            return nil
+        }
+
+        let resultPointer = groupId.withCString { groupIdPointer in
+            senderDeviceId.withCString { senderDeviceIdPointer in
+                senderDeviceName.withCString { senderDeviceNamePointer in
+                    pngData.withUnsafeBytes { rawBuffer in
+                        createImageMessageJSONFunction(
+                            groupIdPointer,
+                            senderDeviceIdPointer,
+                            senderDeviceNamePointer,
+                            rawBuffer.baseAddress,
+                            pngData.count
                         )
                     }
                 }

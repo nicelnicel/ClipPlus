@@ -275,9 +275,11 @@ dependencies = [
 name = "clipplus-transport"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
