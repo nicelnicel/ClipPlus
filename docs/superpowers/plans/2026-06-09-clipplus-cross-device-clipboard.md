@@ -3687,6 +3687,14 @@ git commit -m "test: add parallels e2e checklist"
 - 端到端状态：本切片没有标记完整文件传输 UI E2E 通过。上一轮已确认当前 Parallels 环境中 Mac -> Windows UDP 探针失败，Windows app 无法稳定收到 macOS hello/trust；而 Windows 下载端真实 UI 验收正依赖 macOS -> Windows fileOffer。因此该 E2E 需要在 Windows 入站 UDP 问题解决后再执行。
 - 剩余项更新：Windows 文件归档下载端已迁入 Rust FFI；macOS 和 Windows 下载端均共用 Rust `FileTransferDownload` 路径。TCP 文件归档 server 端仍分别保留在 Swift/C# 外壳层，后续如继续收敛可单独迁移 server 端。
 
+**2026-06-10 Parallels Windows 入站与 UI 自动化调试记录：**
+
+- 根因澄清：此前 “Mac -> Windows UDP 不可达” 的探针结论混入两个测试方法问题。第一，PowerShell 临时 `UdpClient`/`TcpListener` 监听器被 Windows Defender 自动生成的 `Windows PowerShell` 应用级 Block 规则拦截；Block 优先于 `ClipPlus UDP 47631`/`ClipPlus TCP 47632` 端口 Allow，因此 PowerShell 探针不能代表 ClipPlus app。第二，通过 SSH `Start-Process` 启动 Windows GUI app 后立即让 SSH 会话返回，子进程可能随会话消失，导致实际没有进程继续监听。
+- 已验证路径：使用 `prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand ...` 在当前登录用户桌面启动 `C:\dotnet\dotnet.exe ...ClipPlus.Windows.dll` 后，`Get-NetUDPEndpoint -LocalPort 47631` 显示 ClipPlus 绑定 `0.0.0.0:47631`；macOS 手动发送合法 hello UDP 包到 `10.211.55.3:47631`，Windows 日志出现 `peer hello device_id_prefix=mac-prlc`。
+- 防火墙对照：临时关闭 Windows Public 防火墙时，PowerShell TCP/UDP 探针都能收到 macOS 包；恢复防火墙后，PowerShell 探针继续被应用级 Block 规则挡住。ClipPlus app 自身在持久运行时可以收到 macOS hello。
+- 自动化阻塞：尝试用 `prlctl exec --current-user` 调用 Windows UIAutomation 访问 WPF `ClipPlus 设置` 窗口时，PowerShell UIAutomation 进程卡住；已清理本地 `prlctl exec` 和远端 `powershell`/`dotnet` 进程。后续真实 UI 文件接收 E2E 仍需要新的 Windows UI 操作方案，例如通过 Parallels 可视桌面坐标/辅助功能、专门的 Windows UI 自动化通道，或增加受控调试入口。
+- 测试方案记录：`AGENTS.md` 已补充 Parallels E2E 的 Windows GUI app 启动方式、`-EncodedCommand` 传参要求，以及 PowerShell 入站探针不能直接代表 ClipPlus app 的限制。
+
 ---
 
 ## 自查清单
