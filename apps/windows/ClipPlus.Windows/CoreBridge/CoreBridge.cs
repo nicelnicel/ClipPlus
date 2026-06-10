@@ -59,6 +59,11 @@ public sealed class CoreBridge
             archivePort);
     }
 
+    public bool WriteFileArchiveZip(IReadOnlyList<string> sourcePaths, string archivePath)
+    {
+        return Ffi.Value?.WriteFileArchiveZip(sourcePaths, archivePath) == true;
+    }
+
     public string? CreateTrustMessageJson(
         string groupId,
         string senderDeviceId,
@@ -107,6 +112,12 @@ internal sealed class ClipPlusFfiBridge
         ushort archivePort);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool WriteFileArchiveZipDelegate(
+        IntPtr sourcePathsJson,
+        IntPtr archivePath);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
 
     private static readonly JsonSerializerOptions FilesJsonOptions = new()
@@ -119,6 +130,7 @@ internal sealed class ClipPlusFfiBridge
     private readonly CreateTextMessageJsonDelegate createTextMessageJson;
     private readonly CreateImageMessageJsonDelegate createImageMessageJson;
     private readonly CreateFileOfferMessageJsonDelegate createFileOfferMessageJson;
+    private readonly WriteFileArchiveZipDelegate writeFileArchiveZip;
     private readonly CreateTextMessageJsonDelegate createTrustMessageJson;
     private readonly FreeStringDelegate freeString;
 
@@ -128,6 +140,7 @@ internal sealed class ClipPlusFfiBridge
         CreateTextMessageJsonDelegate createTextMessageJson,
         CreateImageMessageJsonDelegate createImageMessageJson,
         CreateFileOfferMessageJsonDelegate createFileOfferMessageJson,
+        WriteFileArchiveZipDelegate writeFileArchiveZip,
         CreateTextMessageJsonDelegate createTrustMessageJson,
         FreeStringDelegate freeString)
     {
@@ -136,6 +149,7 @@ internal sealed class ClipPlusFfiBridge
         this.createTextMessageJson = createTextMessageJson;
         this.createImageMessageJson = createImageMessageJson;
         this.createFileOfferMessageJson = createFileOfferMessageJson;
+        this.writeFileArchiveZip = writeFileArchiveZip;
         this.createTrustMessageJson = createTrustMessageJson;
         this.freeString = freeString;
     }
@@ -159,6 +173,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_text_message_json", out var createTextMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_file_offer_message_json", out var createFileOfferMessageJsonSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_write_file_archive_zip", out var writeFileArchiveZipSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_trust_message_json", out var createTrustMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
@@ -172,6 +187,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTextMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateFileOfferMessageJsonDelegate>(createFileOfferMessageJsonSymbol),
+                Marshal.GetDelegateForFunctionPointer<WriteFileArchiveZipDelegate>(writeFileArchiveZipSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTrustMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
@@ -317,6 +333,22 @@ internal sealed class ClipPlusFfiBridge
         string approvedDeviceId)
     {
         return CreateFourStringMessageJson(createTrustMessageJson, groupId, senderDeviceId, senderDeviceName, approvedDeviceId);
+    }
+
+    public bool WriteFileArchiveZip(IReadOnlyList<string> sourcePaths, string archivePath)
+    {
+        var sourcePathsJson = JsonSerializer.Serialize(sourcePaths);
+        var sourcePathsJsonPointer = Marshal.StringToCoTaskMemUTF8(sourcePathsJson);
+        var archivePathPointer = Marshal.StringToCoTaskMemUTF8(archivePath);
+        try
+        {
+            return writeFileArchiveZip(sourcePathsJsonPointer, archivePathPointer);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(sourcePathsJsonPointer);
+            Marshal.FreeCoTaskMem(archivePathPointer);
+        }
     }
 
     private string? CreateFourStringMessageJson(

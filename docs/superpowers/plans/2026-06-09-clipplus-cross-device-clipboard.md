@@ -3616,6 +3616,18 @@ git commit -m "test: add parallels e2e checklist"
 - 单元验证：`cargo test -p clipplus-discovery --test discovery_packet` 通过 10/10；`./scripts/dev/check.sh` 通过，包含 discovery 10/10、Rust FFI 17/17、transport message 28/28 和 macOS Swift 28/28。
 - 剩余项更新：Rust 侧已有可运行 UDP datagram endpoint，但 macOS/Windows 原生壳仍直接使用 Swift `socket/recvfrom/sendto` 和 C# `UdpClient`。下一步需要把原生壳 UDP bind/send/receive 通过 FFI 或更高层 Rust runtime 接入该 endpoint，并继续把 TCP 文件归档服务/下载迁入 Rust transport。
 
+**2026-06-10 文件正文归档 Rust FFI 迁移复验：**
+
+- 迁移范围：`clipplus-transport::file_transfer` 新增 `FileTransferArchive::write_zip` 和 `FileTransferArchiveSummary`，使用 Rust `zip` crate 按 64 KiB 块读取源文件并写入 zip；`clipplus-ffi` 新增 `clipplus_write_file_archive_zip(source_paths_json, archive_path) -> bool`；macOS `FileTransferArchive.writeZip` 与 Windows `FileTransferArchive.WriteZip` 现在均通过 `CoreBridge` 调用 Rust FFI，不再保留 Swift/C# 本地 zip writer。
+- TDD 红灯：Rust transport 过滤测试先因缺少 `FileTransferArchive` 编译失败；Rust FFI 过滤测试先因缺少 `clipplus_write_file_archive_zip` 编译失败；Swift 过滤测试先因 `CoreBridge` 缺少 `writeFileArchiveZip` 编译失败；Windows VM 过滤测试先因 `CoreBridge` 缺少 `WriteFileArchiveZip` 编译失败。
+- 单元验证：`cargo test -p clipplus-transport file_transfer_archive_` 通过 2/2；`cargo test -p clipplus-ffi file_archive_zip` 通过 2/2；`./scripts/dev/check.sh` 通过，包含 Rust FFI 19/19、transport message 30/30 和 macOS Swift 29/29；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 28/28。
+- 默认打包路径 smoke test：`./scripts/dev/build-mac-app.sh` 通过；刷新 `/private/tmp/ClipPlusMac.app` 的可执行文件和 `Contents/Frameworks/libclipplus_ffi.dylib` 后，`nm` 证明该 dylib 导出 `_clipplus_write_file_archive_zip`。
+- 端到端复验：Parallels `Windows 11` 运行中，`Shared clipboard mode: off`。macOS 和 Windows 两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，使用 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- Windows -> macOS 文件传输：Windows 侧通过真实系统剪贴板 `Set-Clipboard -Path` 放入 `windows-rust-archive-source.txt`，源内容为 `rust-archive-ffi-1781080460`；macOS 菜单栏真实 UI 点击 `CC4008：1 个文件可接收`；macOS `~/Downloads/ClipPlus-Received-2dc0c775-65c3-47c1-bc3d-bc4e3852e392.zip` 生成，解压后 `windows-rust-archive-source.txt` 内容为 `rust-archive-ffi-1781080460`。
+- 日志与脱敏检查：macOS 新日志区间出现 `downloaded file archive byte_count=191`；Windows 新日志区间出现 `served file archive file_count=1 byte_count=191`。匹配检查未出现 `clipplus-test-key`、`windows-rust-archive-source`、`rust-archive-ffi`、`C:` 或 `/Users/`。E2E 前后 Parallels `Shared clipboard mode` 均为 `off`，E2E 后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe` 测试进程。
+- 测试方案记录：`AGENTS.md` 已补充 `clipplus_write_file_archive_zip` 真实符号调用、两端 CoreBridge 归档测试和文件正文实现变更必须跑真实 UI 接收 E2E 的要求。
+- 剩余项更新：文件 offer 消息和 zip 正文归档都已迁入 Rust FFI；TCP 文件归档服务/下载 socket、UDP bind/send/receive 接入原生壳和 Windows 单 exe 封装仍需继续。
+
 ---
 
 ## 自查清单

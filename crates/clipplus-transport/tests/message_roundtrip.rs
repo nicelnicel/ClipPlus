@@ -1,10 +1,14 @@
-use clipplus_transport::file_transfer::{FileTransferError, FileTransferRequest, TransferState};
+use clipplus_transport::file_transfer::{
+    FileTransferArchive, FileTransferError, FileTransferRequest, TransferState,
+};
 use clipplus_transport::message::{
     NativeClipboardMessage, NativeClipboardMessageError, NativeClipboardMessageKind,
     NativeFileTransferItem, TransportMessage, TransportMessageError, TransportMessageKind,
 };
 use clipplus_transport::session::{HandshakeState, PeerSession, SessionError};
 use serde_json::json;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn transport_message_roundtrips_json() {
@@ -500,4 +504,78 @@ fn file_transfer_request_trims_transfer_id_on_new() {
 
     assert_eq!(request.transfer_id, "transfer-a");
     assert_eq!(request.state, TransferState::Available);
+}
+
+#[test]
+fn file_transfer_archive_writes_zip_entries_for_files_and_directories() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let nested_directory = source_directory.join("Nested");
+    std::fs::create_dir_all(&nested_directory).unwrap();
+    std::fs::write(source_directory.join("a.txt"), "alpha").unwrap();
+    std::fs::write(nested_directory.join("b.txt"), "beta").unwrap();
+    let archive_path = temporary_directory.join("files.zip");
+
+    let summary = FileTransferArchive::write_zip(
+        &[source_directory.join("a.txt"), nested_directory.clone()],
+        &archive_path,
+    )
+    .unwrap();
+
+    let entries = read_zip_entries(&archive_path);
+    assert_eq!(summary.file_count, 2);
+    assert!(summary.byte_count > 0);
+    assert_eq!(
+        entries,
+        vec![
+            ("Nested/b.txt".to_string(), "beta".to_string()),
+            ("a.txt".to_string(), "alpha".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn file_transfer_archive_rejects_empty_sources_and_missing_parent() {
+    let temporary_directory = unique_temp_dir();
+    let missing_parent_archive = temporary_directory.join("missing").join("files.zip");
+
+    let empty_sources = FileTransferArchive::write_zip(&[], &temporary_directory.join("empty.zip"));
+    let missing_parent = FileTransferArchive::write_zip(
+        &[temporary_directory.join("source.txt")],
+        &missing_parent_archive,
+    );
+
+    assert!(matches!(
+        empty_sources,
+        Err(FileTransferError::InvalidField("source_paths"))
+    ));
+    assert!(matches!(
+        missing_parent,
+        Err(FileTransferError::InvalidField("archive_parent"))
+    ));
+}
+
+fn unique_temp_dir() -> PathBuf {
+    let path = std::env::temp_dir().join(format!("clipplus-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn read_zip_entries(path: &Path) -> Vec<(String, String)> {
+    let file = std::fs::File::open(path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut entries = Vec::new();
+
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).unwrap();
+        if file.is_dir() {
+            continue;
+        }
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        entries.push((file.name().to_string(), contents));
+    }
+
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
 }

@@ -68,6 +68,10 @@ struct CoreBridge {
         )
     }
 
+    func writeFileArchiveZip(sourcePaths: [String], archivePath: String) -> Bool {
+        Self.ffiBridge?.writeFileArchiveZip(sourcePaths: sourcePaths, archivePath: archivePath) ?? false
+    }
+
     func createTrustMessageJSON(
         groupId: String,
         senderDeviceId: String,
@@ -113,6 +117,10 @@ private final class ClipPlusFFIBridge {
         UnsafePointer<CChar>?,
         UInt16
     ) -> UnsafeMutablePointer<CChar>?
+    private typealias WriteFileArchiveZipFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> Bool
     private typealias FreeStringFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let handle: UnsafeMutableRawPointer
@@ -121,6 +129,7 @@ private final class ClipPlusFFIBridge {
     private let createTextMessageJSONFunction: CreateTextMessageJSONFunction
     private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
     private let createFileOfferMessageJSONFunction: CreateFileOfferMessageJSONFunction
+    private let writeFileArchiveZipFunction: WriteFileArchiveZipFunction
     private let createTrustMessageJSONFunction: CreateTextMessageJSONFunction
     private let freeStringFunction: FreeStringFunction
 
@@ -131,6 +140,7 @@ private final class ClipPlusFFIBridge {
         createTextMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
         createFileOfferMessageJSONFunction: @escaping CreateFileOfferMessageJSONFunction,
+        writeFileArchiveZipFunction: @escaping WriteFileArchiveZipFunction,
         createTrustMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         freeStringFunction: @escaping FreeStringFunction
     ) {
@@ -140,6 +150,7 @@ private final class ClipPlusFFIBridge {
         self.createTextMessageJSONFunction = createTextMessageJSONFunction
         self.createImageMessageJSONFunction = createImageMessageJSONFunction
         self.createFileOfferMessageJSONFunction = createFileOfferMessageJSONFunction
+        self.writeFileArchiveZipFunction = writeFileArchiveZipFunction
         self.createTrustMessageJSONFunction = createTrustMessageJSONFunction
         self.freeStringFunction = freeStringFunction
     }
@@ -160,6 +171,7 @@ private final class ClipPlusFFIBridge {
                   let createTextMessageJSONSymbol = dlsym(handle, "clipplus_create_text_message_json"),
                   let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
                   let createFileOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_file_offer_message_json"),
+                  let writeFileArchiveZipSymbol = dlsym(handle, "clipplus_write_file_archive_zip"),
                   let createTrustMessageJSONSymbol = dlsym(handle, "clipplus_create_trust_message_json"),
                   let freeSymbol = dlsym(handle, "clipplus_free_string") else {
                 dlclose(handle)
@@ -183,6 +195,10 @@ private final class ClipPlusFFIBridge {
                 createFileOfferMessageJSONSymbol,
                 to: CreateFileOfferMessageJSONFunction.self
             )
+            let writeFileArchiveZipFunction = unsafeBitCast(
+                writeFileArchiveZipSymbol,
+                to: WriteFileArchiveZipFunction.self
+            )
             let createTrustMessageJSONFunction = unsafeBitCast(
                 createTrustMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
@@ -195,6 +211,7 @@ private final class ClipPlusFFIBridge {
                 createTextMessageJSONFunction: createTextMessageJSONFunction,
                 createImageMessageJSONFunction: createImageMessageJSONFunction,
                 createFileOfferMessageJSONFunction: createFileOfferMessageJSONFunction,
+                writeFileArchiveZipFunction: writeFileArchiveZipFunction,
                 createTrustMessageJSONFunction: createTrustMessageJSONFunction,
                 freeStringFunction: freeStringFunction
             )
@@ -344,6 +361,19 @@ private final class ClipPlusFFIBridge {
         defer { freeStringFunction(resultPointer) }
 
         return String(cString: resultPointer)
+    }
+
+    func writeFileArchiveZip(sourcePaths: [String], archivePath: String) -> Bool {
+        guard let sourcePathsData = try? JSONEncoder().encode(sourcePaths),
+              let sourcePathsJSON = String(data: sourcePathsData, encoding: .utf8) else {
+            return false
+        }
+
+        return sourcePathsJSON.withCString { sourcePathsPointer in
+            archivePath.withCString { archivePathPointer in
+                writeFileArchiveZipFunction(sourcePathsPointer, archivePathPointer)
+            }
+        }
     }
 
     func createTrustMessageJSON(

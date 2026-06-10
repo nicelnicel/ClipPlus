@@ -1,10 +1,12 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::panic;
+use std::path::Path;
 use std::ptr;
 
 use clipplus_crypto::key::SharedKeyMaterial;
 use clipplus_diagnostics::status::RuntimeStatus;
+use clipplus_transport::file_transfer::FileTransferArchive;
 use clipplus_transport::message::{NativeClipboardMessage, NativeFileTransferItem};
 
 use crate::types::{free_c_string, string_to_c_ptr};
@@ -218,6 +220,36 @@ pub unsafe extern "C" fn clipplus_create_file_offer_message_json(
         .map_or(ptr::null_mut(), string_to_c_ptr)
     })
     .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+/// Writes a zip archive for file-transfer payloads using Rust transport logic.
+///
+/// # Safety
+///
+/// `source_paths_json` must be a non-null valid NUL-terminated UTF-8 C string
+/// containing a JSON array of local source path strings. `archive_path` must be
+/// a non-null valid NUL-terminated UTF-8 C string. The function returns false
+/// for invalid inputs or IO/zip failures and does not expose paths in errors.
+pub unsafe extern "C" fn clipplus_write_file_archive_zip(
+    source_paths_json: *const c_char,
+    archive_path: *const c_char,
+) -> bool {
+    panic::catch_unwind(|| {
+        let Some(source_paths_json) = ffi_string(source_paths_json) else {
+            return false;
+        };
+        let Some(archive_path) = ffi_string(archive_path) else {
+            return false;
+        };
+        let Ok(source_paths) = serde_json::from_str::<Vec<String>>(&source_paths_json) else {
+            return false;
+        };
+        let source_paths = source_paths.into_iter().map(Into::into).collect::<Vec<_>>();
+
+        FileTransferArchive::write_zip(&source_paths, Path::new(&archive_path)).is_ok()
+    })
+    .unwrap_or(false)
 }
 
 #[no_mangle]

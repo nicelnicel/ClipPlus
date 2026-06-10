@@ -1,11 +1,13 @@
 use std::ffi::{CStr, CString};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use clipplus_ffi::api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
     clipplus_create_image_message_json, clipplus_create_text_message_json,
     clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_free_string,
-    clipplus_get_status_json,
+    clipplus_get_status_json, clipplus_write_file_archive_zip,
 };
 use clipplus_ffi::{
     clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
@@ -16,6 +18,7 @@ use clipplus_ffi::{
     clipplus_derive_group_id as reexported_derive_group_id,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
+    clipplus_write_file_archive_zip as reexported_write_file_archive_zip,
 };
 use serde_json::Value;
 
@@ -445,4 +448,96 @@ fn ffi_create_file_offer_message_json_rejects_invalid_values() {
         )
     }
     .is_null());
+}
+
+#[test]
+fn ffi_writes_file_archive_zip_for_native_shells() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let nested_directory = source_directory.join("Nested");
+    std::fs::create_dir_all(&nested_directory).unwrap();
+    std::fs::write(source_directory.join("a.txt"), "alpha").unwrap();
+    std::fs::write(nested_directory.join("b.txt"), "beta").unwrap();
+    let archive_path = temporary_directory.join("files.zip");
+    let source_paths_json = CString::new(format!(
+        r#"["{}","{}"]"#,
+        json_escape_path(&source_directory.join("a.txt")),
+        json_escape_path(&nested_directory)
+    ))
+    .unwrap();
+    let archive_path = CString::new(archive_path.to_string_lossy().to_string()).unwrap();
+
+    let written = unsafe {
+        clipplus_write_file_archive_zip(source_paths_json.as_ptr(), archive_path.as_ptr())
+    };
+
+    assert!(written);
+    assert_eq!(
+        read_zip_entries(Path::new(archive_path.to_str().unwrap())),
+        vec![
+            ("Nested/b.txt".to_string(), "beta".to_string()),
+            ("a.txt".to_string(), "alpha".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn ffi_write_file_archive_zip_rejects_invalid_values() {
+    let temporary_directory = unique_temp_dir();
+    let archive_path = CString::new(
+        temporary_directory
+            .join("files.zip")
+            .to_string_lossy()
+            .to_string(),
+    )
+    .unwrap();
+    let empty_sources = CString::new("[]").unwrap();
+    let invalid_sources = CString::new("not-json").unwrap();
+
+    assert!(!unsafe { reexported_write_file_archive_zip(ptr::null(), archive_path.as_ptr()) });
+    assert!(!unsafe {
+        reexported_write_file_archive_zip(empty_sources.as_ptr(), archive_path.as_ptr())
+    });
+    assert!(!unsafe {
+        reexported_write_file_archive_zip(invalid_sources.as_ptr(), archive_path.as_ptr())
+    });
+    assert!(!unsafe { reexported_write_file_archive_zip(empty_sources.as_ptr(), ptr::null()) });
+}
+
+fn unique_temp_dir() -> PathBuf {
+    let path = std::env::temp_dir().join(format!("clipplus-ffi-{}", std::process::id()));
+    let path = path.join(format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn json_escape_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+fn read_zip_entries(path: &Path) -> Vec<(String, String)> {
+    let file = std::fs::File::open(path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut entries = Vec::new();
+
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).unwrap();
+        if file.is_dir() {
+            continue;
+        }
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        entries.push((file.name().to_string(), contents));
+    }
+
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
 }

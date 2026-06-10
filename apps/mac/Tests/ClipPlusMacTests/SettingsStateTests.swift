@@ -381,6 +381,35 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(b, "beta")
     }
 
+    func testCoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceDirectory = temporaryDirectory.appendingPathComponent("source", isDirectory: true)
+        let nestedDirectory = sourceDirectory.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedDirectory, withIntermediateDirectories: true)
+        try "alpha".write(to: sourceDirectory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "beta".write(to: nestedDirectory.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+
+        let archiveURL = temporaryDirectory.appendingPathComponent("core-files.zip")
+        XCTAssertTrue(CoreBridge().writeFileArchiveZip(
+            sourcePaths: [sourceDirectory.appendingPathComponent("a.txt").path, nestedDirectory.path],
+            archivePath: archiveURL.path
+        ))
+
+        let extractedDirectory = temporaryDirectory.appendingPathComponent("core-unzipped", isDirectory: true)
+        try FileManager.default.createDirectory(at: extractedDirectory, withIntermediateDirectories: true)
+        try unzip(archiveURL, to: extractedDirectory)
+
+        XCTAssertEqual(
+            try String(contentsOf: extractedDirectory.appendingPathComponent("a.txt"), encoding: .utf8),
+            "alpha"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: extractedDirectory.appendingPathComponent("Nested/b.txt"), encoding: .utf8),
+            "beta"
+        )
+    }
+
     func testClipPlusMessageRejectsOversizedInlineImagePayload() {
         let pngData = Data(repeating: 0xFF, count: ClipPlusMessage.maxInlineImageBytes + 1)
 

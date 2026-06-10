@@ -434,6 +434,29 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var sourceDirectory = Path.Combine(temporaryDirectory, "source");
+        var nestedDirectory = Path.Combine(sourceDirectory, "Nested");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "a.txt"), "alpha");
+        File.WriteAllText(Path.Combine(nestedDirectory, "b.txt"), "beta");
+        var archivePath = Path.Combine(temporaryDirectory, "core-files.zip");
+
+        Assert.True(new ClipPlus.Windows.CoreBridge.CoreBridge().WriteFileArchiveZip(
+            new[] { Path.Combine(sourceDirectory, "a.txt"), nestedDirectory },
+            archivePath
+        ));
+
+        var extractedDirectory = Path.Combine(temporaryDirectory, "core-unzipped");
+        ZipFile.ExtractToDirectory(archivePath, extractedDirectory);
+
+        Assert.Equal("alpha", File.ReadAllText(Path.Combine(extractedDirectory, "a.txt")));
+        Assert.Equal("beta", File.ReadAllText(Path.Combine(extractedDirectory, "Nested", "b.txt")));
+    }
+
+    [Fact]
     public void ClipPlusMessageRejectsOversizedInlineImagePayload()
     {
         var pngData = Enumerable.Repeat((byte)0xFF, ClipPlus.Windows.Sync.ClipPlusMessage.MaxInlineImageBytes + 1)

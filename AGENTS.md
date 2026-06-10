@@ -99,6 +99,7 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/
 - 共享 Key、组 ID、Rust FFI、Swift/C# CoreBridge 相关改动必须额外做 FFI 真实调用验证；Swift/C# 不允许静默 fallback 到旧 SHA-256 派生：
   - Rust golden vector 必须确认 `clipplus-test-key` 派生为 `21YR2N3_wcdRPmEMLiuLMA`。
   - hello/text/trust/image/fileOffer 消息运行时迁入 Rust FFI 后，必须验证 `clipplus_create_hello_message_json`、`clipplus_create_text_message_json`、`clipplus_create_trust_message_json`、`clipplus_create_image_message_json`、`clipplus_create_file_offer_message_json` 真实调用；macOS 测试名包含 `testCoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable`。
+  - 文件归档正文写入迁入 Rust FFI 后，必须验证 `clipplus_write_file_archive_zip` 真实调用；macOS 测试名包含 `testCoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable`。
   - macOS Swift 测试必须使用真实 `libclipplus_ffi.dylib`；常规入口是 `./scripts/dev/check.sh`。
   - macOS App 默认加载验证使用 `./scripts/dev/build-mac-app.sh`，该脚本会把 dylib 放到 SwiftPM 可执行文件旁并运行 smoke test。
   - Windows `.NET` 构建会通过 `apps/windows/Directory.Build.targets` 生成并复制 `clipplus_ffi.dll` 到 App/Test 输出目录；Windows 测试必须在不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时也能通过 bundled DLL 测试。
@@ -115,7 +116,7 @@ cd /Users/cc/proj/ClipPlus
 Windows FFI 验证命令：
 
 ```bash
-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter '\''CoreBridgeDerivesGroupIdFromBundledFfiLibrary|CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable'\''"'
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter '\''CoreBridgeDerivesGroupIdFromBundledFfiLibrary|CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable'\''"'
 ```
 
 - 在 Parallels Windows VM 内构建 Rust crate 时，必须设置 `CARGO_TARGET_DIR` 到 Windows 本机目录（例如 `$env:TEMP/ClipPlusRustTarget`），不要使用 `C:\Mac\Home\proj\ClipPlus\target`；共享目录上 Cargo/MSVC 可能出现临时目录删除失败或文件锁异常。
@@ -127,6 +128,7 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/
   - 接收端 `Downloads` 下生成 `ClipPlus-Received-<transferId>.zip`。
   - 解压后文件名和内容与源文件一致。
   - 日志出现 `downloaded file archive`，且不包含源机器本地绝对路径。
+  - 如果本次改动涉及文件正文归档/下载实现，必须确认 `served file archive` 和 `downloaded file archive` 来自新实现路径，并在计划中记录归档文件 byte_count。
 - 图片同步验收至少验证真实跨系统方向；涉及防回环、图片 hash 或平台剪贴板写入逻辑时，必须覆盖 macOS -> Windows 和 Windows -> macOS 两个方向。
 - 当前图片 MVP 只支持 32 KiB 以内的 inline PNG；超过限制的图片后续应走文件传输或新的大对象通道。测试文档和计划必须明确这个限制。
 - 图片端到端日志至少检查 `published image clipboard`、`received image clipboard`，并确认日志不包含共享 Key、测试图片文件名或本地绝对路径。
