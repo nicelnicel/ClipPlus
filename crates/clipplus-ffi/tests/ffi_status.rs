@@ -1,8 +1,9 @@
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::ptr;
 
-use clipplus_ffi::api::{clipplus_free_string, clipplus_get_status_json};
+use clipplus_ffi::api::{clipplus_derive_group_id, clipplus_free_string, clipplus_get_status_json};
 use clipplus_ffi::{
+    clipplus_derive_group_id as reexported_derive_group_id,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
 };
@@ -14,6 +15,14 @@ unsafe fn take_status_json(ptr: *mut std::ffi::c_char) -> String {
     let json = unsafe { CStr::from_ptr(ptr).to_string_lossy().to_string() };
     unsafe { reexported_free_string(ptr) };
     json
+}
+
+unsafe fn take_ffi_string(ptr: *mut std::ffi::c_char) -> String {
+    assert!(!ptr.is_null());
+
+    let value = unsafe { CStr::from_ptr(ptr).to_string_lossy().to_string() };
+    unsafe { reexported_free_string(ptr) };
+    value
 }
 
 #[test]
@@ -51,4 +60,31 @@ fn ffi_status_json_is_available_from_lib_reexport() {
     let json = unsafe { take_status_json(ptr) };
 
     assert!(json.contains("core_version"));
+}
+
+#[test]
+fn ffi_derives_shared_key_group_id() {
+    let raw_key = CString::new("friend-lan-key").unwrap();
+    let ptr = unsafe { clipplus_derive_group_id(raw_key.as_ptr()) };
+    let group_id = unsafe { take_ffi_string(ptr) };
+
+    assert_eq!(group_id, "6OPi4Ya2nYZkISrKO0RGzQ");
+    assert_ne!(group_id, "friend-lan-key");
+}
+
+#[test]
+fn ffi_derives_group_id_from_reexport() {
+    let raw_key = CString::new(" friend-lan-key ").unwrap();
+    let ptr = unsafe { reexported_derive_group_id(raw_key.as_ptr()) };
+    let group_id = unsafe { take_ffi_string(ptr) };
+
+    assert_eq!(group_id, "6OPi4Ya2nYZkISrKO0RGzQ");
+}
+
+#[test]
+fn ffi_derive_group_id_rejects_null_and_empty_keys() {
+    let empty_key = CString::new("   ").unwrap();
+
+    assert!(unsafe { clipplus_derive_group_id(ptr::null()) }.is_null());
+    assert!(unsafe { clipplus_derive_group_id(empty_key.as_ptr()) }.is_null());
 }

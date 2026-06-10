@@ -3507,6 +3507,13 @@ git commit -m "test: add parallels e2e checklist"
 - 验证结果：该真实注册表测试通过 1/1；随后显式读取 `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run` 下 `ClipPlus` 值，结果为 `ClipPlus Run entry absent`，确认测试未遗留开机启动项。
 - 剩余项更新：Windows 开机启动已有真实系统写入/读回/清理验证；macOS Login Item 仍需在合适签名/打包形态下做真实系统读回复验。文本/图片/文件运行时仍需迁入 Rust core/FFI。
 
+**2026-06-10 Rust FFI 共享 Key 派生入口复验：**
+
+- 实现范围：`clipplus-ffi` 新增 `clipplus_derive_group_id(raw_key)`，使用 `clipplus-crypto::SharedKeyMaterial::derive` 统一 Argon2 + BLAKE3 派生逻辑；null、空 Key、非 UTF-8 或派生失败返回 null，成功时返回需由 `clipplus_free_string` 释放的 C string。
+- 验证：`cargo test -p clipplus-ffi` 通过 8/8，覆盖直接导出、lib re-export、空/null 输入拒绝，以及 `friend-lan-key` 派生为 `6OPi4Ya2nYZkISrKO0RGzQ`。
+- 意义：这一步把 Rust core 的共享 Key 派生能力暴露到 FFI，后续 Swift/C# 应切到该入口，替换当前原生壳内 SHA-256 派生，消除长期协议分叉。
+- 限制：Swift/C# 尚未链接并调用该 FFI；UDP 文本/图片/文件运行时仍在原生壳中，尚未迁入 Rust core/transport。
+
 ---
 
 ## 自查清单

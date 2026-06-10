@@ -263,6 +263,7 @@ name = "clipplus-ffi"
 version = "0.1.0"
 dependencies = [
  "clipplus-core",
+ "clipplus-crypto",
  "clipplus-diagnostics",
  "serde",
  "serde_json",

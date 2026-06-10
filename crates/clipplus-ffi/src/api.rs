@@ -1,7 +1,9 @@
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::panic;
 use std::ptr;
 
+use clipplus_crypto::key::SharedKeyMaterial;
 use clipplus_diagnostics::status::RuntimeStatus;
 
 use crate::types::{free_c_string, string_to_c_ptr};
@@ -23,6 +25,34 @@ pub unsafe extern "C" fn clipplus_get_status_json() -> *mut c_char {
         let json = serde_json::to_string(&status).expect("runtime status should serialize to JSON");
 
         string_to_c_ptr(json)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+/// Derives the stable group identifier for a shared Key.
+///
+/// # Safety
+///
+/// `raw_key` must be null or point to a valid NUL-terminated C string. A null,
+/// non-UTF-8, empty, or KDF-failing input returns null. The returned non-null
+/// pointer follows the same ownership rules as [`clipplus_get_status_json`] and
+/// must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_derive_group_id(raw_key: *const c_char) -> *mut c_char {
+    panic::catch_unwind(|| {
+        if raw_key.is_null() {
+            return ptr::null_mut();
+        }
+
+        let raw_key = unsafe { CStr::from_ptr(raw_key) };
+        let Ok(raw_key) = raw_key.to_str() else {
+            return ptr::null_mut();
+        };
+
+        match SharedKeyMaterial::derive(raw_key) {
+            Ok(material) => string_to_c_ptr(material.group_id),
+            Err(_) => ptr::null_mut(),
+        }
     })
     .unwrap_or(ptr::null_mut())
 }
