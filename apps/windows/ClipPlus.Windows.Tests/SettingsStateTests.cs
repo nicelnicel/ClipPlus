@@ -1,5 +1,6 @@
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
+using ClipPlus.Windows.Diagnostics;
 using Xunit;
 
 namespace ClipPlus.Windows.Tests;
@@ -137,6 +138,38 @@ public sealed class SettingsStateTests
 
         Assert.Equal("ClipPlus", store.DeletedName);
         Assert.Null(store.Value);
+    }
+
+    [Fact]
+    public void DiagnosticsExporterWritesRedactedStatusAndLog()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        var logPath = Path.Combine(directory, "clipplus.log");
+        File.WriteAllText(logPath, "raw key clipplus-test-key clipboard secret-value");
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+        state.UpdateSharedKey("another-key", "another-key");
+        state.MarkPeerPending("mac-device", "Mac");
+        var exporter = new DiagnosticsExporter(
+            logPath,
+            directory,
+            new[] { "clipplus-test-key", "secret-value" }
+        );
+
+        var exportDirectory = exporter.Export(state);
+        var status = File.ReadAllText(Path.Combine(exportDirectory, "status.json"));
+        var log = File.ReadAllText(Path.Combine(exportDirectory, "clipplus.log"));
+
+        Assert.Contains("shared_key_configured", status);
+        Assert.Contains("pending_peer_count", status);
+        Assert.DoesNotContain("clipplus-test-key", status);
+        Assert.DoesNotContain("clipplus-test-key", log);
+        Assert.DoesNotContain("secret-value", log);
+        Assert.Contains("<redacted>", log);
     }
 }
 

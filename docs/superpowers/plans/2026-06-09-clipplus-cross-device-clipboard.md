@@ -3452,7 +3452,14 @@ git commit -m "test: add parallels e2e checklist"
 - Windows -> Mac 文本同步：Windows VM 写入系统剪贴板 `clipplus-windows-to-mac-20260610-095058`，4 秒后 macOS `pbpaste` 返回同一字符串。
 - 日志检查：macOS 和 Windows 日志均记录 `published text clipboard`、`received text clipboard` 和 `peer hello`；用 `rg`/`Select-String` 检查日志未发现 `clipplus-test-key` 明文。
 - 架构偏差：本次为打通可运行闭环，文本同步运行时暂时落在 macOS/Windows 原生壳内；后续仍需迁入 Rust core/FFI，避免长期维护两套协议实现。
-- 仍未完成项：图片同步、文件按需传输、真实 UI 手动设备确认、诊断包导出内容检查、开机启动真实系统写入仍未完成端到端验证。
+
+**2026-06-10 开机启动与诊断导出复验：**
+
+- 测试基础：Windows VM 已安装 OpenSSH Server，macOS 默认 SSH key 可直接登录 `ssh Administrator@10.211.55.3`；后续 Windows 测试优先通过 SSH 执行，避免依赖 Parallels UI。
+- 开机启动：macOS 端接入 `SMAppService.mainApp`；Windows 端接入 HKCU `Software\Microsoft\Windows\CurrentVersion\Run`。单元测试使用可替换服务/注册表存储验证启用、禁用和状态读取逻辑。
+- 诊断导出：macOS 和 Windows 设置页按钮已能导出 `status.json` 与脱敏后的 `clipplus.log` 到 Downloads 下的 `ClipPlus-Diagnostics-*` 目录。测试覆盖状态字段输出和 `clipplus-test-key`、剪贴板敏感文本脱敏。
+- 验证：`./scripts/dev/check.sh` 通过；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 10/10。
+- 仍未完成项：图片同步、文件按需传输、真实 UI 手动设备确认、开机启动真实系统写入开关的人工验证、诊断目录打包为 zip、文本同步运行时迁入 Rust core/FFI。
 
 ---
 

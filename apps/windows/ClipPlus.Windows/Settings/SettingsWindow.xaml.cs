@@ -1,4 +1,6 @@
+using System.IO;
 using System.Windows;
+using ClipPlus.Windows.Diagnostics;
 
 namespace ClipPlus.Windows.Settings;
 
@@ -34,5 +36,26 @@ public partial class SettingsWindow : Window
     private void ApprovePendingPeers_Click(object sender, RoutedEventArgs e)
     {
         state.ApprovePendingPeers();
+    }
+
+    private void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        var sensitiveValues = new[]
+        {
+            Environment.GetEnvironmentVariable("CLIPPLUS_SHARED_KEY") ?? string.Empty
+        };
+        var exportDirectory = new DiagnosticsExporter(
+            ClipPlusLogger.DefaultLogPath,
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
+            sensitiveValues
+        ).Export(state);
+
+        System.Windows.MessageBox.Show(
+            this,
+            $"已导出：{exportDirectory}",
+            "ClipPlus",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information
+        );
     }
 }

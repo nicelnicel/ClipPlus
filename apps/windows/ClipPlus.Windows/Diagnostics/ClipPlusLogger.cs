@@ -4,18 +4,22 @@ namespace ClipPlus.Windows.Diagnostics;
 
 public sealed class ClipPlusLogger
 {
+    public static string DefaultLogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ClipPlus",
+        "logs",
+        "clipplus.log"
+    );
+
     private readonly string logPath;
     private readonly object gate = new();
 
     public ClipPlusLogger()
     {
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ClipPlus",
-            "logs"
-        );
+        var directory = Path.GetDirectoryName(DefaultLogPath)
+            ?? throw new InvalidOperationException("无法定位 ClipPlus 日志目录");
         Directory.CreateDirectory(directory);
-        logPath = Path.Combine(directory, "clipplus.log");
+        logPath = DefaultLogPath;
     }
 
     public void Info(string message)

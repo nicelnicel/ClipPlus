@@ -17,6 +17,6 @@
         <Button Content="允许全部待确认设备" Width="160" HorizontalAlignment="Left" Click="ApprovePendingPeers_Click" />
         <TextBlock Text="系统" FontWeight="Bold" Margin="0,16,0,0" />
         <CheckBox Content="开机自动启动" IsChecked="{Binding StartupEnabled}" />
-        <Button Content="导出诊断包" Width="120" HorizontalAlignment="Left" />
+        <Button Content="导出诊断包" Width="120" HorizontalAlignment="Left" Click="ExportDiagnostics_Click" />
     </StackPanel>
 </Window>

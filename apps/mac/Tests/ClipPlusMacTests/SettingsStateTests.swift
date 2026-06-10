@@ -114,6 +114,43 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(service.requests, [true, false])
         XCTAssertFalse(manager.isEnabled())
     }
+
+    func testDiagnosticsExporterWritesRedactedStatusAndLog() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let logURL = temporaryDirectory.appendingPathComponent("clipplus.log")
+        try "raw key clipplus-test-key clipboard secret-value".write(to: logURL, atomically: true, encoding: .utf8)
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false,
+            sharedGroupId: "group-id"
+        )
+        state.markPeerPending(deviceId: "windows-device", deviceName: "Windows")
+        let exporter = DiagnosticsExporter(
+            logURL: logURL,
+            destinationDirectory: temporaryDirectory,
+            sensitiveValues: ["clipplus-test-key", "secret-value"]
+        )
+
+        let exportURL = try exporter.export(state: state)
+        let status = try String(
+            contentsOf: exportURL.appendingPathComponent("status.json"),
+            encoding: .utf8
+        )
+        let log = try String(
+            contentsOf: exportURL.appendingPathComponent("clipplus.log"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(status.contains("\"shared_key_configured\""))
+        XCTAssertTrue(status.contains("\"pending_peer_count\""))
+        XCTAssertFalse(status.contains("clipplus-test-key"))
+        XCTAssertFalse(log.contains("clipplus-test-key"))
+        XCTAssertFalse(log.contains("secret-value"))
+        XCTAssertTrue(log.contains("<redacted>"))
+    }
 }
 
 private final class FakeLoginItemService: LoginItemService {

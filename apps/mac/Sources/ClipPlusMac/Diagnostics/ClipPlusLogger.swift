@@ -1,15 +1,17 @@
 import Foundation
 
 struct ClipPlusLogger {
-    private let logURL: URL
+    static let defaultLogURL = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/ClipPlus/clipplus.log")
+
+    let logURL: URL
     private let queue = DispatchQueue(label: "clipplus.mac.logger")
 
     init() {
-        let directory = FileManager.default
-            .homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/ClipPlus", isDirectory: true)
+        let directory = Self.defaultLogURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        logURL = directory.appendingPathComponent("clipplus.log")
+        logURL = Self.defaultLogURL
     }
 
     func info(_ message: String) {

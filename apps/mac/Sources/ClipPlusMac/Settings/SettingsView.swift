@@ -109,6 +109,7 @@ final class SettingsState: ObservableObject, Equatable {
 struct SettingsView: View {
     @ObservedObject var state: SettingsState
     @State private var keyErrorMessage: String?
+    @State private var diagnosticsMessage: String?
 
     var body: some View {
         Form {
@@ -155,7 +156,14 @@ struct SettingsView: View {
             Section("系统") {
                 Toggle("开机自动启动", isOn: $state.startupEnabled)
 
-                Button("导出诊断包") {}
+                Button("导出诊断包") {
+                    exportDiagnostics()
+                }
+
+                if let diagnosticsMessage {
+                    Text(diagnosticsMessage)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
@@ -171,6 +179,19 @@ struct SettingsView: View {
         } else {
             Text("未设置")
                 .foregroundStyle(.red)
+        }
+    }
+
+    private func exportDiagnostics() {
+        let sensitiveValues = [
+            ProcessInfo.processInfo.environment["CLIPPLUS_SHARED_KEY"]
+        ].compactMap { $0 }
+
+        do {
+            let exportURL = try DiagnosticsExporter(sensitiveValues: sensitiveValues).export(state: state)
+            diagnosticsMessage = "已导出：\(exportURL.path)"
+        } catch {
+            diagnosticsMessage = "诊断包导出失败"
         }
     }
 }
