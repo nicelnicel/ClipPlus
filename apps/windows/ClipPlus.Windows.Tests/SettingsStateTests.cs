@@ -104,6 +104,47 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void ClipPlusMessageRoundTripsInlinePngImagePayload()
+    {
+        var pngData = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var message = ClipPlus.Windows.Sync.ClipPlusMessage.CreateImage(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            pngData: pngData
+        );
+
+        Assert.NotNull(message);
+        var json = message.ToJson();
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Image, decoded.Kind);
+        Assert.Equal(1, decoded.ProtocolVersion);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal(pngData.Length, decoded.ImageByteSize);
+        Assert.Equal(Convert.ToBase64String(pngData), decoded.ImageBase64);
+        Assert.Equal(pngData, decoded.DecodedImageData);
+        Assert.False(string.IsNullOrEmpty(decoded.ImageContentHash));
+    }
+
+    [Fact]
+    public void ClipPlusMessageRejectsOversizedInlineImagePayload()
+    {
+        var pngData = Enumerable.Repeat((byte)0xFF, ClipPlus.Windows.Sync.ClipPlusMessage.MaxInlineImageBytes + 1)
+            .ToArray();
+
+        var message = ClipPlus.Windows.Sync.ClipPlusMessage.CreateImage(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            pngData: pngData
+        );
+
+        Assert.Null(message);
+    }
+
+    [Fact]
     public void StartupManagerReportsEnabledWhenRunEntryMatchesExecutable()
     {
         var store = new FakeStartupEntryStore();

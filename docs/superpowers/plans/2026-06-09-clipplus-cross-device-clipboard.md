@@ -3453,13 +3453,21 @@ git commit -m "test: add parallels e2e checklist"
 - 日志检查：macOS 和 Windows 日志均记录 `published text clipboard`、`received text clipboard` 和 `peer hello`；用 `rg`/`Select-String` 检查日志未发现 `clipplus-test-key` 明文。
 - 架构偏差：本次为打通可运行闭环，文本同步运行时暂时落在 macOS/Windows 原生壳内；后续仍需迁入 Rust core/FFI，避免长期维护两套协议实现。
 
+**2026-06-10 图片同步 MVP 复验：**
+
+- 实现范围：macOS 和 Windows 原生壳均支持 `image` 消息，使用 inline PNG + base64 + SHA-256 hash；原始 PNG 上限为 `32 KiB`，超过上限不发送，避免当前 UDP 单包模型在虚拟网络下过度分片。
+- Mac -> Windows 图片同步：macOS 系统剪贴板写入 `target/test-assets/clipplus-one.png`，Windows VM 通过 WPF Clipboard 读取到 `WINDOWS_IMAGE=1x1`。
+- Windows -> Mac 图片同步：Windows VM 写入 `target/test-assets/clipplus-two.png`，macOS 通过 `NSPasteboard` 读取到 `MAC_IMAGE=4x2`。该 PNG 由 AppKit 生成，因 backing scale 实际像素为 4x2。
+- 日志检查：macOS 日志记录 `published image clipboard` 和 `received image clipboard`；Windows 日志记录 `received image clipboard` 和 `published image clipboard`。
+- 限制：图片 MVP 仍走原生壳内 UDP 单包同步，未实现分片、重传或 TCP 图片正文传输。
+
 **2026-06-10 开机启动与诊断导出复验：**
 
 - 测试基础：Windows VM 已安装 OpenSSH Server，macOS 默认 SSH key 可直接登录 `ssh Administrator@10.211.55.3`；后续 Windows 测试优先通过 SSH 执行，避免依赖 Parallels UI。
 - 开机启动：macOS 端接入 `SMAppService.mainApp`；Windows 端接入 HKCU `Software\Microsoft\Windows\CurrentVersion\Run`。单元测试使用可替换服务/注册表存储验证启用、禁用和状态读取逻辑。
 - 诊断导出：macOS 和 Windows 设置页按钮已能导出 `status.json` 与脱敏后的 `clipplus.log` 到 Downloads 下的 `ClipPlus-Diagnostics-*` 目录。测试覆盖状态字段输出和 `clipplus-test-key`、剪贴板敏感文本脱敏。
-- 验证：`./scripts/dev/check.sh` 通过；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 10/10。
-- 仍未完成项：图片同步、文件按需传输、真实 UI 手动设备确认、开机启动真实系统写入开关的人工验证、诊断目录打包为 zip、文本同步运行时迁入 Rust core/FFI。
+- 验证：`./scripts/dev/check.sh` 通过；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 12/12。
+- 仍未完成项：文件按需传输、真实 UI 手动设备确认、开机启动真实系统写入开关的人工验证、诊断目录打包为 zip、文本/图片同步运行时迁入 Rust core/FFI。
 
 ---
 

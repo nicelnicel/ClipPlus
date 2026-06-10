@@ -97,6 +97,41 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.text, "hello from mac")
     }
 
+    func testClipPlusMessageRoundTripsInlinePngImagePayload() throws {
+        let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let message = try XCTUnwrap(ClipPlusMessage.image(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            pngData: pngData
+        ))
+
+        let data = try JSONEncoder().encode(message)
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .image)
+        XCTAssertEqual(decoded.protocolVersion, 1)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.imageByteSize, pngData.count)
+        XCTAssertEqual(decoded.imageBase64, pngData.base64EncodedString())
+        XCTAssertEqual(decoded.decodedImageData, pngData)
+        XCTAssertFalse(decoded.imageContentHash?.isEmpty ?? true)
+    }
+
+    func testClipPlusMessageRejectsOversizedInlineImagePayload() {
+        let pngData = Data(repeating: 0xFF, count: ClipPlusMessage.maxInlineImageBytes + 1)
+
+        let message = ClipPlusMessage.image(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            pngData: pngData
+        )
+
+        XCTAssertNil(message)
+    }
+
     func testLoginItemManagerReportsServiceState() {
         let service = FakeLoginItemService(enabled: true)
         let manager = LoginItemManager(service: service)

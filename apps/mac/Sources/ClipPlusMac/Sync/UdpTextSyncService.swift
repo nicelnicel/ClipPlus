@@ -18,6 +18,8 @@ final class UdpTextSyncService {
     private var timer: Timer?
     private var lastLocalText: String?
     private var lastRemoteText: String?
+    private var lastLocalImageHash: String?
+    private var lastRemoteImageHash: String?
     private var tickCount = 0
 
     init(state: SettingsState, logger: ClipPlusLogger) {
@@ -151,22 +153,38 @@ final class UdpTextSyncService {
             sendHello()
         }
 
-        guard let text = clipboard.readText(),
-              !text.isEmpty,
-              text != lastLocalText,
-              text != lastRemoteText else {
-            return
+        if let text = clipboard.readText(),
+           !text.isEmpty,
+           text != lastLocalText,
+           text != lastRemoteText {
+            lastLocalText = text
+            send(.text(
+                groupId: state.sharedGroupId,
+                senderDeviceId: deviceId,
+                senderDeviceName: deviceName,
+                text: text
+            ))
+            state.lastStatusMessage = "已广播文本剪贴板"
+            logger.info("published text clipboard byte_count=\(text.utf8.count)")
         }
 
-        lastLocalText = text
-        send(.text(
+        guard let pngData = clipboard.readPngImageData(),
+              let message = ClipPlusMessage.image(
             groupId: state.sharedGroupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,
-            text: text
-        ))
-        state.lastStatusMessage = "已广播文本剪贴板"
-        logger.info("published text clipboard byte_count=\(text.utf8.count)")
+            pngData: pngData
+        ),
+              let imageHash = message.imageContentHash,
+              imageHash != lastLocalImageHash,
+              imageHash != lastRemoteImageHash else {
+            return
+        }
+
+        lastLocalImageHash = imageHash
+        send(message)
+        state.lastStatusMessage = "已广播图片剪贴板"
+        logger.info("published image clipboard byte_count=\(pngData.count)")
     }
 
     private func handle(_ message: ClipPlusMessage) {
@@ -200,6 +218,20 @@ final class UdpTextSyncService {
             clipboard.writeText(text)
             state.lastStatusMessage = "已接收远端文本剪贴板"
             logger.info("received text clipboard byte_count=\(text.utf8.count)")
+        case .image:
+            guard state.sharingEnabled,
+                  state.isPeerTrusted(message.senderDeviceId),
+                  let imageData = message.decodedImageData,
+                  let imageHash = message.imageContentHash,
+                  imageData.count <= ClipPlusMessage.maxInlineImageBytes else {
+                return
+            }
+
+            lastRemoteImageHash = imageHash
+            lastLocalImageHash = imageHash
+            clipboard.writePngImageData(imageData)
+            state.lastStatusMessage = "已接收远端图片剪贴板"
+            logger.info("received image clipboard byte_count=\(imageData.count)")
         }
     }
 

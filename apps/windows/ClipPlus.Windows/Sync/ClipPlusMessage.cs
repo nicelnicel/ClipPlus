@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -6,11 +7,14 @@ namespace ClipPlus.Windows.Sync;
 public enum ClipPlusMessageKind
 {
     Hello,
-    Text
+    Text,
+    Image
 }
 
 public sealed class ClipPlusMessage
 {
+    public const int MaxInlineImageBytes = 32 * 1024;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -24,7 +28,13 @@ public sealed class ClipPlusMessage
     public string SenderDeviceName { get; init; } = string.Empty;
     public string EventId { get; init; } = Guid.NewGuid().ToString();
     public string? Text { get; init; }
+    public string? ImageBase64 { get; init; }
+    public int? ImageByteSize { get; init; }
+    public string? ImageContentHash { get; init; }
     public string CreatedAt { get; init; } = DateTimeOffset.UtcNow.ToString("O");
+
+    [JsonIgnore]
+    public byte[]? DecodedImageData => ImageBase64 is null ? null : Convert.FromBase64String(ImageBase64);
 
     public static ClipPlusMessage CreateHello(
         string groupId,
@@ -37,6 +47,29 @@ public sealed class ClipPlusMessage
             GroupId = groupId,
             SenderDeviceId = senderDeviceId,
             SenderDeviceName = senderDeviceName
+        };
+    }
+
+    public static ClipPlusMessage? CreateImage(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        byte[] pngData)
+    {
+        if (pngData.Length == 0 || pngData.Length > MaxInlineImageBytes)
+        {
+            return null;
+        }
+
+        return new ClipPlusMessage
+        {
+            Kind = ClipPlusMessageKind.Image,
+            GroupId = groupId,
+            SenderDeviceId = senderDeviceId,
+            SenderDeviceName = senderDeviceName,
+            ImageBase64 = Convert.ToBase64String(pngData),
+            ImageByteSize = pngData.Length,
+            ImageContentHash = Convert.ToHexString(SHA256.HashData(pngData)).ToLowerInvariant()
         };
     }
 

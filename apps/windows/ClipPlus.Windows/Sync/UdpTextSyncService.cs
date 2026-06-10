@@ -28,6 +28,8 @@ public sealed class UdpTextSyncService : IDisposable
     private CancellationTokenSource? cancellation;
     private string? lastLocalText;
     private string? lastRemoteText;
+    private string? lastLocalImageHash;
+    private string? lastRemoteImageHash;
     private int tickCount;
 
     public UdpTextSyncService(SettingsState state, ClipPlusLogger logger, Dispatcher dispatcher)
@@ -151,22 +153,41 @@ public sealed class UdpTextSyncService : IDisposable
         }
 
         var text = clipboard.ReadText();
-        if (string.IsNullOrEmpty(text)
-            || string.Equals(text, lastLocalText, StringComparison.Ordinal)
-            || string.Equals(text, lastRemoteText, StringComparison.Ordinal))
+        if (!string.IsNullOrEmpty(text)
+            && !string.Equals(text, lastLocalText, StringComparison.Ordinal)
+            && !string.Equals(text, lastRemoteText, StringComparison.Ordinal))
+        {
+            lastLocalText = text;
+            Send(ClipPlusMessage.CreateText(
+                state.SharedGroupId,
+                deviceId,
+                deviceName,
+                text
+            ));
+            state.LastStatusMessage = "已广播文本剪贴板";
+            logger.Info($"published text clipboard byte_count={Encoding.UTF8.GetByteCount(text)}");
+        }
+
+        var pngData = clipboard.ReadPngImageData();
+        var imageMessage = pngData is null
+            ? null
+            : ClipPlusMessage.CreateImage(
+                state.SharedGroupId,
+                deviceId,
+                deviceName,
+                pngData
+            );
+        if (imageMessage?.ImageContentHash is null
+            || string.Equals(imageMessage.ImageContentHash, lastLocalImageHash, StringComparison.Ordinal)
+            || string.Equals(imageMessage.ImageContentHash, lastRemoteImageHash, StringComparison.Ordinal))
         {
             return;
         }
 
-        lastLocalText = text;
-        Send(ClipPlusMessage.CreateText(
-            state.SharedGroupId,
-            deviceId,
-            deviceName,
-            text
-        ));
-        state.LastStatusMessage = "已广播文本剪贴板";
-        logger.Info($"published text clipboard byte_count={Encoding.UTF8.GetByteCount(text)}");
+        lastLocalImageHash = imageMessage.ImageContentHash;
+        Send(imageMessage);
+        state.LastStatusMessage = "已广播图片剪贴板";
+        logger.Info($"published image clipboard byte_count={pngData!.Length}");
     }
 
     private void Handle(ClipPlusMessage message)
@@ -202,6 +223,23 @@ public sealed class UdpTextSyncService : IDisposable
                 clipboard.WriteText(message.Text);
                 state.LastStatusMessage = "已接收远端文本剪贴板";
                 logger.Info($"received text clipboard byte_count={Encoding.UTF8.GetByteCount(message.Text)}");
+                break;
+            case ClipPlusMessageKind.Image:
+                var imageData = message.DecodedImageData;
+                if (!state.SharingEnabled
+                    || !state.IsPeerTrusted(message.SenderDeviceId)
+                    || imageData is null
+                    || imageData.Length > ClipPlusMessage.MaxInlineImageBytes
+                    || string.IsNullOrEmpty(message.ImageContentHash))
+                {
+                    return;
+                }
+
+                lastRemoteImageHash = message.ImageContentHash;
+                lastLocalImageHash = message.ImageContentHash;
+                clipboard.WritePngImageData(imageData);
+                state.LastStatusMessage = "已接收远端图片剪贴板";
+                logger.Info($"received image clipboard byte_count={imageData.Length}");
                 break;
         }
     }
