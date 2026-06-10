@@ -1,8 +1,12 @@
 use clipplus_discovery::packet::{DiscoveryPacket, DiscoveryPacketError, PeerCapability};
-use clipplus_discovery::udp::{DiscoverySocketConfig, DISCOVERY_BROADCAST, DISCOVERY_PORT};
+use clipplus_discovery::udp::{
+    DiscoveryDatagram, DiscoverySocketConfig, DiscoveryUdpSocket, DISCOVERY_BROADCAST,
+    DISCOVERY_PORT,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use tokio::time::{timeout, Duration};
 
 #[test]
 fn discovery_packet_roundtrips_json() {
@@ -161,6 +165,34 @@ fn default_udp_config_uses_stable_discovery_endpoint() {
         DISCOVERY_BROADCAST,
         SocketAddrV4::new(Ipv4Addr::new(255, 255, 255, 255), DISCOVERY_PORT)
     );
+    assert_eq!(config.bind_addr, Ipv4Addr::UNSPECIFIED);
     assert_eq!(config.bind_port, DISCOVERY_PORT);
     assert_eq!(config.broadcast_addr, DISCOVERY_BROADCAST);
+}
+
+#[tokio::test]
+async fn discovery_udp_socket_sends_and_receives_datagrams() {
+    let sender = DiscoveryUdpSocket::bind(DiscoverySocketConfig::ephemeral_for_test())
+        .await
+        .unwrap();
+    let receiver = DiscoveryUdpSocket::bind(DiscoverySocketConfig::ephemeral_for_test())
+        .await
+        .unwrap();
+    let payload = b"{\"kind\":\"hello\"}";
+
+    sender
+        .send_to(payload, receiver.local_addr())
+        .await
+        .unwrap();
+
+    let DiscoveryDatagram {
+        payload: received,
+        source,
+    } = timeout(Duration::from_secs(2), receiver.recv_datagram())
+        .await
+        .expect("receiver should receive datagram")
+        .unwrap();
+
+    assert_eq!(received, payload);
+    assert_eq!(source, sender.local_addr());
 }

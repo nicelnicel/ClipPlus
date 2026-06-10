@@ -3609,6 +3609,13 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充 fileOffer FFI 真实符号调用、Windows bundled DLL 过滤测试和 fail-fast 要求；后续涉及文件消息生成的改动必须继续覆盖真实 UI 接收和日志脱敏。
 - 剩余项更新：共享 Key、hello、text、trust、image、fileOffer 消息 JSON 生成已迁入 Rust FFI 并通过默认打包路径与真实跨系统验收；UDP socket 运行时、文件正文策略和文件流式传输仍需继续迁入 Rust core/transport。
 
+**2026-06-10 Rust UDP runtime 最小切片复验：**
+
+- 迁移范围：`clipplus-discovery::udp` 从仅有端口/广播常量扩展为可运行的 Tokio UDP endpoint。新增 `DiscoverySocketConfig.bind_addr`、`DiscoverySocketConfig::ephemeral_for_test()`、`DiscoveryUdpSocket` 和 `DiscoveryDatagram`，支持绑定、启用 broadcast、定向 `send_to`、`broadcast` 和 `recv_datagram`。
+- TDD 红灯：先添加 `discovery_udp_socket_sends_and_receives_datagrams`，测试两个 Rust UDP socket 走真实 loopback datagram 收发；初始失败为缺少 `DiscoveryUdpSocket`、`DiscoveryDatagram` 和 `ephemeral_for_test`。实现后第一次运行出现 `No route to host`，根因是测试 socket 绑定 `0.0.0.0` 后把 unspecified `local_addr` 当发送目标；已改为配置显式 `bind_addr`，默认仍为 `0.0.0.0`，测试配置绑定 `127.0.0.1`。
+- 单元验证：`cargo test -p clipplus-discovery --test discovery_packet` 通过 10/10；`./scripts/dev/check.sh` 通过，包含 discovery 10/10、Rust FFI 17/17、transport message 28/28 和 macOS Swift 28/28。
+- 剩余项更新：Rust 侧已有可运行 UDP datagram endpoint，但 macOS/Windows 原生壳仍直接使用 Swift `socket/recvfrom/sendto` 和 C# `UdpClient`。下一步需要把原生壳 UDP bind/send/receive 通过 FFI 或更高层 Rust runtime 接入该 endpoint，并继续把 TCP 文件归档服务/下载迁入 Rust transport。
+
 ---
 
 ## 自查清单
