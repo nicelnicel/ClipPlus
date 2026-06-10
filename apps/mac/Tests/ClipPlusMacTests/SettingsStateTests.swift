@@ -393,7 +393,13 @@ private func unzip(_ archiveURL: URL, to destinationURL: URL) throws {
 }
 
 private func expectedGroupId(for rawKey: String) -> String {
-    CoreBridge().deriveGroupId(for: rawKey) ?? "OcePlqBkjK6NLJjtPRglTw"
+    switch rawKey {
+    case "clipplus-test-key":
+        return "21YR2N3_wcdRPmEMLiuLMA"
+    default:
+        XCTFail("Missing expected group id fixture for \(rawKey)")
+        return ""
+    }
 }
 
 private final class FakeLoginItemService: LoginItemService {

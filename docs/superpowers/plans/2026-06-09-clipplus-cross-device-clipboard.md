@@ -3523,14 +3523,20 @@ git commit -m "test: add parallels e2e checklist"
 
 **2026-06-10 原生壳共享 Key 派生桥接复验：**
 
-- macOS：`CoreBridge` 新增运行时加载 `clipplus_ffi` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或随 app 可执行文件/Frameworks 放置的 `libclipplus_ffi.dylib`；`SharedKeyHasher` 在 FFI 可用时使用 Rust 派生结果，否则保留旧 SHA-256 回退，避免未打包 FFI 库时 app 无法启动。
+- macOS：`CoreBridge` 新增运行时加载 `clipplus_ffi` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或随 app 可执行文件/Frameworks 放置的 `libclipplus_ffi.dylib`；`SharedKeyHasher` 现在只使用 Rust FFI 派生结果，FFI 不可用时明确抛出错误，不再静默回退旧 SHA-256。
 - macOS 验证：`CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib swift test` 通过 21/21；测试确认 `clipplus-test-key` 通过 FFI 派生为 `21YR2N3_wcdRPmEMLiuLMA`。普通 `swift test` 也通过 21/21。
-- Windows：`CoreBridge` 新增 `NativeLibrary.TryLoad` 动态加载 `clipplus_ffi.dll` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或 app 输出目录下 `clipplus_ffi.dll`；`SharedKeyHasher` 在 DLL 可用时使用 Rust 派生结果，否则保留旧 SHA-256 回退。
+- Windows：`CoreBridge` 新增 `NativeLibrary.TryLoad` 动态加载 `clipplus_ffi.dll` 的桥接逻辑，支持 `CLIPPLUS_FFI_LIBRARY_PATH` 或 app/test 输出目录下 `clipplus_ffi.dll`；`SharedKeyHasher` 现在只使用 Rust FFI 派生结果，FFI 不可用时明确抛出错误，不再静默回退旧 SHA-256。设置窗口已捕获该错误并以对话框提示。
 - Windows 验证：Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 21/21，证明动态加载接口和回退路径不破坏 WPF app/test 构建。
 - Windows FFI DLL 补齐：Windows VM 内 Rust host 和 .NET Host 均为 ARM64；初始 Build Tools 缺少 ARM64 VC Tools，`vcvarsall arm64` 后找不到 `link.exe`。已通过 Visual Studio Installer `modify --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.Windows11SDK.26100 --quiet --norestart` 补装 ARM64 C++ 工具，`vswhere -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64` 可读回实例，`vcvarsall arm64 && where link` 可找到 `HostARM64\arm64\link.exe`。
 - Windows FFI 真实调用：Windows VM 内使用 `set "CARGO_TARGET_DIR=%TEMP%\ClipPlusRustTarget"` 避免 Parallels 共享目录文件系统异常，随后 `cargo build -p clipplus-ffi` 成功生成 `%TEMP%\ClipPlusRustTarget\debug\clipplus_ffi.dll`。设置 `CLIPPLUS_FFI_LIBRARY_PATH` 指向该 DLL 后，`C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable` 通过 1/1，测试已收紧为显式设置 FFI 路径时加载失败必须失败，确认 Windows C# CoreBridge 真实调用 Rust FFI 并得到 `21YR2N3_wcdRPmEMLiuLMA`。
-- 风险控制：默认不再自动搜索仓库 `target/debug`；开发/端到端启用 Rust FFI 必须显式传 `CLIPPLUS_FFI_LIBRARY_PATH` 或把 native library 放在 app 旁边，避免 macOS 自动用 Rust 派生而 Windows 默默回退导致组 ID 分叉。
-- 剩余项更新：共享 Key 派生已有 Rust FFI 入口、macOS 真实调用证明和 Windows 真实 DLL/PInvoke 调用证明；Swift/C# 完全移除回退、native library 打包随 app 发布、以及 UDP 文本/图片/文件运行时迁入 Rust core/transport 仍未完成。
+- 风险控制：默认不再自动搜索仓库 `target/debug`；开发/端到端要么显式传 `CLIPPLUS_FFI_LIBRARY_PATH`，要么把 native library 放在 app/test 输出目录。由于 Swift/C# 已移除旧 SHA-256 fallback，FFI 缺失会暴露为保存 Key 失败，而不是形成 group id 分叉。
+- 剩余项更新：共享 Key 派生已有 Rust FFI 入口、macOS 真实调用证明、Windows 真实 DLL/PInvoke 调用证明和 Swift/C# fail-fast 行为；UDP 文本/图片/文件运行时迁入 Rust core/transport 仍未完成。
+
+**2026-06-10 native FFI 默认打包路径复验：**
+
+- macOS：新增 `scripts/dev/build-mac-app.sh`，执行 `cargo build -p clipplus-ffi`、`swift build`，并把 `target/debug/libclipplus_ffi.dylib` 复制到 SwiftPM 可执行文件旁；新增 `CLIPPLUS_COREBRIDGE_SMOKE_TEST=1` 调试入口。运行 `./scripts/dev/build-mac-app.sh` 输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`，证明不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时可从默认路径加载 FFI。
+- Windows：新增 `apps/windows/Directory.Build.targets`，Windows 构建时使用 `%TEMP%\ClipPlusRustTarget` 作为 `CARGO_TARGET_DIR`，执行 `cargo build -p clipplus-ffi`，并把 `clipplus_ffi.dll` 复制到每个项目的 `$(OutDir)`。新增 `CoreBridgeDerivesGroupIdFromBundledFfiLibrary` 测试，要求 xUnit 输出目录存在 `clipplus_ffi.dll` 并从默认路径派生 `21YR2N3_wcdRPmEMLiuLMA`。
+- 测试：`./scripts/dev/check.sh` 通过；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 22/22；`git diff --check` 通过。
 
 **2026-06-10 FFI 路径端到端文本同步复验：**
 
@@ -3540,6 +3546,15 @@ git commit -m "test: add parallels e2e checklist"
 - Mac -> Windows：macOS 写入 `ffi-mac-to-windows-1781073898`，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 日志出现 `received text clipboard byte_count=29`。
 - Windows -> Mac：Windows 写入 `ffi-windows-to-mac-1781073920`，macOS `pbpaste` 返回同一字符串；macOS 日志出现 `received text clipboard byte_count=29`。
 - 日志检查：macOS `~/Library/Logs/ClipPlus/clipplus.log` 和 Windows `%LOCALAPPDATA%\ClipPlus\logs\clipplus.log` 均有文本发布/接收记录；匹配检查未出现 `clipplus-test-key` 明文。
+
+**2026-06-10 默认 FFI 打包路径端到端文本同步复验：**
+
+- 环境：Parallels `Windows 11` 运行中，`EFI Secure boot: off`，`Shared clipboard mode: off`。通过 Computer Use 观察 Parallels `Windows 11` 窗口可见，Windows 中 `dotnet.exe` 窗口在运行。
+- 启动方式：macOS 端把当前 `ClipPlusMac` 可执行文件放入 `/private/tmp/ClipPlusMac.app/Contents/MacOS/`，把 `libclipplus_ffi.dylib` 放入 `/private/tmp/ClipPlusMac.app/Contents/Frameworks/`；Windows 端使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll` 从 `ClipPlus.Windows\bin\Debug\net8.0-windows` 启动。两端均不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，只设置 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`。
+- 默认加载证明：macOS 运行 `env -u CLIPPLUS_FFI_LIBRARY_PATH CLIPPLUS_COREBRIDGE_SMOKE_TEST=1 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac` 输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；Windows bundled DLL 测试已要求测试输出目录存在 `clipplus_ffi.dll`。
+- Mac -> Windows：macOS 写入 `default-ffi-mac-to-windows-1781075231`，Windows `Get-Clipboard -Raw` 返回同一字符串；Windows 日志出现 `received text clipboard byte_count=37`。
+- Windows -> Mac：Windows 写入 `default-ffi-windows-to-mac-1781075249`，macOS `pbpaste` 返回同一字符串；macOS 日志出现 `received text clipboard byte_count=37`。
+- 日志检查：macOS 和 Windows 日志均有文本发布/接收记录；匹配检查未出现 `clipplus-test-key` 明文。
 
 ---
 

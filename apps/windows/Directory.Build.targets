@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <ClipPlusRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</ClipPlusRepoRoot>
+    <ClipPlusCargoTargetDir Condition="'$(ClipPlusCargoTargetDir)' == ''">$(TEMP)\ClipPlusRustTarget</ClipPlusCargoTargetDir>
+    <ClipPlusFfiDll>$(ClipPlusCargoTargetDir)\debug\clipplus_ffi.dll</ClipPlusFfiDll>
+  </PropertyGroup>
+
+  <Target Name="BuildAndCopyClipPlusFfi" BeforeTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <Message Importance="high" Text="Building clipplus-ffi native library into $(ClipPlusCargoTargetDir)" />
+    <MakeDir Directories="$(OutDir)" />
+    <Exec Command="set &quot;CARGO_TARGET_DIR=$(ClipPlusCargoTargetDir)&quot; &amp;&amp; cargo build -p clipplus-ffi" WorkingDirectory="$(ClipPlusRepoRoot)" />
+    <Copy SourceFiles="$(ClipPlusFfiDll)" DestinationFolder="$(OutDir)" />
+  </Target>
+</Project>

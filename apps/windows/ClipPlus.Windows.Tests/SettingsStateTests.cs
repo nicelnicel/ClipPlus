@@ -54,18 +54,37 @@ public sealed class SettingsStateTests
     public void CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable()
     {
         var ffiLibraryPath = Environment.GetEnvironmentVariable("CLIPPLUS_FFI_LIBRARY_PATH");
+        var bundledLibraryPath = Path.Combine(AppContext.BaseDirectory, "clipplus_ffi.dll");
         var groupId = new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId("clipplus-test-key");
         if (groupId is null)
         {
-            if (!string.IsNullOrWhiteSpace(ffiLibraryPath))
+            if (!string.IsNullOrWhiteSpace(ffiLibraryPath) || File.Exists(bundledLibraryPath))
             {
-                Assert.Fail($"Expected CoreBridge to load FFI library from CLIPPLUS_FFI_LIBRARY_PATH: {ffiLibraryPath}");
+                Assert.Fail(
+                    $"Expected CoreBridge to load FFI library from CLIPPLUS_FFI_LIBRARY_PATH or app output. " +
+                    $"env={ffiLibraryPath ?? "<unset>"} bundled={bundledLibraryPath}"
+                );
             }
 
             return;
         }
 
         Assert.Equal("21YR2N3_wcdRPmEMLiuLMA", groupId);
+    }
+
+    [Fact]
+    public void CoreBridgeDerivesGroupIdFromBundledFfiLibrary()
+    {
+        var bundledLibraryPath = Path.Combine(AppContext.BaseDirectory, "clipplus_ffi.dll");
+
+        Assert.True(
+            File.Exists(bundledLibraryPath),
+            $"Expected bundled FFI library in test output: {bundledLibraryPath}"
+        );
+        Assert.Equal(
+            "21YR2N3_wcdRPmEMLiuLMA",
+            new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId("clipplus-test-key")
+        );
     }
 
     [Fact]
@@ -463,7 +482,11 @@ public sealed class SettingsStateTests
 
     private static string ExpectedGroupId(string rawKey)
     {
-        return new ClipPlus.Windows.CoreBridge.CoreBridge().DeriveGroupId(rawKey) ?? "OcePlqBkjK6NLJjtPRglTw";
+        return rawKey switch
+        {
+            "clipplus-test-key" => "21YR2N3_wcdRPmEMLiuLMA",
+            _ => throw new ArgumentOutOfRangeException(nameof(rawKey), rawKey, "Missing expected group id fixture.")
+        };
     }
 }
 

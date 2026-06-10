@@ -135,7 +135,7 @@ final class SettingsState: ObservableObject, Equatable {
             throw SettingsStateError.confirmationMismatch
         }
 
-        sharedGroupId = SharedKeyHasher.groupId(for: normalizedKey)
+        sharedGroupId = try SharedKeyHasher.groupId(for: normalizedKey)
         sharedKeyConfigured = true
         sharedKeyInput = ""
         sharedKeyConfirmationInput = ""

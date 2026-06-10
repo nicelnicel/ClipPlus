@@ -6,6 +6,7 @@ final class ClipPlusAppModel: ObservableObject {
     private let syncService: UdpTextSyncService
 
     init() {
+        CoreBridgeSmokeTest.runIfRequested()
         LoginItemSmokeTest.runIfRequested()
 
         let loginItemManager = LoginItemManager()

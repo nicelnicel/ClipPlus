@@ -21,7 +21,7 @@ public partial class SettingsWindow : Window
         {
             state.UpdateSharedKey(state.SharedKeyInput, state.SharedKeyConfirmationInput);
         }
-        catch (ArgumentException error)
+        catch (Exception error)
         {
             System.Windows.MessageBox.Show(
                 this,
