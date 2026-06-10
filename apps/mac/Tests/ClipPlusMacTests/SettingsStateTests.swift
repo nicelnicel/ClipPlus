@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import ClipPlusMac
 
@@ -408,6 +409,57 @@ final class SettingsStateTests: XCTestCase {
             try String(contentsOf: extractedDirectory.appendingPathComponent("Nested/b.txt"), encoding: .utf8),
             "beta"
         )
+    }
+
+    func testCoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable() throws {
+        let queue = DispatchQueue(label: "clipplus.test.file-download")
+        let listener = try NWListener(using: .tcp, on: .any)
+        let ready = expectation(description: "listener ready")
+        let served = expectation(description: "archive served")
+        let payload = Data("archive from swift server".utf8)
+        var listenerPort: UInt16 = 0
+        var requestedTransferId: String?
+        listener.stateUpdateHandler = { state in
+            if case .ready = state, let port = listener.port {
+                listenerPort = port.rawValue
+                ready.fulfill()
+            }
+        }
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
+                requestedTransferId = data.flatMap { String(data: $0, encoding: .utf8) }?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                var length = UInt64(payload.count).bigEndian
+                let lengthData = Swift.withUnsafeBytes(of: &length) { Data($0) }
+                connection.send(content: lengthData + payload, completion: .contentProcessed { _ in
+                    served.fulfill()
+                    connection.cancel()
+                })
+            }
+        }
+        listener.start(queue: queue)
+        wait(for: [ready], timeout: 2)
+
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("received.zip")
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        XCTAssertTrue(CoreBridge().downloadFileArchive(
+            host: "127.0.0.1",
+            port: Int(listenerPort),
+            transferId: "transfer-a",
+            destinationPath: destinationURL.path
+        ))
+        wait(for: [served], timeout: 2)
+        listener.cancel()
+
+        XCTAssertEqual(requestedTransferId, "transfer-a")
+        XCTAssertEqual(try Data(contentsOf: destinationURL), payload)
     }
 
     func testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable() throws {

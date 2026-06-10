@@ -1,5 +1,6 @@
 use clipplus_transport::file_transfer::{
-    FileTransferArchive, FileTransferError, FileTransferRequest, TransferState,
+    FileTransferArchive, FileTransferDownload, FileTransferError, FileTransferRequest,
+    TransferState,
 };
 use clipplus_transport::message::{
     NativeClipboardMessage, NativeClipboardMessageError, NativeClipboardMessageKind,
@@ -7,8 +8,10 @@ use clipplus_transport::message::{
 };
 use clipplus_transport::session::{HandshakeState, PeerSession, SessionError};
 use serde_json::json;
-use std::io::Read;
+use std::io::{BufRead, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 #[test]
 fn transport_message_roundtrips_json() {
@@ -552,6 +555,66 @@ fn file_transfer_archive_rejects_empty_sources_and_missing_parent() {
     assert!(matches!(
         missing_parent,
         Err(FileTransferError::InvalidField("archive_parent"))
+    ));
+}
+
+#[test]
+fn file_transfer_download_writes_length_prefixed_archive_from_tcp_server() {
+    let temporary_directory = unique_temp_dir();
+    let destination_path = temporary_directory.join("received.zip");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut transfer_id = String::new();
+        reader.read_line(&mut transfer_id).unwrap();
+        assert_eq!(transfer_id.trim(), "transfer-a");
+
+        let payload = b"zip-bytes-from-server";
+        stream
+            .write_all(&(payload.len() as u64).to_be_bytes())
+            .unwrap();
+        stream.write_all(payload).unwrap();
+    });
+
+    let summary =
+        FileTransferDownload::download_to_path("127.0.0.1", port, "transfer-a", &destination_path)
+            .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(summary.byte_count, 21);
+    assert_eq!(
+        std::fs::read(destination_path).unwrap(),
+        b"zip-bytes-from-server"
+    );
+}
+
+#[test]
+fn file_transfer_download_rejects_invalid_fields() {
+    let temporary_directory = unique_temp_dir();
+    let destination_path = temporary_directory.join("received.zip");
+
+    assert!(matches!(
+        FileTransferDownload::download_to_path("", 47_632, "transfer-a", &destination_path),
+        Err(FileTransferError::InvalidField("host"))
+    ));
+    assert!(matches!(
+        FileTransferDownload::download_to_path("127.0.0.1", 0, "transfer-a", &destination_path),
+        Err(FileTransferError::InvalidField("port"))
+    ));
+    assert!(matches!(
+        FileTransferDownload::download_to_path("127.0.0.1", 47_632, "   ", &destination_path),
+        Err(FileTransferError::InvalidField("transfer_id"))
+    ));
+    assert!(matches!(
+        FileTransferDownload::download_to_path(
+            "127.0.0.1",
+            47_632,
+            "transfer-a",
+            &temporary_directory.join("missing").join("received.zip")
+        ),
+        Err(FileTransferError::InvalidField("destination_parent"))
     ));
 }
 

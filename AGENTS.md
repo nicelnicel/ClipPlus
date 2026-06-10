@@ -37,6 +37,8 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
 prlctl list --all --info | rg -n "State:|IP Addresses:|Shared clipboard mode|EFI Secure boot"
 ```
 
+- 完整 macOS/Windows E2E 依赖 Windows VM 入站 UDP `47631` 和 TCP `47632` 可从 macOS 访问。若 Windows 能向 macOS 发 hello，但 Windows 日志收不到 macOS hello，先用临时 UDP listener 证明 Mac -> Windows UDP 是否可达，再检查 Windows Defender 防火墙中 `ClipPlus UDP 47631`、`ClipPlus TCP 47632` 规则。修改防火墙属于测试环境变更，必须在计划或执行记录里写清楚。
+
 - 常规全量检查使用：
 
 ```bash
@@ -100,6 +102,7 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/
   - Rust golden vector 必须确认 `clipplus-test-key` 派生为 `21YR2N3_wcdRPmEMLiuLMA`。
   - hello/text/trust/image/fileOffer 消息运行时迁入 Rust FFI 后，必须验证 `clipplus_create_hello_message_json`、`clipplus_create_text_message_json`、`clipplus_create_trust_message_json`、`clipplus_create_image_message_json`、`clipplus_create_file_offer_message_json` 真实调用；macOS 测试名包含 `testCoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable`。
   - 文件归档正文写入迁入 Rust FFI 后，必须验证 `clipplus_write_file_archive_zip` 真实调用；macOS 测试名包含 `testCoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable`。
+  - 文件归档下载迁入 Rust FFI 后，必须验证 `clipplus_download_file_archive` 真实调用；Rust FFI 测试名包含 `ffi_downloads_file_archive_for_native_shells`，macOS 测试名包含 `testCoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable`。如果后续 Windows 下载端也迁入该接口，必须追加对应 Windows CoreBridge 测试，并在不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时验证 bundled DLL。
   - UDP socket 迁入 Rust FFI 后，必须验证 `clipplus_udp_socket_bind`、`clipplus_udp_socket_local_port`、`clipplus_udp_socket_send_to`、`clipplus_udp_socket_recv`、`clipplus_udp_socket_free` 真实调用；Rust FFI 测试名包含 `ffi_udp_socket_sends_and_receives_datagrams_for_native_shells`，macOS 测试名包含 `testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable`。
   - macOS Swift 测试必须使用真实 `libclipplus_ffi.dylib`；常规入口是 `./scripts/dev/check.sh`。
   - macOS App 默认加载验证使用 `./scripts/dev/build-mac-app.sh`，该脚本会把 dylib 放到 SwiftPM 可执行文件旁并运行 smoke test。
@@ -154,6 +157,8 @@ prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand "$
   - 解压后文件名和内容与源文件一致。
   - 日志出现 `downloaded file archive`，且不包含源机器本地绝对路径。
   - 如果本次改动涉及文件正文归档/下载实现，必须确认 `served file archive` 和 `downloaded file archive` 来自新实现路径，并在计划中记录归档文件 byte_count。
+  - 如果本次改动涉及 macOS 下载端 Rust FFI，必须跑 Windows -> macOS 文件传输真实 UI 验收：Windows 端用 `Set-Clipboard -Path <真实文件>` 发布，macOS 端通过菜单栏 ClipPlus 面板点击接收按钮，最后解压 `~/Downloads/ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
+  - `scripts/test/windows-file-offer-helper.ps1` 只能用于隔离调试 macOS 下载端：它从 Windows 发送 fileOffer 并提供 TCP 归档服务，但不能替代 Windows app 通过系统剪贴板自动发布文件 offer 的完整 E2E。使用该 helper 时，计划/执行记录必须标注为“部分验证”。
 - 图片同步验收至少验证真实跨系统方向；涉及防回环、图片 hash 或平台剪贴板写入逻辑时，必须覆盖 macOS -> Windows 和 Windows -> macOS 两个方向。
 - 当前图片 MVP 只支持 32 KiB 以内的 inline PNG；超过限制的图片后续应走文件传输或新的大对象通道。测试文档和计划必须明确这个限制。
 - 图片端到端日志至少检查 `published image clipboard`、`received image clipboard`，并确认日志不包含共享 Key、测试图片文件名或本地绝对路径。

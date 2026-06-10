@@ -72,6 +72,15 @@ struct CoreBridge {
         Self.ffiBridge?.writeFileArchiveZip(sourcePaths: sourcePaths, archivePath: archivePath) ?? false
     }
 
+    func downloadFileArchive(host: String, port: Int, transferId: String, destinationPath: String) -> Bool {
+        Self.ffiBridge?.downloadFileArchive(
+            host: host,
+            port: port,
+            transferId: transferId,
+            destinationPath: destinationPath
+        ) ?? false
+    }
+
     func openUdpSocket(bindPort: Int) -> RustUdpSocket? {
         Self.ffiBridge?.openUdpSocket(bindPort: bindPort)
     }
@@ -187,6 +196,12 @@ private final class ClipPlusFFIBridge {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> Bool
+    private typealias DownloadFileArchiveFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UInt16,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> Bool
     private typealias UdpSocketBindFunction = @convention(c) (UInt16) -> UnsafeMutableRawPointer?
     private typealias UdpSocketFreeFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     private typealias UdpSocketLocalPortFunction = @convention(c) (UnsafeMutableRawPointer?) -> UInt16
@@ -214,6 +229,7 @@ private final class ClipPlusFFIBridge {
     private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
     private let createFileOfferMessageJSONFunction: CreateFileOfferMessageJSONFunction
     private let writeFileArchiveZipFunction: WriteFileArchiveZipFunction
+    private let downloadFileArchiveFunction: DownloadFileArchiveFunction
     private let udpSocketBindFunction: UdpSocketBindFunction
     private let udpSocketFreeFunction: UdpSocketFreeFunction
     private let udpSocketLocalPortFunction: UdpSocketLocalPortFunction
@@ -230,6 +246,7 @@ private final class ClipPlusFFIBridge {
         createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
         createFileOfferMessageJSONFunction: @escaping CreateFileOfferMessageJSONFunction,
         writeFileArchiveZipFunction: @escaping WriteFileArchiveZipFunction,
+        downloadFileArchiveFunction: @escaping DownloadFileArchiveFunction,
         udpSocketBindFunction: @escaping UdpSocketBindFunction,
         udpSocketFreeFunction: @escaping UdpSocketFreeFunction,
         udpSocketLocalPortFunction: @escaping UdpSocketLocalPortFunction,
@@ -245,6 +262,7 @@ private final class ClipPlusFFIBridge {
         self.createImageMessageJSONFunction = createImageMessageJSONFunction
         self.createFileOfferMessageJSONFunction = createFileOfferMessageJSONFunction
         self.writeFileArchiveZipFunction = writeFileArchiveZipFunction
+        self.downloadFileArchiveFunction = downloadFileArchiveFunction
         self.udpSocketBindFunction = udpSocketBindFunction
         self.udpSocketFreeFunction = udpSocketFreeFunction
         self.udpSocketLocalPortFunction = udpSocketLocalPortFunction
@@ -271,6 +289,7 @@ private final class ClipPlusFFIBridge {
                   let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
                   let createFileOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_file_offer_message_json"),
                   let writeFileArchiveZipSymbol = dlsym(handle, "clipplus_write_file_archive_zip"),
+                  let downloadFileArchiveSymbol = dlsym(handle, "clipplus_download_file_archive"),
                   let udpSocketBindSymbol = dlsym(handle, "clipplus_udp_socket_bind"),
                   let udpSocketFreeSymbol = dlsym(handle, "clipplus_udp_socket_free"),
                   let udpSocketLocalPortSymbol = dlsym(handle, "clipplus_udp_socket_local_port"),
@@ -303,6 +322,10 @@ private final class ClipPlusFFIBridge {
                 writeFileArchiveZipSymbol,
                 to: WriteFileArchiveZipFunction.self
             )
+            let downloadFileArchiveFunction = unsafeBitCast(
+                downloadFileArchiveSymbol,
+                to: DownloadFileArchiveFunction.self
+            )
             let udpSocketBindFunction = unsafeBitCast(udpSocketBindSymbol, to: UdpSocketBindFunction.self)
             let udpSocketFreeFunction = unsafeBitCast(udpSocketFreeSymbol, to: UdpSocketFreeFunction.self)
             let udpSocketLocalPortFunction = unsafeBitCast(
@@ -330,6 +353,7 @@ private final class ClipPlusFFIBridge {
                 createImageMessageJSONFunction: createImageMessageJSONFunction,
                 createFileOfferMessageJSONFunction: createFileOfferMessageJSONFunction,
                 writeFileArchiveZipFunction: writeFileArchiveZipFunction,
+                downloadFileArchiveFunction: downloadFileArchiveFunction,
                 udpSocketBindFunction: udpSocketBindFunction,
                 udpSocketFreeFunction: udpSocketFreeFunction,
                 udpSocketLocalPortFunction: udpSocketLocalPortFunction,
@@ -495,6 +519,31 @@ private final class ClipPlusFFIBridge {
         return sourcePathsJSON.withCString { sourcePathsPointer in
             archivePath.withCString { archivePathPointer in
                 writeFileArchiveZipFunction(sourcePathsPointer, archivePathPointer)
+            }
+        }
+    }
+
+    func downloadFileArchive(
+        host: String,
+        port: Int,
+        transferId: String,
+        destinationPath: String
+    ) -> Bool {
+        guard port > 0,
+              port <= Int(UInt16.max) else {
+            return false
+        }
+
+        return host.withCString { hostPointer in
+            transferId.withCString { transferIdPointer in
+                destinationPath.withCString { destinationPathPointer in
+                    downloadFileArchiveFunction(
+                        hostPointer,
+                        UInt16(port),
+                        transferIdPointer,
+                        destinationPathPointer
+                    )
+                }
             }
         }
     }

@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use thiserror::Error;
 use zip::write::SimpleFileOptions;
@@ -112,6 +114,71 @@ impl FileTransferArchive {
         summary.byte_count = std::fs::metadata(archive_path)?.len();
 
         Ok(summary)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileTransferDownloadSummary {
+    pub byte_count: u64,
+}
+
+pub struct FileTransferDownload;
+
+impl FileTransferDownload {
+    pub const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+
+    pub fn download_to_path(
+        host: &str,
+        port: u16,
+        transfer_id: &str,
+        destination_path: &Path,
+    ) -> Result<FileTransferDownloadSummary, FileTransferError> {
+        let host = host.trim();
+        let transfer_id = transfer_id.trim();
+        if host.is_empty() {
+            return Err(FileTransferError::InvalidField("host"));
+        }
+        if port == 0 {
+            return Err(FileTransferError::InvalidField("port"));
+        }
+        if transfer_id.is_empty() {
+            return Err(FileTransferError::InvalidField("transfer_id"));
+        }
+        if destination_path
+            .parent()
+            .is_none_or(|parent| !parent.exists())
+        {
+            return Err(FileTransferError::InvalidField("destination_parent"));
+        }
+
+        let target = (host, port)
+            .to_socket_addrs()?
+            .next()
+            .ok_or(FileTransferError::InvalidField("host"))?;
+        let mut stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        stream.write_all(transfer_id.as_bytes())?;
+        stream.write_all(b"\n")?;
+
+        let mut length_bytes = [0_u8; 8];
+        stream.read_exact(&mut length_bytes)?;
+        let byte_count = u64::from_be_bytes(length_bytes);
+        if byte_count > Self::MAX_ARCHIVE_BYTES {
+            return Err(FileTransferError::InvalidField("archive_size"));
+        }
+
+        let mut file = File::create(destination_path)?;
+        let mut remaining = byte_count;
+        let mut buffer = [0_u8; 64 * 1024];
+        while remaining > 0 {
+            let read_len = remaining.min(buffer.len() as u64) as usize;
+            stream.read_exact(&mut buffer[..read_len])?;
+            file.write_all(&buffer[..read_len])?;
+            remaining -= read_len as u64;
+        }
+
+        Ok(FileTransferDownloadSummary { byte_count })
     }
 }
 

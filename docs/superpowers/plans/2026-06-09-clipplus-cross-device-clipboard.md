@@ -3664,6 +3664,18 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充 macOS `testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable`。
 - 剩余项更新：macOS 与 Windows UDP bind/send/receive 均已接入 Rust FFI；TCP 文件归档服务/下载 socket 仍未迁入 Rust transport。
 
+**2026-06-10 macOS 文件归档下载 Rust FFI 迁移复验：**
+
+- 迁移范围：`clipplus-transport::file_transfer` 新增 `FileTransferDownload::download_to_path`，统一处理 TCP 连接、发送 `transferId\n`、读取 8 字节 big-endian 长度、512 MiB 上限校验和流式写入目标 zip；`clipplus-ffi` 新增 `clipplus_download_file_archive(host, port, transfer_id, destination_path) -> bool`；macOS `CoreBridge.downloadFileArchive` 加载该符号，`UdpTextSyncService.downloadRemoteFileOffer` 的下载端从 Swift `socket/connect/readExact` 切换为 Rust FFI。macOS 发送端 TCP server 仍保持 Swift/Darwin 原实现，Windows 下载端仍保持 C# 原实现。
+- TDD 红灯：Rust transport 过滤测试先因缺少 `FileTransferDownload` 编译失败；Rust FFI 过滤测试先因缺少 `clipplus_download_file_archive` 编译失败；Swift 过滤测试先因 `CoreBridge` 缺少 `downloadFileArchive` 编译失败。
+- 单元验证：`cargo test -p clipplus-transport file_transfer_download --test message_roundtrip` 通过 2/2；`cargo test -p clipplus-ffi file_archive --test ffi_status` 通过 4/4；`CLIPPLUS_FFI_LIBRARY_PATH=... swift test --filter CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable` 通过 1/1；`nm -gU target/debug/libclipplus_ffi.dylib` 确认导出 `_clipplus_download_file_archive`。
+- 测试环境发现：本轮 Parallels `Windows 11` 中 Windows -> macOS UDP 可达，macOS 能持续收到 Windows hello；但 Mac -> Windows UDP 系统探针失败，Windows app 收不到 macOS hello/trust，导致 Windows app 无法进入 `CanPublishClipboardContent`，也就不会通过 `Set-Clipboard -Path` 自动发布文件 offer。已在 Windows Defender 中创建 `ClipPlus UDP 47631`、`ClipPlus TCP 47632` 和临时 `ClipPlus UDP Probe 48631` 规则，但临时 UDP listener 仍未收到 macOS 发包；该网络问题需要单独排查 Parallels/Windows 入站 UDP。
+- 部分 E2E 隔离验证：新增 `scripts/test/windows-file-offer-helper.ps1` 作为调试工具，从 Windows 侧读取同一设备 ID、创建真实源文件并写入 Windows 剪贴板、发送 fileOffer 到 macOS，并监听 TCP `47632` 等待 macOS 下载。macOS 日志已收到 helper 发送的 `received file offer file_count=1 byte_count=36`，菜单栏面板也显示 `CC4008：1 个文件可接收`。
+- UI 自动化阻塞：macOS 首次启动出现本地网络权限弹窗，已通过真实坐标点击允许。随后菜单栏 `MenuBarExtra` 面板可见，Computer Use 能读取到按钮元素 `CC4008：1 个文件可接收`；但 Computer Use 的 click/press_key 调用没有接受已读取状态，AppleScript `AXPress` 和 CGEvent 坐标点击只能让按钮获得焦点，未触发 SwiftUI `Button` action，helper 未收到 TCP 请求，macOS 日志未出现 `downloaded file archive`。因此本轮不能标记完整 Windows -> macOS 文件传输 UI E2E 通过。
+- 最终验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 23/23、transport message 32/32 和 macOS Swift 31/31；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 29/29；Windows single-file 重新发布为 `win-arm64` 后，不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 直接运行 `target/windows-single-exe/ClipPlus.Windows.exe`，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；`git diff --check` 通过。
+- 测试方案记录：`AGENTS.md` 已补充 `clipplus_download_file_archive` 真实符号调用、macOS CoreBridge 下载测试、Windows 入站 UDP/TCP 测试环境要求，以及 `scripts/test/windows-file-offer-helper.ps1` 只能作为“部分验证”不能替代完整 E2E 的约束。
+- 剩余项更新：macOS 文件归档下载端代码已迁入 Rust FFI 并通过 Rust/Swift 真实 FFI 单元测试；完整跨系统文件传输仍需在解决 Windows 入站 UDP 和菜单栏按钮自动化触发问题后复验。TCP 文件归档 server 端、Windows 下载端仍未迁入 Rust transport。
+
 ---
 
 ## 自查清单

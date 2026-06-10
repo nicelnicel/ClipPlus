@@ -10,7 +10,7 @@ use clipplus_diagnostics::status::RuntimeStatus;
 use clipplus_discovery::udp::{
     BlockingDiscoveryUdpSocket, DiscoverySocketConfig, DISCOVERY_BROADCAST,
 };
-use clipplus_transport::file_transfer::FileTransferArchive;
+use clipplus_transport::file_transfer::{FileTransferArchive, FileTransferDownload};
 use clipplus_transport::message::{NativeClipboardMessage, NativeFileTransferItem};
 
 use crate::types::{free_c_string, string_to_c_ptr};
@@ -256,6 +256,42 @@ pub unsafe extern "C" fn clipplus_write_file_archive_zip(
         let source_paths = source_paths.into_iter().map(Into::into).collect::<Vec<_>>();
 
         FileTransferArchive::write_zip(&source_paths, Path::new(&archive_path)).is_ok()
+    })
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+/// Downloads a length-prefixed file-transfer archive from a peer and writes it to disk.
+///
+/// # Safety
+///
+/// `host`, `transfer_id`, and `destination_path` must be non-null valid
+/// NUL-terminated UTF-8 strings. `port` must be non-zero. The function returns
+/// false for invalid inputs, network errors, oversized archives, and IO failures.
+pub unsafe extern "C" fn clipplus_download_file_archive(
+    host: *const c_char,
+    port: u16,
+    transfer_id: *const c_char,
+    destination_path: *const c_char,
+) -> bool {
+    panic::catch_unwind(|| {
+        let Some(host) = ffi_string(host) else {
+            return false;
+        };
+        let Some(transfer_id) = ffi_string(transfer_id) else {
+            return false;
+        };
+        let Some(destination_path) = ffi_string(destination_path) else {
+            return false;
+        };
+
+        FileTransferDownload::download_to_path(
+            &host,
+            port,
+            &transfer_id,
+            Path::new(&destination_path),
+        )
+        .is_ok()
     })
     .unwrap_or(false)
 }

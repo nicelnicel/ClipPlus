@@ -410,43 +410,29 @@ final class UdpTextSyncService {
     }
 
     private func downloadRemoteFileOffer(_ offer: RemoteFileOfferSummary) {
-        let socketDescriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard socketDescriptor >= 0 else {
-            return
-        }
-        defer { close(socketDescriptor) }
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = archivePort.bigEndian
-        address.sin_addr = in_addr(s_addr: inet_addr(offer.sourceHost))
-
-        let connectResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                connect(socketDescriptor, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connectResult == 0 else {
+        let destinationURL = uniqueDownloadURL(for: offer.transferId)
+        let downloaded = CoreBridge().downloadFileArchive(
+            host: offer.sourceHost,
+            port: Int(archivePort),
+            transferId: offer.transferId,
+            destinationPath: destinationURL.path
+        )
+        guard downloaded else {
             DispatchQueue.main.async { [weak self] in
                 self?.state.lastStatusMessage = "文件接收失败"
             }
-            return
-        }
-
-        sendData(Data("\(offer.transferId)\n".utf8), to: socketDescriptor)
-        guard let archiveData = readLengthPrefixedData(from: socketDescriptor) else {
+            logger.error("file transfer download failed")
             return
         }
 
         do {
-            let destinationURL = uniqueDownloadURL(for: offer.transferId)
-            try archiveData.write(to: destinationURL, options: .atomic)
+            let byteCount = try FileManager.default
+                .attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber
             DispatchQueue.main.async { [weak self] in
                 self?.state.clearRemoteFileOffer(transferId: offer.transferId)
                 self?.state.lastStatusMessage = "文件已接收到 \(destinationURL.lastPathComponent)"
             }
-            logger.info("downloaded file archive byte_count=\(archiveData.count)")
+            logger.info("downloaded file archive byte_count=\(byteCount?.intValue ?? 0)")
         } catch {
             logger.error("file transfer download failed: \(error.localizedDescription)")
         }
@@ -499,43 +485,6 @@ final class UdpTextSyncService {
                 sent += result
             }
         }
-    }
-
-    private func readLengthPrefixedData(from socketDescriptor: Int32) -> Data? {
-        guard let lengthData = readExactByteCount(8, from: socketDescriptor) else {
-            return nil
-        }
-
-        var encodedLength: UInt64 = 0
-        _ = Swift.withUnsafeMutableBytes(of: &encodedLength) { rawBuffer in
-            lengthData.copyBytes(to: rawBuffer)
-        }
-        let length = UInt64(bigEndian: encodedLength)
-        guard length <= 512 * 1024 * 1024 else {
-            return nil
-        }
-
-        return readExactByteCount(Int(length), from: socketDescriptor)
-    }
-
-    private func readExactByteCount(_ byteCount: Int, from socketDescriptor: Int32) -> Data? {
-        var data = Data(count: byteCount)
-        var received = 0
-        let result = data.withUnsafeMutableBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress else {
-                return -1
-            }
-            while received < byteCount {
-                let count = recv(socketDescriptor, baseAddress.advanced(by: received), byteCount - received, 0)
-                guard count > 0 else {
-                    return -1
-                }
-                received += count
-            }
-            return received
-        }
-
-        return result == byteCount ? data : nil
     }
 
     private func sendHello() {

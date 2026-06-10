@@ -1,15 +1,17 @@
 use std::ffi::{CStr, CString};
-use std::io::Read;
+use std::io::{BufRead, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::thread;
 
 use clipplus_ffi::api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
     clipplus_create_image_message_json, clipplus_create_text_message_json,
-    clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_free_string,
-    clipplus_get_status_json, clipplus_udp_socket_bind, clipplus_udp_socket_free,
-    clipplus_udp_socket_local_port, clipplus_udp_socket_recv, clipplus_udp_socket_send_to,
-    clipplus_write_file_archive_zip,
+    clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_download_file_archive,
+    clipplus_free_string, clipplus_get_status_json, clipplus_udp_socket_bind,
+    clipplus_udp_socket_free, clipplus_udp_socket_local_port, clipplus_udp_socket_recv,
+    clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
 };
 use clipplus_ffi::{
     clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
@@ -18,6 +20,7 @@ use clipplus_ffi::{
     clipplus_create_text_message_json as reexported_create_text_message_json,
     clipplus_create_trust_message_json as reexported_create_trust_message_json,
     clipplus_derive_group_id as reexported_derive_group_id,
+    clipplus_download_file_archive as reexported_download_file_archive,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
     clipplus_udp_socket_bind as reexported_udp_socket_bind,
@@ -505,6 +508,94 @@ fn ffi_write_file_archive_zip_rejects_invalid_values() {
         reexported_write_file_archive_zip(invalid_sources.as_ptr(), archive_path.as_ptr())
     });
     assert!(!unsafe { reexported_write_file_archive_zip(empty_sources.as_ptr(), ptr::null()) });
+}
+
+#[test]
+fn ffi_downloads_file_archive_for_native_shells() {
+    let temporary_directory = unique_temp_dir();
+    let destination_path = temporary_directory.join("received.zip");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut transfer_id = String::new();
+        reader.read_line(&mut transfer_id).unwrap();
+        assert_eq!(transfer_id.trim(), "transfer-a");
+
+        let payload = b"archive from ffi server";
+        stream
+            .write_all(&(payload.len() as u64).to_be_bytes())
+            .unwrap();
+        stream.write_all(payload).unwrap();
+    });
+    let host = CString::new("127.0.0.1").unwrap();
+    let transfer_id = CString::new("transfer-a").unwrap();
+    let destination_path = CString::new(destination_path.to_string_lossy().to_string()).unwrap();
+
+    let downloaded = unsafe {
+        clipplus_download_file_archive(
+            host.as_ptr(),
+            port,
+            transfer_id.as_ptr(),
+            destination_path.as_ptr(),
+        )
+    };
+    server.join().unwrap();
+
+    assert!(downloaded);
+    assert_eq!(
+        std::fs::read(Path::new(destination_path.to_str().unwrap())).unwrap(),
+        b"archive from ffi server"
+    );
+}
+
+#[test]
+fn ffi_download_file_archive_rejects_invalid_values() {
+    let temporary_directory = unique_temp_dir();
+    let destination_path = CString::new(
+        temporary_directory
+            .join("received.zip")
+            .to_string_lossy()
+            .to_string(),
+    )
+    .unwrap();
+    let host = CString::new("127.0.0.1").unwrap();
+    let empty = CString::new(" ").unwrap();
+    let transfer_id = CString::new("transfer-a").unwrap();
+
+    assert!(!unsafe {
+        reexported_download_file_archive(
+            ptr::null(),
+            47_632,
+            transfer_id.as_ptr(),
+            destination_path.as_ptr(),
+        )
+    });
+    assert!(!unsafe {
+        reexported_download_file_archive(
+            empty.as_ptr(),
+            47_632,
+            transfer_id.as_ptr(),
+            destination_path.as_ptr(),
+        )
+    });
+    assert!(!unsafe {
+        reexported_download_file_archive(
+            host.as_ptr(),
+            0,
+            transfer_id.as_ptr(),
+            destination_path.as_ptr(),
+        )
+    });
+    assert!(!unsafe {
+        reexported_download_file_archive(
+            host.as_ptr(),
+            47_632,
+            ptr::null(),
+            destination_path.as_ptr(),
+        )
+    });
 }
 
 #[test]
