@@ -1,6 +1,5 @@
 import AppKit
 
-@MainActor
 struct NativeClipboard {
     func readText() -> String? {
         NSPasteboard.general.string(forType: .string)

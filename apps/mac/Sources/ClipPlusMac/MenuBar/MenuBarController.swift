@@ -4,7 +4,7 @@ import SwiftUI
 struct MenuBarController: View {
     @Environment(\.openWindow) private var openWindow
 
-    @Binding var state: SettingsState
+    @ObservedObject var state: SettingsState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -18,12 +18,19 @@ struct MenuBarController: View {
             }
 
             Button("修改 Key") {
-                state.sharedKeyConfigured = true
+                openWindow(id: "settings")
+                NSApp.activate(ignoringOtherApps: true)
             }
 
             Divider()
 
             Toggle("开机自动启动", isOn: $state.startupEnabled)
+
+            if state.pendingPeerCount > 0 {
+                Button("允许全部待确认设备（\(state.pendingPeerCount)）") {
+                    state.approvePendingPeers()
+                }
+            }
 
             Button("导出诊断包") {}
 

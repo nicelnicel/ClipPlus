@@ -13,7 +13,7 @@ final class SettingsStateTests: XCTestCase {
     }
 
     func testStartupToggleUpdatesState() {
-        var state = SettingsState(
+        let state = SettingsState(
             sharedKeyConfigured: true,
             sharingEnabled: true,
             startupEnabled: false
@@ -41,5 +41,59 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(state.sharingEnabled)
         XCTAssertFalse(state.startupEnabled)
         XCTAssertTrue(state.requiresKeySetup)
+    }
+
+    func testSharedKeyStoresOnlyDerivedGroupIdentifier() throws {
+        let state = SettingsState()
+
+        try state.updateSharedKey("clipplus-test-key", confirmation: "clipplus-test-key")
+
+        XCTAssertTrue(state.sharedKeyConfigured)
+        XCTAssertEqual(state.sharedGroupId, "OcePlqBkjK6NLJjtPRglTw")
+        XCTAssertFalse(state.sharedGroupId.contains("clipplus-test-key"))
+    }
+
+    func testMismatchedSharedKeyConfirmationFails() {
+        let state = SettingsState()
+
+        XCTAssertThrowsError(try state.updateSharedKey("clipplus-test-key", confirmation: "other-key"))
+        XCTAssertFalse(state.sharedKeyConfigured)
+        XCTAssertTrue(state.requiresKeySetup)
+    }
+
+    func testPendingPeerMustBeApprovedBeforeSync() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+
+        state.markPeerPending(deviceId: "windows-device", deviceName: "Windows 11")
+
+        XCTAssertEqual(state.pendingPeerCount, 1)
+        XCTAssertFalse(state.isPeerTrusted("windows-device"))
+
+        state.approvePendingPeers()
+
+        XCTAssertEqual(state.pendingPeerCount, 0)
+        XCTAssertTrue(state.isPeerTrusted("windows-device"))
+    }
+
+    func testClipPlusMessageRoundTripsTextPayload() throws {
+        let message = ClipPlusMessage.text(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            text: "hello from mac"
+        )
+
+        let data = try JSONEncoder().encode(message)
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .text)
+        XCTAssertEqual(decoded.protocolVersion, 1)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.text, "hello from mac")
     }
 }

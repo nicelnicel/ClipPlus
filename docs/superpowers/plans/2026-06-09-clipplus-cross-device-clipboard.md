@@ -3442,7 +3442,17 @@ git commit -m "test: add parallels e2e checklist"
 - Windows 测试：`cd C:\Mac\Home\proj\ClipPlus\apps\windows && C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过，2/2。
 - Windows App：使用当前桌面用户会话启动 WPF App，设置窗口可见；系统托盘展开区可见 ClipPlus 托盘图标。
 - macOS App：`ClipPlusMac` 进程存在，Accessibility 能识别菜单栏项 `粘贴`；宿主机在部分截图时回到锁屏界面，因此菜单栏弹出面板仍需一次解锁后的视觉截图补证。
-- 未完成项：真实双向剪贴板同步、共享 Key 输入/设备确认和诊断包不含 `clipplus-test-key` 仍未完成端到端验证。
+
+**2026-06-10 双向文本同步复验：**
+
+- 网络前置：Parallels 自带剪贴板共享保持 `off`；Windows VM IP 为 `10.211.55.3`，macOS Parallels 网卡 IP 为 `10.211.55.2`。
+- 运行方式：macOS 和 Windows 端使用同一测试 Key `clipplus-test-key` 派生共享组；端到端测试启用 `CLIPPLUS_AUTO_TRUST=1` 和 `CLIPPLUS_PEER_HOSTS`，避免手动 UI 操作和虚拟网络广播不稳定影响测试。
+- 设备发现：macOS 日志出现 Windows `peer hello`；Windows 日志出现 macOS `peer hello`，确认 UDP 发现双向可达。Windows 端发送改为复用监听端口 `47631`，避免 Windows 防火墙拦截无关联入站 UDP。
+- Mac -> Windows 文本同步：macOS 写入系统剪贴板 `clipplus-mac-to-windows-20260610-095050`，4 秒后 VM 内 `Get-Clipboard -Raw` 返回同一字符串。
+- Windows -> Mac 文本同步：Windows VM 写入系统剪贴板 `clipplus-windows-to-mac-20260610-095058`，4 秒后 macOS `pbpaste` 返回同一字符串。
+- 日志检查：macOS 和 Windows 日志均记录 `published text clipboard`、`received text clipboard` 和 `peer hello`；用 `rg`/`Select-String` 检查日志未发现 `clipplus-test-key` 明文。
+- 架构偏差：本次为打通可运行闭环，文本同步运行时暂时落在 macOS/Windows 原生壳内；后续仍需迁入 Rust core/FFI，避免长期维护两套协议实现。
+- 仍未完成项：图片同步、文件按需传输、真实 UI 手动设备确认、诊断包导出内容检查、开机启动真实系统写入仍未完成端到端验证。
 
 ---
 

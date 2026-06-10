@@ -1,5 +1,7 @@
 using System.Windows;
+using ClipPlus.Windows.Diagnostics;
 using ClipPlus.Windows.Settings;
+using ClipPlus.Windows.Sync;
 using ClipPlus.Windows.Tray;
 
 namespace ClipPlus.Windows;
@@ -7,6 +9,7 @@ namespace ClipPlus.Windows;
 public partial class App : System.Windows.Application
 {
     private TrayController? trayController;
+    private UdpTextSyncService? syncService;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -18,6 +21,8 @@ public partial class App : System.Windows.Application
             startupEnabled: false
         );
         trayController = new TrayController(settings);
+        syncService = new UdpTextSyncService(settings, new ClipPlusLogger(), Dispatcher);
+        syncService.Start();
 
         if (settings.RequiresKeySetup)
         {
@@ -27,6 +32,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        syncService?.Dispose();
         trayController?.Dispose();
         base.OnExit(e);
     }
