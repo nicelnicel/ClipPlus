@@ -1,6 +1,6 @@
 use clipplus_transport::file_transfer::{
     FileTransferArchive, FileTransferDownload, FileTransferError, FileTransferRequest,
-    TransferState,
+    FileTransferServer, TransferState,
 };
 use clipplus_transport::message::{
     NativeClipboardMessage, NativeClipboardMessageError, NativeClipboardMessageKind,
@@ -11,7 +11,9 @@ use serde_json::json;
 use std::io::{BufRead, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 #[test]
 fn transport_message_roundtrips_json() {
@@ -613,6 +615,89 @@ fn file_transfer_download_writes_length_prefixed_archive_from_tcp_server() {
         std::fs::read(destination_path).unwrap(),
         b"zip-bytes-from-server"
     );
+}
+
+#[test]
+fn file_transfer_server_serves_registered_archive_over_tcp() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("registered.txt");
+    std::fs::write(&source_file, "registered archive").unwrap();
+    let server = FileTransferServer::bind(0).unwrap();
+    let port = server.local_port().unwrap();
+    server
+        .register_transfer("transfer-a", vec![source_file])
+        .unwrap();
+    let (result_sender, result_receiver) = mpsc::channel();
+    let serve_directory = temporary_directory.clone();
+    thread::spawn(move || {
+        result_sender
+            .send(server.serve_next(&serve_directory))
+            .unwrap();
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client.write_all(b"transfer-a\n").unwrap();
+    let mut length_bytes = [0_u8; 8];
+    client.read_exact(&mut length_bytes).unwrap();
+    let byte_count = u64::from_be_bytes(length_bytes);
+    let mut payload = vec![0_u8; byte_count as usize];
+    client.read_exact(&mut payload).unwrap();
+    let summary = result_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(summary.file_count, 1);
+    assert_eq!(summary.byte_count, byte_count);
+    let zip_path = temporary_directory.join("served.zip");
+    std::fs::write(&zip_path, payload).unwrap();
+    assert_eq!(
+        read_zip_entries(&zip_path),
+        vec![(
+            "registered.txt".to_string(),
+            "registered archive".to_string()
+        )]
+    );
+}
+
+#[test]
+fn file_transfer_server_rejects_unknown_transfer_id_without_payload() {
+    let temporary_directory = unique_temp_dir();
+    let server = FileTransferServer::bind(0).unwrap();
+    let port = server.local_port().unwrap();
+    let (result_sender, result_receiver) = mpsc::channel();
+    let serve_directory = temporary_directory.clone();
+    thread::spawn(move || {
+        result_sender
+            .send(server.serve_next(&serve_directory))
+            .unwrap();
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client.write_all(b"missing\n").unwrap();
+    let mut length_bytes = [0_u8; 8];
+    let read_count = client.read(&mut length_bytes).unwrap();
+    let result = result_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+
+    assert_eq!(read_count, 0);
+    assert!(matches!(
+        result,
+        Err(FileTransferError::InvalidField("transfer_id"))
+    ));
 }
 
 #[test]

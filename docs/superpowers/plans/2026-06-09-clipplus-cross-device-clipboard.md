@@ -3732,6 +3732,18 @@ git commit -m "test: add parallels e2e checklist"
 - 清理和测试环境：E2E 前后 Parallels `Shared clipboard mode: off`；测试后已停止 macOS `ClipPlusMac`、Windows `ClipPlus.Windows` 和终端测试进程，并清理 `launchctl` 环境变量。
 - 剩余项更新：文件 offer 消息、zip 生成、length-prefixed socket 发送和下载端均已走 Rust FFI；原生壳仍保留 TCP accept、transferId 查表和 transfer registry，后续如果继续收敛可实现 Rust opaque file server handle，把 bind/accept/register/serve_next 也移入 Rust。
 
+**2026-06-11 Rust opaque file server handle 最小切片复验：**
+
+- 迁移范围：`clipplus-transport::file_transfer` 新增 `FileTransferServer`，由 Rust 负责 TCP bind、本地端口读取、`transferId -> source_paths` 注册、下一次客户端 accept、读取 `transferId\n`、按 8 字节 big-endian 长度前缀写出 zip 正文，并在完成后清理临时 zip。`clipplus-ffi` 新增 opaque handle：`clipplus_file_server_bind`、`clipplus_file_server_local_port`、`clipplus_file_server_register_transfer`、`clipplus_file_server_serve_next`、`clipplus_file_server_free`。
+- TDD 红灯：先在 `clipplus-transport` 新增 `file_transfer_server_serves_registered_archive_over_tcp` 和 `file_transfer_server_rejects_unknown_transfer_id_without_payload`；初始缺少 `FileTransferServer` 编译失败。随后在 `clipplus-ffi` 新增 `ffi_file_server_serves_registered_archive_for_native_shells`；初始缺少 `clipplus_file_server_*` 导出编译失败。
+- 实现边界：本轮仅完成 Rust transport 和 Rust FFI 真实符号验证，没有把 macOS/Windows runtime 切换到 opaque server handle。原生壳仍继续使用已验证的 `clipplus_serve_file_archive_to_socket` 路径来服务当前文件传输 E2E。
+- 安全与阻塞约束：FFI handle 必须 exactly once free；不得在 `serve_next` 或 `register_transfer` 并发使用时释放。`serve_next` 是阻塞调用，仅用于后台 server 线程；测试通过客户端主动连接和 read/write timeout 避免永久阻塞。未知 transfer id 返回 0 字节且不发送归档 payload。
+- 单元验证：`cargo test -p clipplus-transport file_transfer_server_` 通过 2/2；`cargo test -p clipplus-ffi file_server` 通过 2/2。
+- 全量验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 26/26、transport message 35/35 和 macOS Swift 33/33；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 33/33，并在 Windows 本机临时 target 重新构建 `clipplus_ffi.dll`。
+- 符号验证：`nm -gU target/debug/libclipplus_ffi.dylib` 确认导出 `_clipplus_file_server_bind`、`_clipplus_file_server_local_port`、`_clipplus_file_server_register_transfer`、`_clipplus_file_server_serve_next`、`_clipplus_file_server_free`；`git diff --check` 通过。
+- 测试方案记录：`AGENTS.md` 已补充 opaque file server handle 的 Rust FFI 固定符号测试要求；后续接入 macOS/Windows CoreBridge 时，必须再补对应原生壳真实符号测试，并在 Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 验证 bundled DLL。
+- 剩余项更新：Rust 已具备完整 file server handle 能力；后续可在新切片中把 macOS/Windows TCP bind、accept、registry 和 serve loop 切到该 handle，并重新执行真实文件接收 UI E2E。
+
 ---
 
 ## 自查清单

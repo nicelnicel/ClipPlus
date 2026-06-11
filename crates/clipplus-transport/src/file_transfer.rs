@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use thiserror::Error;
@@ -138,6 +140,79 @@ impl FileTransferArchive {
     }
 }
 
+pub struct FileTransferServer {
+    listener: TcpListener,
+    transfers: Mutex<HashMap<String, Vec<PathBuf>>>,
+}
+
+impl FileTransferServer {
+    pub fn bind(port: u16) -> Result<Self, FileTransferError> {
+        let listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::UNSPECIFIED,
+            port,
+        )))?;
+
+        Ok(Self {
+            listener,
+            transfers: Mutex::new(HashMap::new()),
+        })
+    }
+
+    pub fn local_port(&self) -> Result<u16, FileTransferError> {
+        Ok(self.listener.local_addr()?.port())
+    }
+
+    pub fn register_transfer(
+        &self,
+        transfer_id: &str,
+        source_paths: Vec<PathBuf>,
+    ) -> Result<(), FileTransferError> {
+        let transfer_id = transfer_id.trim();
+        if transfer_id.is_empty() {
+            return Err(FileTransferError::InvalidField("transfer_id"));
+        }
+        if source_paths.is_empty() {
+            return Err(FileTransferError::InvalidField("source_paths"));
+        }
+
+        self.transfers
+            .lock()
+            .map_err(|_| FileTransferError::InvalidField("transfer_registry"))?
+            .insert(transfer_id.to_string(), source_paths);
+        Ok(())
+    }
+
+    pub fn serve_next(
+        &self,
+        temp_dir: &Path,
+    ) -> Result<FileTransferArchiveSummary, FileTransferError> {
+        if !temp_dir.is_dir() {
+            return Err(FileTransferError::InvalidField("temp_dir"));
+        }
+        let (mut stream, _) = self.listener.accept()?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        let transfer_id = read_transfer_request_line(&mut stream)?;
+        let source_paths = self
+            .transfers
+            .lock()
+            .map_err(|_| FileTransferError::InvalidField("transfer_registry"))?
+            .get(&transfer_id)
+            .cloned()
+            .ok_or(FileTransferError::InvalidField("transfer_id"))?;
+
+        let archive_path = temp_dir.join(format!("ClipPlus-{}.zip", uuid::Uuid::new_v4()));
+        let result = FileTransferArchive::write_length_prefixed_zip(
+            &source_paths,
+            &archive_path,
+            &mut stream,
+        );
+        let _ = std::fs::remove_file(&archive_path);
+
+        result
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileTransferDownloadSummary {
     pub byte_count: u64,
@@ -201,6 +276,33 @@ impl FileTransferDownload {
 
         Ok(FileTransferDownloadSummary { byte_count })
     }
+}
+
+fn read_transfer_request_line(stream: &mut TcpStream) -> Result<String, FileTransferError> {
+    let mut bytes = Vec::new();
+    let mut byte = [0_u8; 1];
+    loop {
+        let read_count = stream.read(&mut byte)?;
+        if read_count == 0 {
+            break;
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        bytes.push(byte[0]);
+        if bytes.len() > 1024 {
+            return Err(FileTransferError::InvalidField("transfer_id"));
+        }
+    }
+
+    let transfer_id =
+        String::from_utf8(bytes).map_err(|_| FileTransferError::InvalidField("transfer_id"))?;
+    let transfer_id = transfer_id.trim().to_string();
+    if transfer_id.is_empty() {
+        return Err(FileTransferError::InvalidField("transfer_id"));
+    }
+
+    Ok(transfer_id)
 }
 
 fn write_directory_entries(

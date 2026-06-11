@@ -3,7 +3,7 @@ use std::mem;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::os::raw::c_char;
 use std::panic;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 #[cfg(unix)]
@@ -16,13 +16,19 @@ use clipplus_diagnostics::status::RuntimeStatus;
 use clipplus_discovery::udp::{
     BlockingDiscoveryUdpSocket, DiscoverySocketConfig, DISCOVERY_BROADCAST,
 };
-use clipplus_transport::file_transfer::{FileTransferArchive, FileTransferDownload};
+use clipplus_transport::file_transfer::{
+    FileTransferArchive, FileTransferDownload, FileTransferServer,
+};
 use clipplus_transport::message::{NativeClipboardMessage, NativeFileTransferItem};
 
 use crate::types::{free_c_string, string_to_c_ptr};
 
 pub struct ClipPlusUdpSocketHandle {
     socket: BlockingDiscoveryUdpSocket,
+}
+
+pub struct ClipPlusFileServerHandle {
+    server: FileTransferServer,
 }
 
 #[cfg(unix)]
@@ -354,6 +360,136 @@ pub unsafe extern "C" fn clipplus_download_file_archive(
         .is_ok()
     })
     .unwrap_or(false)
+}
+
+#[no_mangle]
+/// Binds a Rust file-transfer TCP server for native shells.
+///
+/// # Safety
+///
+/// Returns an opaque non-null handle on success. The handle must be passed back
+/// to [`clipplus_file_server_free`] exactly once. `bind_port` may be `0` for an
+/// ephemeral test port. Do not free the handle while another thread is using it.
+pub unsafe extern "C" fn clipplus_file_server_bind(
+    bind_port: u16,
+) -> *mut ClipPlusFileServerHandle {
+    panic::catch_unwind(|| {
+        let Ok(server) = FileTransferServer::bind(bind_port) else {
+            return ptr::null_mut();
+        };
+
+        Box::into_raw(Box::new(ClipPlusFileServerHandle { server }))
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+/// Releases a Rust file-transfer TCP server handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a pointer previously returned by
+/// [`clipplus_file_server_bind`] that has not already been freed. Callers must
+/// not free the handle concurrently with `register_transfer` or `serve_next`.
+pub unsafe extern "C" fn clipplus_file_server_free(handle: *mut ClipPlusFileServerHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let _ = panic::catch_unwind(|| unsafe { drop(Box::from_raw(handle)) });
+}
+
+#[no_mangle]
+/// Returns the local TCP port for a Rust file-transfer server handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a valid pointer returned by
+/// [`clipplus_file_server_bind`]. Invalid handles return `0`.
+pub unsafe extern "C" fn clipplus_file_server_local_port(
+    handle: *mut ClipPlusFileServerHandle,
+) -> u16 {
+    panic::catch_unwind(|| {
+        if handle.is_null() {
+            return 0;
+        }
+
+        let handle = unsafe { &*handle };
+        handle.server.local_port().unwrap_or(0)
+    })
+    .unwrap_or(0)
+}
+
+#[no_mangle]
+/// Registers source paths for a file-transfer id on a Rust file server.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`clipplus_file_server_bind`].
+/// `transfer_id` and `source_paths_json` must be non-null valid
+/// NUL-terminated UTF-8 strings. `source_paths_json` must be a JSON array of
+/// local source path strings. Invalid inputs return false.
+pub unsafe extern "C" fn clipplus_file_server_register_transfer(
+    handle: *mut ClipPlusFileServerHandle,
+    transfer_id: *const c_char,
+    source_paths_json: *const c_char,
+) -> bool {
+    panic::catch_unwind(|| {
+        if handle.is_null() {
+            return false;
+        }
+        let Some(transfer_id) = ffi_string(transfer_id) else {
+            return false;
+        };
+        let Some(source_paths_json) = ffi_string(source_paths_json) else {
+            return false;
+        };
+        let Ok(source_paths) = serde_json::from_str::<Vec<String>>(&source_paths_json) else {
+            return false;
+        };
+        let source_paths = source_paths
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+
+        let handle = unsafe { &*handle };
+        handle
+            .server
+            .register_transfer(&transfer_id, source_paths)
+            .is_ok()
+    })
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+/// Serves one registered file-transfer archive to the next TCP client.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`clipplus_file_server_bind`].
+/// `temp_dir` must be a non-null valid NUL-terminated UTF-8 string naming an
+/// existing directory used for the temporary zip. This call blocks until one
+/// client connects or the listener errors. It returns the archive byte count, or
+/// `0` on invalid inputs, unknown transfer id, or IO/zip failure.
+pub unsafe extern "C" fn clipplus_file_server_serve_next(
+    handle: *mut ClipPlusFileServerHandle,
+    temp_dir: *const c_char,
+) -> u64 {
+    panic::catch_unwind(|| {
+        if handle.is_null() {
+            return 0;
+        }
+        let Some(temp_dir) = ffi_string(temp_dir) else {
+            return 0;
+        };
+
+        let handle = unsafe { &*handle };
+        handle
+            .server
+            .serve_next(Path::new(&temp_dir))
+            .map_or(0, |summary| summary.byte_count)
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]

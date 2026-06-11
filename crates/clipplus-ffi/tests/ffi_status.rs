@@ -14,9 +14,11 @@ use clipplus_ffi::api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
     clipplus_create_image_message_json, clipplus_create_text_message_json,
     clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_download_file_archive,
-    clipplus_free_string, clipplus_get_status_json, clipplus_serve_file_archive_to_socket,
-    clipplus_udp_socket_bind, clipplus_udp_socket_free, clipplus_udp_socket_local_port,
-    clipplus_udp_socket_recv, clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
+    clipplus_file_server_bind, clipplus_file_server_free, clipplus_file_server_local_port,
+    clipplus_file_server_register_transfer, clipplus_file_server_serve_next, clipplus_free_string,
+    clipplus_get_status_json, clipplus_serve_file_archive_to_socket, clipplus_udp_socket_bind,
+    clipplus_udp_socket_free, clipplus_udp_socket_local_port, clipplus_udp_socket_recv,
+    clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
 };
 use clipplus_ffi::{
     clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
@@ -26,6 +28,8 @@ use clipplus_ffi::{
     clipplus_create_trust_message_json as reexported_create_trust_message_json,
     clipplus_derive_group_id as reexported_derive_group_id,
     clipplus_download_file_archive as reexported_download_file_archive,
+    clipplus_file_server_bind as reexported_file_server_bind,
+    clipplus_file_server_free as reexported_file_server_free,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
     clipplus_serve_file_archive_to_socket as reexported_serve_file_archive_to_socket,
@@ -543,6 +547,118 @@ fn ffi_serves_length_prefixed_file_archive_to_socket_for_native_shells() {
             "served from ffi socket".to_string()
         )]
     );
+}
+
+#[test]
+fn ffi_file_server_serves_registered_archive_for_native_shells() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("registered.txt");
+    std::fs::write(&source_file, "registered from ffi server").unwrap();
+    let source_paths_json =
+        CString::new(format!(r#"["{}"]"#, json_escape_path(&source_file))).unwrap();
+    let transfer_id = CString::new("transfer-a").unwrap();
+    let temp_dir_c = CString::new(temporary_directory.to_string_lossy().to_string()).unwrap();
+    let handle = unsafe { clipplus_file_server_bind(0) };
+    assert!(!handle.is_null());
+    let port = unsafe { clipplus_file_server_local_port(handle) };
+    assert_ne!(port, 0);
+    assert!(unsafe {
+        clipplus_file_server_register_transfer(
+            handle,
+            transfer_id.as_ptr(),
+            source_paths_json.as_ptr(),
+        )
+    });
+    let handle_value = handle as usize;
+    let server = thread::spawn(move || unsafe {
+        let handle = handle_value as *mut clipplus_ffi::api::ClipPlusFileServerHandle;
+        clipplus_file_server_serve_next(handle, temp_dir_c.as_ptr())
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client.write_all(b"transfer-a\n").unwrap();
+    let mut length_bytes = [0_u8; 8];
+    client.read_exact(&mut length_bytes).unwrap();
+    let byte_count = u64::from_be_bytes(length_bytes);
+    let mut payload = vec![0_u8; byte_count as usize];
+    client.read_exact(&mut payload).unwrap();
+    let served_byte_count = server.join().unwrap();
+
+    assert_eq!(served_byte_count, byte_count);
+    let received_path = temporary_directory.join("server-received.zip");
+    std::fs::write(&received_path, payload).unwrap();
+    assert_eq!(
+        read_zip_entries(&received_path),
+        vec![(
+            "registered.txt".to_string(),
+            "registered from ffi server".to_string()
+        )]
+    );
+
+    unsafe { clipplus_file_server_free(handle) };
+}
+
+#[test]
+fn ffi_file_server_rejects_invalid_values() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("registered.txt");
+    std::fs::write(&source_file, "registered from ffi server").unwrap();
+    let source_paths_json =
+        CString::new(format!(r#"["{}"]"#, json_escape_path(&source_file))).unwrap();
+    let invalid_sources = CString::new("not-json").unwrap();
+    let empty_sources = CString::new("[]").unwrap();
+    let transfer_id = CString::new("transfer-a").unwrap();
+    let empty_transfer_id = CString::new(" ").unwrap();
+
+    let reexported_handle = unsafe { reexported_file_server_bind(0) };
+    assert!(!reexported_handle.is_null());
+    unsafe { reexported_file_server_free(reexported_handle) };
+    assert_eq!(
+        unsafe { clipplus_file_server_local_port(ptr::null_mut()) },
+        0
+    );
+    assert!(!unsafe {
+        clipplus_file_server_register_transfer(
+            ptr::null_mut(),
+            transfer_id.as_ptr(),
+            source_paths_json.as_ptr(),
+        )
+    });
+    assert_eq!(
+        unsafe { clipplus_file_server_serve_next(ptr::null_mut(), ptr::null()) },
+        0
+    );
+
+    let handle = unsafe { clipplus_file_server_bind(0) };
+    assert!(!handle.is_null());
+    assert!(!unsafe {
+        clipplus_file_server_register_transfer(handle, ptr::null(), source_paths_json.as_ptr())
+    });
+    assert!(!unsafe {
+        clipplus_file_server_register_transfer(
+            handle,
+            empty_transfer_id.as_ptr(),
+            source_paths_json.as_ptr(),
+        )
+    });
+    assert!(!unsafe {
+        clipplus_file_server_register_transfer(handle, transfer_id.as_ptr(), ptr::null())
+    });
+    assert!(!unsafe {
+        clipplus_file_server_register_transfer(
+            handle,
+            transfer_id.as_ptr(),
+            invalid_sources.as_ptr(),
+        )
+    });
+    assert!(!unsafe {
+        clipplus_file_server_register_transfer(handle, transfer_id.as_ptr(), empty_sources.as_ptr())
+    });
+
+    unsafe {
+        reexported_file_server_free(ptr::null_mut());
+        clipplus_file_server_free(handle);
+    }
 }
 
 #[test]

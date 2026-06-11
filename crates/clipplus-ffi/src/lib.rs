@@ -5,7 +5,9 @@ pub use api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
     clipplus_create_image_message_json, clipplus_create_text_message_json,
     clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_download_file_archive,
-    clipplus_free_string, clipplus_get_status_json, clipplus_serve_file_archive_to_socket,
-    clipplus_udp_socket_bind, clipplus_udp_socket_free, clipplus_udp_socket_local_port,
-    clipplus_udp_socket_recv, clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
+    clipplus_file_server_bind, clipplus_file_server_free, clipplus_file_server_local_port,
+    clipplus_file_server_register_transfer, clipplus_file_server_serve_next, clipplus_free_string,
+    clipplus_get_status_json, clipplus_serve_file_archive_to_socket, clipplus_udp_socket_bind,
+    clipplus_udp_socket_free, clipplus_udp_socket_local_port, clipplus_udp_socket_recv,
+    clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
 };
