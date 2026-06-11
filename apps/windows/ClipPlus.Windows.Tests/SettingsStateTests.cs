@@ -25,6 +25,25 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void AppOpensSettingsWhenKeySetupIsRequiredOrE2ERequestsIt()
+    {
+        var missingKeyState = new SettingsState(
+            sharedKeyConfigured: false,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+        var configuredState = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+
+        Assert.True(ClipPlus.Windows.App.ShouldOpenSettingsWindow(missingKeyState, showSettingsRequested: false));
+        Assert.True(ClipPlus.Windows.App.ShouldOpenSettingsWindow(configuredState, showSettingsRequested: true));
+        Assert.False(ClipPlus.Windows.App.ShouldOpenSettingsWindow(configuredState, showSettingsRequested: false));
+    }
+
+    [Fact]
     public void StartupToggleUpdatesState()
     {
         var state = new SettingsState(

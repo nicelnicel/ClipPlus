@@ -39,6 +39,7 @@ prlctl list --all --info | rg -n "State:|IP Addresses:|Shared clipboard mode|EFI
 
 - 完整 macOS/Windows E2E 依赖 Windows VM 入站 UDP `47631` 和 TCP `47632` 可从 macOS 访问。若 Windows 能向 macOS 发 hello，但 Windows 日志收不到 macOS hello，先用临时 UDP listener 证明 Mac -> Windows UDP 是否可达，再检查 Windows Defender 防火墙中 `ClipPlus UDP 47631`、`ClipPlus TCP 47632` 规则。修改防火墙属于测试环境变更，必须在计划或执行记录里写清楚。
 - Parallels E2E 启动 Windows GUI app 时，优先使用 `prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand ...` 在当前登录用户桌面里 `Start-Process C:\dotnet\dotnet.exe ...ClipPlus.Windows.dll`。不要用普通 SSH 会话 `Start-Process` 后立即返回来代表真实运行状态；SSH 会话结束后 GUI 子进程可能随会话消失，导致 Windows 实际没有监听 UDP `47631`。
+- Windows 真实 UI E2E 如需让设置窗口稳定出现在桌面，可设置 `CLIPPLUS_SHOW_SETTINGS_ON_START=1`。该变量只能用于显示设置窗口，不能触发文件下载，也不能替代“接收文件”按钮点击。
 - 通过 `prlctl exec` 传 Windows PowerShell 脚本时优先使用 `-EncodedCommand`，避免 macOS shell 提前展开 `$env:CLIPPLUS_*` 造成环境变量没有传入。
 - 不要用 Windows PowerShell 自身的 `UdpClient`/`TcpListener` 入站探针直接判断 ClipPlus app 入站能力；Windows Defender 可能自动生成 `Windows PowerShell` 应用级 Block 规则，Block 优先于端口 Allow。验证 ClipPlus 入站时应以 `Get-NetUDPEndpoint -LocalPort 47631`、ClipPlus 日志中的 `peer hello`，或非 PowerShell 监听进程为准。
 

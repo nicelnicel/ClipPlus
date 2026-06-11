@@ -3707,6 +3707,18 @@ git commit -m "test: add parallels e2e checklist"
 - 最终验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 23/23、transport message 32/32 和 macOS Swift 32/32；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 31/31；Windows single-file 重新发布为 `win-arm64` 后，不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 直接运行 `target/windows-single-exe/ClipPlus.Windows.exe`，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。
 - 剩余项更新：跨系统 fileOffer、macOS server 端 zip 服务、Windows Rust FFI 下载端和 zip 内容校验已有真实进程自动化辅助 E2E 证据；真实 UI 点击接收按钮仍未完成，不能标记完整文件传输 UI E2E 通过。后续应优先解决 Windows WPF/Parallels UI 操作，或提供专门的可审计 UI 自动化通道。
 
+**2026-06-11 macOS -> Windows 文件传输真实 UI 接收复验：**
+
+- 目的：补齐 Windows 下载端 Rust FFI 后的真实 UI 接收缺口。本轮新增并验证 `CLIPPLUS_SHOW_SETTINGS_ON_START=1`，只用于 E2E 启动时让 Windows 设置窗口稳定显示；该变量不触发下载、不替代接收按钮。
+- 过滤验证：Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH`，运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter AppOpensSettingsWhenKeySetupIsRequiredOrE2ERequestsIt` 通过 1/1；随后重新发布 `target/windows-single-exe/ClipPlus.Windows.exe`，大小 `68341132` 字节。
+- 端到端方向：macOS -> Windows。macOS 使用 `/private/tmp/ClipPlusMac.app` 直接带环境启动：`CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1`、`CLIPPLUS_PEER_HOSTS=10.211.55.3`；Windows 使用 single-file exe，设置 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1`、`CLIPPLUS_PEER_HOSTS=10.211.55.2`、`CLIPPLUS_SHOW_SETTINGS_ON_START=1`，未设置 `CLIPPLUS_AUTO_RECEIVE_FILES`。
+- 文件发布：macOS 通过 Swift/AppKit 将真实文件 `/Users/cc/proj/ClipPlus/target/test-assets/mac-ui-source-mac-to-windows-ui-receive-1781144134.txt` 作为 `NSURL` 写入 NSPasteboard，内容 marker 为 `mac-to-windows-ui-receive-1781144134`。
+- 真实 UI 接收：Windows 设置窗口显示 `cc的MacBook Pro：1 个文件可接收` 按钮。Parallels 坐标点击和低层鼠标事件没有触发 WPF `Button` action；随后用 Windows UI Automation 枚举真实 WPF Button，确认该按钮 `enabled=True`，并通过 `InvokePattern.Invoke()` 调用该按钮。该路径触发的是 UI 按钮事件，不调用内部下载函数。
+- 链路证据：Windows 日志出现 `received file offer file_count=1 byte_count=36` 和 `downloaded file archive byte_count=247`；macOS 日志出现 `served file archive file_count=1 byte_count=247`；Windows 生成 `C:\Users\Administrator\Downloads\ClipPlus-Received-957E75D2-A5E7-4A21-A8CF-C7E08F1B054D.zip`，长度 `247` 字节。
+- 内容校验：Windows 用 `.NET System.IO.Compression.ZipFile` 读取 zip，存在 `mac-ui-source-mac-to-windows-ui-receive-1781144134.txt`，内容与 marker `mac-to-windows-ui-receive-1781144134` 完全一致，输出 `E2E_UI_CONTENT_OK=mac-ui-source-mac-to-windows-ui-receive-1781144134.txt`。
+- 日志与清理：macOS 和 Windows 日志匹配检查未出现 `clipplus-test-key`、marker、测试文件名、`/Users/cc` 或 `C:`；E2E 后已停止 macOS `ClipPlusMac` 和 Windows `ClipPlus.Windows`/终端测试进程，并清理 `launchctl` 环境变量。E2E 前确认 Parallels `Shared clipboard mode: off`。
+- 剩余项更新：Windows 下载端 Rust FFI 的 macOS -> Windows 文件传输真实 UI 接收已通过；后续还可以继续迁移 TCP 文件归档 server 端，或完善 Windows 设置页文本编码/布局与托盘入口可视化测试。
+
 ---
 
 ## 自查清单

@@ -37,10 +37,17 @@ public partial class App : System.Windows.Application
         syncService = new UdpTextSyncService(settings, new ClipPlusLogger(), Dispatcher);
         syncService.Start();
 
-        if (settings.RequiresKeySetup)
+        if (ShouldOpenSettingsWindow(
+            settings,
+            Environment.GetEnvironmentVariable("CLIPPLUS_SHOW_SETTINGS_ON_START") == "1"))
         {
             new SettingsWindow(settings).Show();
         }
+    }
+
+    public static bool ShouldOpenSettingsWindow(SettingsState settings, bool showSettingsRequested)
+    {
+        return settings.RequiresKeySetup || showSettingsRequested;
     }
 
     protected override void OnExit(ExitEventArgs e)
