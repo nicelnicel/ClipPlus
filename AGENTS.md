@@ -69,6 +69,7 @@ C:\dotnet\dotnet.exe ClipPlus.Windows.dll
 
 - Windows VM 内 `.NET` 目前安装在 `C:\dotnet`，没有注册为全局 runtime；自动化/E2E 启动调试输出目录的 framework-dependent App 时优先使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`，不要直接运行该目录里的 apphost `ClipPlus.Windows.exe`。直接运行调试 apphost exe 可能报 `hostfxr.dll not found`。`target\windows-single-exe\ClipPlus.Windows.exe` 是 self-contained single-file 发布产物，必须直接运行它做发布烟测。
 - 快速同步回归可以使用 `CLIPPLUS_AUTO_TRUST=1`；测试首次确认/设备信任时不要设置 `CLIPPLUS_AUTO_TRUST`。
+- 文件传输链路自动化隔离回归可以使用 `CLIPPLUS_AUTO_RECEIVE_FILES=1`，收到可信设备的 fileOffer 后会触发与“接收文件”按钮相同的下载事件。该变量只能用于证明跨系统 fileOffer、TCP 归档服务和下载路径；不能替代“真实 UI 点击接收按钮”的最终验收。
 - 无 `CLIPPLUS_AUTO_TRUST` 的手动确认验收至少验证：
   - 双方日志只出现 `peer hello` 时，Mac 写入剪贴板不会覆盖 Windows 剪贴板基线值。
   - macOS 菜单栏 ClipPlus 面板显示 `允许全部待确认设备（1）`，点击后 Windows 日志出现 `peer trust accepted`。
@@ -162,6 +163,7 @@ prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand "$
   - 如果本次改动涉及文件正文归档/下载实现，必须确认 `served file archive` 和 `downloaded file archive` 来自新实现路径，并在计划中记录归档文件 byte_count。
   - 如果本次改动涉及 macOS 下载端 Rust FFI，必须跑 Windows -> macOS 文件传输真实 UI 验收：Windows 端用 `Set-Clipboard -Path <真实文件>` 发布，macOS 端通过菜单栏 ClipPlus 面板点击接收按钮，最后解压 `~/Downloads/ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
   - 如果本次改动涉及 Windows 下载端 Rust FFI，必须跑 macOS -> Windows 文件传输真实 UI 验收：macOS 端复制真实文件到系统剪贴板并发布，Windows 端通过托盘 ClipPlus 面板点击接收按钮，最后解压 Windows `Downloads\ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
+  - 如果 Windows/macOS 真实 UI 自动化暂时不可用，可以先用 `CLIPPLUS_AUTO_RECEIVE_FILES=1` 做“自动接收”隔离回归，但计划记录必须明确标注为自动化辅助验收，并继续保留真实 UI 点击验收缺口。
   - `scripts/test/windows-file-offer-helper.ps1` 只能用于隔离调试 macOS 下载端：它从 Windows 发送 fileOffer 并提供 TCP 归档服务，但不能替代 Windows app 通过系统剪贴板自动发布文件 offer 的完整 E2E。使用该 helper 时，计划/执行记录必须标注为“部分验证”。
 - 图片同步验收至少验证真实跨系统方向；涉及防回环、图片 hash 或平台剪贴板写入逻辑时，必须覆盖 macOS -> Windows 和 Windows -> macOS 两个方向。
 - 当前图片 MVP 只支持 32 KiB 以内的 inline PNG；超过限制的图片后续应走文件传输或新的大对象通道。测试文档和计划必须明确这个限制。

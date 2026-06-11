@@ -12,6 +12,7 @@ final class UdpTextSyncService {
     private let deviceId: String
     private let deviceName: String
     private let autoTrustPeers: Bool
+    private let autoReceiveFiles: Bool
     private let peerHosts: [String]
 
     private var udpSocket: RustUdpSocket?
@@ -37,6 +38,7 @@ final class UdpTextSyncService {
         }()
         deviceName = Host.current().localizedName ?? "Mac"
         autoTrustPeers = ProcessInfo.processInfo.environment["CLIPPLUS_AUTO_TRUST"] == "1"
+        autoReceiveFiles = ProcessInfo.processInfo.environment["CLIPPLUS_AUTO_RECEIVE_FILES"] == "1"
         peerHosts = ProcessInfo.processInfo.environment["CLIPPLUS_PEER_HOSTS"]?
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -306,7 +308,7 @@ final class UdpTextSyncService {
                 sourceHost: sourceHost,
                 fileCount: files.count,
                 totalBytes: totalBytes
-            ))
+            ), autoRequestReceive: autoReceiveFiles)
             logger.info("received file offer file_count=\(files.count) byte_count=\(totalBytes)")
         }
     }

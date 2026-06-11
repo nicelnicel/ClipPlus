@@ -211,10 +211,14 @@ public sealed class SettingsState : INotifyPropertyChanged
         return trustedPeerIds.Contains(deviceId);
     }
 
-    public void UpdateRemoteFileOffer(RemoteFileOfferSummary offer)
+    public void UpdateRemoteFileOffer(RemoteFileOfferSummary offer, bool autoRequestReceive = false)
     {
         RemoteFileOffer = offer;
         LastStatusMessage = offer.DisplayTitle;
+        if (autoRequestReceive)
+        {
+            RequestRemoteFileReceive();
+        }
     }
 
     public void ClearRemoteFileOffer(string transferId)

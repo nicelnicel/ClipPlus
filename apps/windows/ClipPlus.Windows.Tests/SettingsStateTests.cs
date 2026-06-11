@@ -415,6 +415,32 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void RemoteFileOfferCanAutoRequestReceiveForE2EAutomation()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+        string? requestedTransferId = null;
+        state.RemoteFileReceiveRequested += transferId => requestedTransferId = transferId;
+
+        state.UpdateRemoteFileOffer(
+            new RemoteFileOfferSummary(
+                TransferId: "transfer-auto",
+                SourceDeviceId: "mac-device",
+                SourceDeviceName: "Mac",
+                SourceHost: "10.211.55.2",
+                FileCount: 1,
+                TotalBytes: 12
+            ),
+            autoRequestReceive: true
+        );
+
+        Assert.Equal("transfer-auto", requestedTransferId);
+    }
+
+    [Fact]
     public void FileTransferArchiveWritesZipEntriesForFilesAndDirectories()
     {
         var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());

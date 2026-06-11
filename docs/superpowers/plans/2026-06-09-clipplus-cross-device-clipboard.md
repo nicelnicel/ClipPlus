@@ -3695,6 +3695,18 @@ git commit -m "test: add parallels e2e checklist"
 - 自动化阻塞：尝试用 `prlctl exec --current-user` 调用 Windows UIAutomation 访问 WPF `ClipPlus 设置` 窗口时，PowerShell UIAutomation 进程卡住；已清理本地 `prlctl exec` 和远端 `powershell`/`dotnet` 进程。后续真实 UI 文件接收 E2E 仍需要新的 Windows UI 操作方案，例如通过 Parallels 可视桌面坐标/辅助功能、专门的 Windows UI 自动化通道，或增加受控调试入口。
 - 测试方案记录：`AGENTS.md` 已补充 Parallels E2E 的 Windows GUI app 启动方式、`-EncodedCommand` 传参要求，以及 PowerShell 入站探针不能直接代表 ClipPlus app 的限制。
 
+**2026-06-11 文件传输自动接收 E2E 隔离复验：**
+
+- 目的：当前 Parallels 可视 UI/Windows UIAutomation 仍不能稳定点击 Windows WPF 设置窗口里的“接收文件”按钮；为继续验证真实跨系统传输链路，本轮新增 `CLIPPLUS_AUTO_RECEIVE_FILES=1` 测试入口。该入口只在环境变量启用时生效，收到可信设备 fileOffer 后调用与接收按钮相同的 `RemoteFileReceiveRequested` 事件，不新增下载分支；它不能替代最终真实 UI 点击验收。
+- TDD 红灯：macOS 新增 `testRemoteFileOfferCanAutoRequestReceiveForE2EAutomation` 后先失败于 `extra argument 'autoRequestReceive' in call`；Windows 新增 `RemoteFileOfferCanAutoRequestReceiveForE2EAutomation` 后先失败于 `UpdateRemoteFileOffer` 不存在 `autoRequestReceive` 参数。随后为 macOS/Windows `SettingsState.updateRemoteFileOffer` 增加默认关闭的 `autoRequestReceive` 参数，并在两端 `UdpTextSyncService` 中接入 `CLIPPLUS_AUTO_RECEIVE_FILES=1`。
+- 过滤验证：`cd apps/mac && swift test --filter RemoteFileOfferCanAutoRequestReceiveForE2EAutomation` 通过 1/1；Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter RemoteFileOfferCanAutoRequestReceiveForE2EAutomation` 通过 1/1。
+- 自动接收 E2E 方向：macOS -> Windows。macOS 使用 `/private/tmp/ClipPlusMac.app` bundle 方式启动并通过 `launchctl setenv` 注入 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1`、`CLIPPLUS_AUTO_RECEIVE_FILES=1`、`CLIPPLUS_PEER_HOSTS=10.211.55.3`；Windows 通过 `prlctl exec --current-user powershell -EncodedCommand` 启动 `C:\dotnet\dotnet.exe ...ClipPlus.Windows.dll`，同样设置共享 Key、自动信任、自动接收和 `CLIPPLUS_PEER_HOSTS=10.211.55.2`。E2E 前后 Parallels `Shared clipboard mode` 均为 `off`。
+- 文件链路证据：macOS 将真实文件 `/Users/cc/proj/ClipPlus/target/test-assets/mac-auto-source-mac-to-windows-auto-receive-1781143189.txt` 写入系统剪贴板；macOS 日志出现 `published file offer file_count=1` 和 `served file archive file_count=1 byte_count=258`；Windows 日志出现 `received file offer file_count=1 byte_count=39` 和 `downloaded file archive byte_count=258`；Windows `Downloads` 生成 `ClipPlus-Received-363538F5-C9E7-4C57-B3BD-A46BFAA27913.zip`。
+- 内容校验：Windows 解压该 zip 后存在 `mac-auto-source-mac-to-windows-auto-receive-1781143189.txt`，文件内容为 `mac-to-windows-auto-receive-1781143189`，与 macOS 源文件 marker 一致；PowerShell 输出 `E2E_ZIP_CONTENT_OK`。
+- 日志与清理：macOS 和 Windows 日志匹配检查未出现 `clipplus-test-key`、marker、测试文件名、`/Users/cc` 或 `C:`；测试后已停止 macOS `ClipPlusMac` 和 Windows `dotnet.exe`，并清理 `launchctl` 环境变量。
+- 最终验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 23/23、transport message 32/32 和 macOS Swift 32/32；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 31/31；Windows single-file 重新发布为 `win-arm64` 后，不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 直接运行 `target/windows-single-exe/ClipPlus.Windows.exe`，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。
+- 剩余项更新：跨系统 fileOffer、macOS server 端 zip 服务、Windows Rust FFI 下载端和 zip 内容校验已有真实进程自动化辅助 E2E 证据；真实 UI 点击接收按钮仍未完成，不能标记完整文件传输 UI E2E 通过。后续应优先解决 Windows WPF/Parallels UI 操作，或提供专门的可审计 UI 自动化通道。
+
 ---
 
 ## 自查清单

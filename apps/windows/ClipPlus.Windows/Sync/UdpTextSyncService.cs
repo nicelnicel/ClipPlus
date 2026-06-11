@@ -24,6 +24,7 @@ public sealed class UdpTextSyncService : IDisposable
     private readonly string deviceId;
     private readonly string deviceName;
     private readonly bool autoTrustPeers;
+    private readonly bool autoReceiveFiles;
     private readonly IReadOnlyList<string> peerHosts;
     private readonly object udpSocketLock = new();
 
@@ -47,6 +48,7 @@ public sealed class UdpTextSyncService : IDisposable
         deviceId = LoadOrCreateDeviceId();
         deviceName = Environment.MachineName;
         autoTrustPeers = Environment.GetEnvironmentVariable("CLIPPLUS_AUTO_TRUST") == "1";
+        autoReceiveFiles = Environment.GetEnvironmentVariable("CLIPPLUS_AUTO_RECEIVE_FILES") == "1";
         peerHosts = (Environment.GetEnvironmentVariable("CLIPPLUS_PEER_HOSTS") ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         state.PeerApproved += SendTrust;
@@ -333,7 +335,7 @@ public sealed class UdpTextSyncService : IDisposable
                     SourceHost: sourceHost,
                     FileCount: message.Files.Count,
                     TotalBytes: totalBytes
-                ));
+                ), autoRequestReceive: autoReceiveFiles);
                 logger.Info($"received file offer file_count={message.Files.Count} byte_count={totalBytes}");
                 break;
         }

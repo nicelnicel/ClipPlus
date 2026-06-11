@@ -357,6 +357,30 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(requestedTransferId, "transfer-1")
     }
 
+    func testRemoteFileOfferCanAutoRequestReceiveForE2EAutomation() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+        var requestedTransferId: String?
+        state.remoteFileReceiveRequested = { requestedTransferId = $0 }
+
+        state.updateRemoteFileOffer(
+            RemoteFileOfferSummary(
+                transferId: "transfer-auto",
+                sourceDeviceId: "windows-device",
+                sourceDeviceName: "Windows",
+                sourceHost: "10.211.55.3",
+                fileCount: 1,
+                totalBytes: 12
+            ),
+            autoRequestReceive: true
+        )
+
+        XCTAssertEqual(requestedTransferId, "transfer-auto")
+    }
+
     func testFileTransferArchiveWritesZipEntriesForFilesAndDirectories() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

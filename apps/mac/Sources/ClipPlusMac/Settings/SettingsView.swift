@@ -191,9 +191,12 @@ final class SettingsState: ObservableObject, Equatable {
         return true
     }
 
-    func updateRemoteFileOffer(_ offer: RemoteFileOfferSummary) {
+    func updateRemoteFileOffer(_ offer: RemoteFileOfferSummary, autoRequestReceive: Bool = false) {
         remoteFileOffer = offer
         lastStatusMessage = offer.displayTitle
+        if autoRequestReceive {
+            requestRemoteFileReceive()
+        }
     }
 
     func clearRemoteFileOffer(transferId: String) {
