@@ -1,3 +1,4 @@
+import Darwin
 import Network
 import XCTest
 @testable import ClipPlusMac
@@ -435,6 +436,89 @@ final class SettingsStateTests: XCTestCase {
         )
     }
 
+    func testCoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let sourceURL = temporaryDirectory.appendingPathComponent("source.txt")
+        try "served from mac ffi socket".write(to: sourceURL, atomically: true, encoding: .utf8)
+        let archiveURL = temporaryDirectory.appendingPathComponent("served.zip")
+        let listener = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(listener, 0)
+        defer { Darwin.close(listener) }
+        var reuse: Int32 = 1
+        XCTAssertEqual(Darwin.setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size)), 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.bind(listener, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(bindResult, 0)
+        XCTAssertEqual(Darwin.listen(listener, 1), 0)
+        var localAddress = sockaddr_in()
+        var localAddressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &localAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.getsockname(listener, sockaddrPointer, &localAddressLength)
+            }
+        }
+        XCTAssertEqual(nameResult, 0)
+        let port = Int(UInt16(bigEndian: localAddress.sin_port))
+        let servedExpectation = expectation(description: "archive served")
+        var served: UInt64 = 0
+        DispatchQueue.global().async {
+            let client = Darwin.accept(listener, nil, nil)
+            if client >= 0 {
+                defer { Darwin.close(client) }
+                served = CoreBridge().serveFileArchive(
+                    socketDescriptor: client,
+                    sourcePaths: [sourceURL.path],
+                    archivePath: archiveURL.path
+                )
+            }
+            servedExpectation.fulfill()
+        }
+        let receiver = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(receiver, 0)
+        defer { Darwin.close(receiver) }
+        var targetAddress = sockaddr_in()
+        targetAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        targetAddress.sin_family = sa_family_t(AF_INET)
+        targetAddress.sin_port = UInt16(port).bigEndian
+        targetAddress.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connectResult = withUnsafePointer(to: &targetAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.connect(receiver, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connectResult, 0)
+        let lengthData = try readSocketData(receiver, byteCount: 8)
+        XCTAssertEqual(lengthData.count, 8)
+        let byteCount = lengthData.withUnsafeBytes { rawBuffer in
+            UInt64(bigEndian: rawBuffer.load(as: UInt64.self))
+        }
+        let payload = try readSocketData(receiver, byteCount: Int(byteCount))
+        wait(for: [servedExpectation], timeout: 2)
+        XCTAssertGreaterThan(served, 0)
+        XCTAssertEqual(byteCount, served)
+        XCTAssertEqual(payload.count, Int(byteCount))
+        let receivedURL = temporaryDirectory.appendingPathComponent("received.zip")
+        try payload.write(to: receivedURL)
+        let extractedDirectory = temporaryDirectory.appendingPathComponent("served-unzipped", isDirectory: true)
+        try unzip(receivedURL, to: extractedDirectory)
+
+        XCTAssertEqual(
+            try String(contentsOf: extractedDirectory.appendingPathComponent("source.txt"), encoding: .utf8),
+            "served from mac ffi socket"
+        )
+    }
+
     func testCoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable() throws {
         let queue = DispatchQueue(label: "clipplus.test.file-download")
         let listener = try NWListener(using: .tcp, on: .any)
@@ -615,6 +699,20 @@ private func unzip(_ archiveURL: URL, to destinationURL: URL) throws {
     try process.run()
     process.waitUntilExit()
     XCTAssertEqual(process.terminationStatus, 0)
+}
+
+private func readSocketData(_ socketDescriptor: Int32, byteCount: Int) throws -> Data {
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: min(byteCount, 64 * 1024))
+    while data.count < byteCount {
+        let remaining = byteCount - data.count
+        let readCount = recv(socketDescriptor, &buffer, min(buffer.count, remaining), 0)
+        if readCount <= 0 {
+            throw NSError(domain: "ClipPlusMacTests", code: Int(readCount))
+        }
+        data.append(buffer, count: readCount)
+    }
+    return data
 }
 
 private func expectedGroupId(for rawKey: String) -> String {

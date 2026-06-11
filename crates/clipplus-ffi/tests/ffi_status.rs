@@ -5,13 +5,18 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::thread;
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket;
+
 use clipplus_ffi::api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
     clipplus_create_image_message_json, clipplus_create_text_message_json,
     clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_download_file_archive,
-    clipplus_free_string, clipplus_get_status_json, clipplus_udp_socket_bind,
-    clipplus_udp_socket_free, clipplus_udp_socket_local_port, clipplus_udp_socket_recv,
-    clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
+    clipplus_free_string, clipplus_get_status_json, clipplus_serve_file_archive_to_socket,
+    clipplus_udp_socket_bind, clipplus_udp_socket_free, clipplus_udp_socket_local_port,
+    clipplus_udp_socket_recv, clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
 };
 use clipplus_ffi::{
     clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
@@ -23,6 +28,7 @@ use clipplus_ffi::{
     clipplus_download_file_archive as reexported_download_file_archive,
     clipplus_free_string as reexported_free_string,
     clipplus_get_status_json as reexported_get_status_json,
+    clipplus_serve_file_archive_to_socket as reexported_serve_file_archive_to_socket,
     clipplus_udp_socket_bind as reexported_udp_socket_bind,
     clipplus_write_file_archive_zip as reexported_write_file_archive_zip,
 };
@@ -42,6 +48,16 @@ unsafe fn take_ffi_string(ptr: *mut std::ffi::c_char) -> String {
     let value = unsafe { CStr::from_ptr(ptr).to_string_lossy().to_string() };
     unsafe { reexported_free_string(ptr) };
     value
+}
+
+#[cfg(unix)]
+fn raw_socket_value(stream: &std::net::TcpStream) -> usize {
+    stream.as_raw_fd() as usize
+}
+
+#[cfg(windows)]
+fn raw_socket_value(stream: &std::net::TcpStream) -> usize {
+    stream.as_raw_socket() as usize
 }
 
 #[test]
@@ -488,6 +504,48 @@ fn ffi_writes_file_archive_zip_for_native_shells() {
 }
 
 #[test]
+fn ffi_serves_length_prefixed_file_archive_to_socket_for_native_shells() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("source.txt");
+    let archive_path = temporary_directory.join("served.zip");
+    std::fs::write(&source_file, "served from ffi socket").unwrap();
+    let source_paths_json =
+        CString::new(format!(r#"["{}"]"#, json_escape_path(&source_file))).unwrap();
+    let archive_path = CString::new(archive_path.to_string_lossy().to_string()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let byte_count = unsafe {
+            clipplus_serve_file_archive_to_socket(
+                raw_socket_value(&stream),
+                source_paths_json.as_ptr(),
+                archive_path.as_ptr(),
+            )
+        };
+        assert!(byte_count > 0);
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let mut length_bytes = [0_u8; 8];
+    client.read_exact(&mut length_bytes).unwrap();
+    let byte_count = u64::from_be_bytes(length_bytes);
+    let mut payload = vec![0_u8; byte_count as usize];
+    client.read_exact(&mut payload).unwrap();
+    server.join().unwrap();
+
+    let received_path = temporary_directory.join("received.zip");
+    std::fs::write(&received_path, payload).unwrap();
+    assert_eq!(
+        read_zip_entries(&received_path),
+        vec![(
+            "source.txt".to_string(),
+            "served from ffi socket".to_string()
+        )]
+    );
+}
+
+#[test]
 fn ffi_write_file_archive_zip_rejects_invalid_values() {
     let temporary_directory = unique_temp_dir();
     let archive_path = CString::new(
@@ -508,6 +566,16 @@ fn ffi_write_file_archive_zip_rejects_invalid_values() {
         reexported_write_file_archive_zip(invalid_sources.as_ptr(), archive_path.as_ptr())
     });
     assert!(!unsafe { reexported_write_file_archive_zip(empty_sources.as_ptr(), ptr::null()) });
+    assert_eq!(
+        unsafe {
+            reexported_serve_file_archive_to_socket(
+                0,
+                empty_sources.as_ptr(),
+                archive_path.as_ptr(),
+            )
+        },
+        0
+    );
 }
 
 #[test]

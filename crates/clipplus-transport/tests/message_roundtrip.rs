@@ -538,6 +538,31 @@ fn file_transfer_archive_writes_zip_entries_for_files_and_directories() {
 }
 
 #[test]
+fn file_transfer_archive_writes_length_prefixed_zip_to_writer() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("source.txt");
+    let archive_path = temporary_directory.join("served.zip");
+    std::fs::write(&source_file, "served archive").unwrap();
+    let mut payload = Vec::new();
+
+    let summary =
+        FileTransferArchive::write_length_prefixed_zip(&[source_file], &archive_path, &mut payload)
+            .unwrap();
+
+    let byte_count = u64::from_be_bytes(payload[..8].try_into().unwrap());
+    assert_eq!(summary.file_count, 1);
+    assert_eq!(summary.byte_count, byte_count);
+    assert_eq!(payload.len(), 8 + byte_count as usize);
+
+    let zip_path = temporary_directory.join("payload.zip");
+    std::fs::write(&zip_path, &payload[8..]).unwrap();
+    assert_eq!(
+        read_zip_entries(&zip_path),
+        vec![("source.txt".to_string(), "served archive".to_string())]
+    );
+}
+
+#[test]
 fn file_transfer_archive_rejects_empty_sources_and_missing_parent() {
     let temporary_directory = unique_temp_dir();
     let missing_parent_archive = temporary_directory.join("missing").join("files.zip");

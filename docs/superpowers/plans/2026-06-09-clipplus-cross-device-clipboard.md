@@ -3719,6 +3719,19 @@ git commit -m "test: add parallels e2e checklist"
 - 日志与清理：macOS 和 Windows 日志匹配检查未出现 `clipplus-test-key`、marker、测试文件名、`/Users/cc` 或 `C:`；E2E 后已停止 macOS `ClipPlusMac` 和 Windows `ClipPlus.Windows`/终端测试进程，并清理 `launchctl` 环境变量。E2E 前确认 Parallels `Shared clipboard mode: off`。
 - 剩余项更新：Windows 下载端 Rust FFI 的 macOS -> Windows 文件传输真实 UI 接收已通过；后续还可以继续迁移 TCP 文件归档 server 端，或完善 Windows 设置页文本编码/布局与托盘入口可视化测试。
 
+**2026-06-11 文件归档 server 端 length-prefixed socket 发送 Rust FFI 迁移复验：**
+
+- 迁移范围：`clipplus-transport::file_transfer::FileTransferArchive` 新增 `write_length_prefixed_zip`，在 Rust 内写入 zip 后发送 8 字节 big-endian 长度前缀并按 64 KiB 分块流式写出归档正文；`clipplus-ffi` 新增 `clipplus_serve_file_archive_to_socket(socket, source_paths_json, archive_path) -> u64`，对原生壳传入的已接受 TCP socket 写出 length-prefixed zip 并返回 byte_count。macOS/Windows 仍保留原生 accept 和 `transferId -> source paths` 查表，但 zip+长度前缀+socket 写出不再由 Swift/C# 分别实现。
+- TDD 红灯：Rust transport 新增 `file_transfer_archive_writes_length_prefixed_zip_to_writer` 后先失败于缺少 `FileTransferArchive::write_length_prefixed_zip`；Rust FFI 新增 `ffi_serves_length_prefixed_file_archive_to_socket_for_native_shells` 后先失败于缺少 `clipplus_serve_file_archive_to_socket` 导出；Swift/C# 过滤测试先失败于外层 `CoreBridge` 缺少 `serveFileArchive` / `ServeFileArchiveToSocket`。
+- 单元验证：`cargo test -p clipplus-ffi ffi_serves_length_prefixed_file_archive_to_socket_for_native_shells` 通过；macOS `CLIPPLUS_FFI_LIBRARY_PATH=/Users/cc/proj/ClipPlus/target/debug/libclipplus_ffi.dylib swift test --filter CoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable` 通过；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo --filter CoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable` 通过 1/1。
+- 全量验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 24/24、transport message 33/33 和 macOS Swift 33/33；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 33/33。
+- 发布验证：`./scripts/dev/build-mac-app.sh` 通过，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；Windows single-file 重新发布为 `win-arm64`，生成 `target/windows-single-exe/ClipPlus.Windows.exe`，大小 `68343134` 字节；不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 single-file smoke，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。
+- 端到端复验方向：macOS -> Windows。macOS 使用最新 `/private/tmp/ClipPlusMac.app`，Windows 使用最新 single-file exe，并设置 `CLIPPLUS_SHOW_SETTINGS_ON_START=1` 仅显示设置窗口，未设置 `CLIPPLUS_AUTO_RECEIVE_FILES`。macOS 将真实文件 `/Users/cc/proj/ClipPlus/target/test-assets/mac-rust-server-source-mac-to-windows-rust-server-ui-1781145463.txt` 作为 `NSURL` 写入 NSPasteboard，marker 为 `mac-to-windows-rust-server-ui-1781145463`。
+- 真实 UI 接收：Windows 设置窗口通过 UI Automation 枚举真实 WPF Button，触发 `cc的MacBook Pro：1 个文件可接收` 按钮；Windows 日志出现 `received file offer file_count=1 byte_count=40` 和 `downloaded file archive byte_count=277`；macOS 日志出现 `served file archive file_count=1 byte_count=277`。
+- 内容和脱敏：Windows 生成 `C:\Users\Administrator\Downloads\ClipPlus-Received-ECC7286E-28DF-448B-83C6-8C0D9A2F47CB.zip`，长度 `277` 字节；zip 内 `mac-rust-server-source-mac-to-windows-rust-server-ui-1781145463.txt` 内容与 marker 完全一致，输出 `E2E_RUST_SERVER_CONTENT_OK=mac-rust-server-source-mac-to-windows-rust-server-ui-1781145463.txt`。macOS 和 Windows 日志匹配检查未出现 `clipplus-test-key`、marker、测试文件名、`/Users/cc` 或 `C:`。
+- 清理和测试环境：E2E 前后 Parallels `Shared clipboard mode: off`；测试后已停止 macOS `ClipPlusMac`、Windows `ClipPlus.Windows` 和终端测试进程，并清理 `launchctl` 环境变量。
+- 剩余项更新：文件 offer 消息、zip 生成、length-prefixed socket 发送和下载端均已走 Rust FFI；原生壳仍保留 TCP accept、transferId 查表和 transfer registry，后续如果继续收敛可实现 Rust opaque file server handle，把 bind/accept/register/serve_next 也移入 Rust。
+
 ---
 
 ## 自查清单

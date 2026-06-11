@@ -66,6 +66,11 @@ public sealed class CoreBridge
         return Ffi.Value?.WriteFileArchiveZip(sourcePaths, archivePath) == true;
     }
 
+    public ulong ServeFileArchiveToSocket(IntPtr socket, IReadOnlyList<string> sourcePaths, string archivePath)
+    {
+        return Ffi.Value?.ServeFileArchiveToSocket(socket, sourcePaths, archivePath) ?? 0;
+    }
+
     public bool DownloadFileArchive(string host, int port, string transferId, string destinationPath)
     {
         return Ffi.Value?.DownloadFileArchive(host, port, transferId, destinationPath) == true;
@@ -177,6 +182,12 @@ internal sealed class ClipPlusFfiBridge
         IntPtr archivePath);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate ulong ServeFileArchiveToSocketDelegate(
+        UIntPtr socket,
+        IntPtr sourcePathsJson,
+        IntPtr archivePath);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool DownloadFileArchiveDelegate(
         IntPtr host,
@@ -225,6 +236,7 @@ internal sealed class ClipPlusFfiBridge
     private readonly CreateImageMessageJsonDelegate createImageMessageJson;
     private readonly CreateFileOfferMessageJsonDelegate createFileOfferMessageJson;
     private readonly WriteFileArchiveZipDelegate writeFileArchiveZip;
+    private readonly ServeFileArchiveToSocketDelegate serveFileArchiveToSocket;
     private readonly DownloadFileArchiveDelegate downloadFileArchive;
     private readonly UdpSocketBindDelegate udpSocketBind;
     private readonly UdpSocketFreeDelegate udpSocketFree;
@@ -241,6 +253,7 @@ internal sealed class ClipPlusFfiBridge
         CreateImageMessageJsonDelegate createImageMessageJson,
         CreateFileOfferMessageJsonDelegate createFileOfferMessageJson,
         WriteFileArchiveZipDelegate writeFileArchiveZip,
+        ServeFileArchiveToSocketDelegate serveFileArchiveToSocket,
         DownloadFileArchiveDelegate downloadFileArchive,
         UdpSocketBindDelegate udpSocketBind,
         UdpSocketFreeDelegate udpSocketFree,
@@ -256,6 +269,7 @@ internal sealed class ClipPlusFfiBridge
         this.createImageMessageJson = createImageMessageJson;
         this.createFileOfferMessageJson = createFileOfferMessageJson;
         this.writeFileArchiveZip = writeFileArchiveZip;
+        this.serveFileArchiveToSocket = serveFileArchiveToSocket;
         this.downloadFileArchive = downloadFileArchive;
         this.udpSocketBind = udpSocketBind;
         this.udpSocketFree = udpSocketFree;
@@ -286,6 +300,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_file_offer_message_json", out var createFileOfferMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_write_file_archive_zip", out var writeFileArchiveZipSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_serve_file_archive_to_socket", out var serveFileArchiveToSocketSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out var downloadFileArchiveSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out var udpSocketBindSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_free", out var udpSocketFreeSymbol)
@@ -306,6 +321,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateFileOfferMessageJsonDelegate>(createFileOfferMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<WriteFileArchiveZipDelegate>(writeFileArchiveZipSymbol),
+                Marshal.GetDelegateForFunctionPointer<ServeFileArchiveToSocketDelegate>(serveFileArchiveToSocketSymbol),
                 Marshal.GetDelegateForFunctionPointer<DownloadFileArchiveDelegate>(downloadFileArchiveSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketBindDelegate>(udpSocketBindSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketFreeDelegate>(udpSocketFreeSymbol),
@@ -515,6 +531,30 @@ internal sealed class ClipPlusFfiBridge
         try
         {
             return writeFileArchiveZip(sourcePathsJsonPointer, archivePathPointer);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(sourcePathsJsonPointer);
+            Marshal.FreeCoTaskMem(archivePathPointer);
+        }
+    }
+
+    public ulong ServeFileArchiveToSocket(IntPtr socket, IReadOnlyList<string> sourcePaths, string archivePath)
+    {
+        if (socket == IntPtr.Zero || string.IsNullOrWhiteSpace(archivePath))
+        {
+            return 0;
+        }
+
+        var sourcePathsJson = JsonSerializer.Serialize(sourcePaths);
+        var sourcePathsJsonPointer = Marshal.StringToCoTaskMemUTF8(sourcePathsJson);
+        var archivePathPointer = Marshal.StringToCoTaskMemUTF8(archivePath);
+        try
+        {
+            return serveFileArchiveToSocket(
+                new UIntPtr((ulong)socket.ToInt64()),
+                sourcePathsJsonPointer,
+                archivePathPointer);
         }
         finally
         {

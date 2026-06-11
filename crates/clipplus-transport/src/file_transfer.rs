@@ -115,6 +115,27 @@ impl FileTransferArchive {
 
         Ok(summary)
     }
+
+    pub fn write_length_prefixed_zip<W: Write>(
+        source_paths: &[PathBuf],
+        archive_path: &Path,
+        writer: &mut W,
+    ) -> Result<FileTransferArchiveSummary, FileTransferError> {
+        let summary = Self::write_zip(source_paths, archive_path)?;
+        writer.write_all(&summary.byte_count.to_be_bytes())?;
+
+        let mut archive = File::open(archive_path)?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let byte_count = archive.read(&mut buffer)?;
+            if byte_count == 0 {
+                break;
+            }
+            writer.write_all(&buffer[..byte_count])?;
+        }
+
+        Ok(summary)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

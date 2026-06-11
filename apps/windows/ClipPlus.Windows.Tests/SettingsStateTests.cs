@@ -506,6 +506,53 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public async Task CoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(temporaryDirectory);
+        var sourcePath = Path.Combine(temporaryDirectory, "source.txt");
+        File.WriteAllText(sourcePath, "served from windows ffi socket");
+        var archivePath = Path.Combine(temporaryDirectory, "served.zip");
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            var byteCount = new ClipPlus.Windows.CoreBridge.CoreBridge().ServeFileArchiveToSocket(
+                client.Client.Handle,
+                new[] { sourcePath },
+                archivePath);
+            Assert.True(byteCount > 0);
+        });
+
+        try
+        {
+            using var receiver = new TcpClient();
+            await receiver.ConnectAsync(IPAddress.Loopback, port);
+            await using var stream = receiver.GetStream();
+            var lengthBytes = new byte[8];
+            await stream.ReadExactlyAsync(lengthBytes);
+            var byteCount = BinaryPrimitives.ReadUInt64BigEndian(lengthBytes);
+            var payload = new byte[byteCount];
+            await stream.ReadExactlyAsync(payload);
+            await serverTask;
+
+            var receivedPath = Path.Combine(temporaryDirectory, "received.zip");
+            await File.WriteAllBytesAsync(receivedPath, payload);
+            var extractedDirectory = Path.Combine(temporaryDirectory, "served-unzipped");
+            ZipFile.ExtractToDirectory(receivedPath, extractedDirectory);
+
+            Assert.Equal("served from windows ffi socket", File.ReadAllText(Path.Combine(extractedDirectory, "source.txt")));
+        }
+        finally
+        {
+            listener.Stop();
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable()
     {
         var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());

@@ -1,7 +1,6 @@
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Buffers.Binary;
 using System.Text;
 using System.Windows.Threading;
 using ClipPlus.Windows.Clipboard;
@@ -431,14 +430,17 @@ public sealed class UdpTextSyncService : IDisposable
                 }
 
                 var archivePath = Path.Combine(Path.GetTempPath(), $"ClipPlus-{transferId}.zip");
-                FileTransferArchive.WriteZip(filePaths, archivePath);
-                var data = await File.ReadAllBytesAsync(archivePath, token);
-                File.Delete(archivePath);
-                var length = new byte[8];
-                BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)data.Length);
-                await stream.WriteAsync(length, token);
-                await stream.WriteAsync(data, token);
-                logger.Info($"served file archive file_count={filePaths.Count} byte_count={data.Length}");
+                var byteCount = new ClipPlus.Windows.CoreBridge.CoreBridge().ServeFileArchiveToSocket(
+                    client.Client.Handle,
+                    filePaths,
+                    archivePath);
+                if (byteCount == 0)
+                {
+                    logger.Error("file transfer serve failed");
+                    return;
+                }
+
+                logger.Info($"served file archive file_count={filePaths.Count} byte_count={byteCount}");
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {

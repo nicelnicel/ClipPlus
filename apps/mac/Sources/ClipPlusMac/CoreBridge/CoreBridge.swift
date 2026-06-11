@@ -72,6 +72,14 @@ struct CoreBridge {
         Self.ffiBridge?.writeFileArchiveZip(sourcePaths: sourcePaths, archivePath: archivePath) ?? false
     }
 
+    func serveFileArchive(socketDescriptor: Int32, sourcePaths: [String], archivePath: String) -> UInt64 {
+        Self.ffiBridge?.serveFileArchive(
+            socketDescriptor: socketDescriptor,
+            sourcePaths: sourcePaths,
+            archivePath: archivePath
+        ) ?? 0
+    }
+
     func downloadFileArchive(host: String, port: Int, transferId: String, destinationPath: String) -> Bool {
         Self.ffiBridge?.downloadFileArchive(
             host: host,
@@ -196,6 +204,11 @@ private final class ClipPlusFFIBridge {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> Bool
+    private typealias ServeFileArchiveToSocketFunction = @convention(c) (
+        UInt,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> UInt64
     private typealias DownloadFileArchiveFunction = @convention(c) (
         UnsafePointer<CChar>?,
         UInt16,
@@ -229,6 +242,7 @@ private final class ClipPlusFFIBridge {
     private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
     private let createFileOfferMessageJSONFunction: CreateFileOfferMessageJSONFunction
     private let writeFileArchiveZipFunction: WriteFileArchiveZipFunction
+    private let serveFileArchiveToSocketFunction: ServeFileArchiveToSocketFunction
     private let downloadFileArchiveFunction: DownloadFileArchiveFunction
     private let udpSocketBindFunction: UdpSocketBindFunction
     private let udpSocketFreeFunction: UdpSocketFreeFunction
@@ -246,6 +260,7 @@ private final class ClipPlusFFIBridge {
         createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
         createFileOfferMessageJSONFunction: @escaping CreateFileOfferMessageJSONFunction,
         writeFileArchiveZipFunction: @escaping WriteFileArchiveZipFunction,
+        serveFileArchiveToSocketFunction: @escaping ServeFileArchiveToSocketFunction,
         downloadFileArchiveFunction: @escaping DownloadFileArchiveFunction,
         udpSocketBindFunction: @escaping UdpSocketBindFunction,
         udpSocketFreeFunction: @escaping UdpSocketFreeFunction,
@@ -262,6 +277,7 @@ private final class ClipPlusFFIBridge {
         self.createImageMessageJSONFunction = createImageMessageJSONFunction
         self.createFileOfferMessageJSONFunction = createFileOfferMessageJSONFunction
         self.writeFileArchiveZipFunction = writeFileArchiveZipFunction
+        self.serveFileArchiveToSocketFunction = serveFileArchiveToSocketFunction
         self.downloadFileArchiveFunction = downloadFileArchiveFunction
         self.udpSocketBindFunction = udpSocketBindFunction
         self.udpSocketFreeFunction = udpSocketFreeFunction
@@ -289,6 +305,7 @@ private final class ClipPlusFFIBridge {
                   let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
                   let createFileOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_file_offer_message_json"),
                   let writeFileArchiveZipSymbol = dlsym(handle, "clipplus_write_file_archive_zip"),
+                  let serveFileArchiveToSocketSymbol = dlsym(handle, "clipplus_serve_file_archive_to_socket"),
                   let downloadFileArchiveSymbol = dlsym(handle, "clipplus_download_file_archive"),
                   let udpSocketBindSymbol = dlsym(handle, "clipplus_udp_socket_bind"),
                   let udpSocketFreeSymbol = dlsym(handle, "clipplus_udp_socket_free"),
@@ -322,6 +339,10 @@ private final class ClipPlusFFIBridge {
                 writeFileArchiveZipSymbol,
                 to: WriteFileArchiveZipFunction.self
             )
+            let serveFileArchiveToSocketFunction = unsafeBitCast(
+                serveFileArchiveToSocketSymbol,
+                to: ServeFileArchiveToSocketFunction.self
+            )
             let downloadFileArchiveFunction = unsafeBitCast(
                 downloadFileArchiveSymbol,
                 to: DownloadFileArchiveFunction.self
@@ -353,6 +374,7 @@ private final class ClipPlusFFIBridge {
                 createImageMessageJSONFunction: createImageMessageJSONFunction,
                 createFileOfferMessageJSONFunction: createFileOfferMessageJSONFunction,
                 writeFileArchiveZipFunction: writeFileArchiveZipFunction,
+                serveFileArchiveToSocketFunction: serveFileArchiveToSocketFunction,
                 downloadFileArchiveFunction: downloadFileArchiveFunction,
                 udpSocketBindFunction: udpSocketBindFunction,
                 udpSocketFreeFunction: udpSocketFreeFunction,
@@ -519,6 +541,28 @@ private final class ClipPlusFFIBridge {
         return sourcePathsJSON.withCString { sourcePathsPointer in
             archivePath.withCString { archivePathPointer in
                 writeFileArchiveZipFunction(sourcePathsPointer, archivePathPointer)
+            }
+        }
+    }
+
+    func serveFileArchive(
+        socketDescriptor: Int32,
+        sourcePaths: [String],
+        archivePath: String
+    ) -> UInt64 {
+        guard socketDescriptor > 0,
+              let sourcePathsData = try? JSONEncoder().encode(sourcePaths),
+              let sourcePathsJSON = String(data: sourcePathsData, encoding: .utf8) else {
+            return 0
+        }
+
+        return sourcePathsJSON.withCString { sourcePathsPointer in
+            archivePath.withCString { archivePathPointer in
+                serveFileArchiveToSocketFunction(
+                    UInt(socketDescriptor),
+                    sourcePathsPointer,
+                    archivePathPointer
+                )
             }
         }
     }

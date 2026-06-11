@@ -376,14 +376,15 @@ final class UdpTextSyncService {
         let archiveURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClipPlus-\(transferId).zip")
 
-        do {
-            try FileTransferArchive.writeZip(sourceURLs: fileURLs, to: archiveURL)
-            let data = try Data(contentsOf: archiveURL)
-            try? FileManager.default.removeItem(at: archiveURL)
-            sendLengthAndData(data, to: client)
-            logger.info("served file archive file_count=\(fileURLs.count) byte_count=\(data.count)")
-        } catch {
-            logger.error("file transfer serve failed: \(error.localizedDescription)")
+        let byteCount = CoreBridge().serveFileArchive(
+            socketDescriptor: client,
+            sourcePaths: fileURLs.map(\.path),
+            archivePath: archiveURL.path
+        )
+        if byteCount > 0 {
+            logger.info("served file archive file_count=\(fileURLs.count) byte_count=\(byteCount)")
+        } else {
+            logger.error("file transfer serve failed")
         }
     }
 
@@ -464,29 +465,6 @@ final class UdpTextSyncService {
 
         return String(data: Data(bytes), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func sendLengthAndData(_ data: Data, to socketDescriptor: Int32) {
-        var length = UInt64(data.count).bigEndian
-        let lengthData = Swift.withUnsafeBytes(of: &length) { Data($0) }
-        sendData(lengthData, to: socketDescriptor)
-        sendData(data, to: socketDescriptor)
-    }
-
-    private func sendData(_ data: Data, to socketDescriptor: Int32) {
-        data.withUnsafeBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress else {
-                return
-            }
-            var sent = 0
-            while sent < data.count {
-                let result = Darwin.send(socketDescriptor, baseAddress.advanced(by: sent), data.count - sent, 0)
-                guard result > 0 else {
-                    return
-                }
-                sent += result
-            }
-        }
     }
 
     private func sendHello() {

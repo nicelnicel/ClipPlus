@@ -1,9 +1,15 @@
 use std::ffi::CStr;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::mem;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::os::raw::c_char;
 use std::panic;
 use std::path::Path;
 use std::ptr;
+
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
+#[cfg(windows)]
+use std::os::windows::io::FromRawSocket;
 
 use clipplus_crypto::key::SharedKeyMaterial;
 use clipplus_diagnostics::status::RuntimeStatus;
@@ -17,6 +23,16 @@ use crate::types::{free_c_string, string_to_c_ptr};
 
 pub struct ClipPlusUdpSocketHandle {
     socket: BlockingDiscoveryUdpSocket,
+}
+
+#[cfg(unix)]
+unsafe fn tcp_stream_from_raw_socket_value(socket: usize) -> TcpStream {
+    unsafe { TcpStream::from_raw_fd(socket as std::os::fd::RawFd) }
+}
+
+#[cfg(windows)]
+unsafe fn tcp_stream_from_raw_socket_value(socket: usize) -> TcpStream {
+    unsafe { TcpStream::from_raw_socket(socket as std::os::windows::io::RawSocket) }
 }
 
 #[no_mangle]
@@ -258,6 +274,50 @@ pub unsafe extern "C" fn clipplus_write_file_archive_zip(
         FileTransferArchive::write_zip(&source_paths, Path::new(&archive_path)).is_ok()
     })
     .unwrap_or(false)
+}
+
+#[no_mangle]
+/// Writes a length-prefixed zip archive to an accepted TCP socket.
+///
+/// # Safety
+///
+/// `socket` must be a valid connected TCP socket handle for the current
+/// platform. The socket remains owned by the caller; this function writes to it
+/// but does not close it. `source_paths_json` must be a JSON array of source
+/// path strings and `archive_path` must be a writable temporary zip path.
+/// Returns the archive byte count, or `0` on invalid inputs/IO failures.
+pub unsafe extern "C" fn clipplus_serve_file_archive_to_socket(
+    socket: usize,
+    source_paths_json: *const c_char,
+    archive_path: *const c_char,
+) -> u64 {
+    panic::catch_unwind(|| {
+        if socket == 0 {
+            return 0;
+        }
+        let Some(source_paths_json) = ffi_string(source_paths_json) else {
+            return 0;
+        };
+        let Some(archive_path) = ffi_string(archive_path) else {
+            return 0;
+        };
+        let Ok(source_paths) = serde_json::from_str::<Vec<String>>(&source_paths_json) else {
+            return 0;
+        };
+        let source_paths = source_paths.into_iter().map(Into::into).collect::<Vec<_>>();
+        let archive_path = Path::new(&archive_path);
+        let mut stream = unsafe { tcp_stream_from_raw_socket_value(socket) };
+        let result = FileTransferArchive::write_length_prefixed_zip(
+            &source_paths,
+            archive_path,
+            &mut stream,
+        );
+        mem::forget(stream);
+        let _ = std::fs::remove_file(archive_path);
+
+        result.map_or(0, |summary| summary.byte_count)
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
