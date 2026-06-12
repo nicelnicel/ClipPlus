@@ -17,7 +17,7 @@ use clipplus_discovery::udp::{
     BlockingDiscoveryUdpSocket, DiscoverySocketConfig, DISCOVERY_BROADCAST,
 };
 use clipplus_transport::file_transfer::{
-    FileTransferArchive, FileTransferDownload, FileTransferServer,
+    FileTransferArchive, FileTransferDownload, FileTransferServer, FileTransferTreeSummary,
 };
 use clipplus_transport::message::{NativeClipboardMessage, NativeFileTransferItem};
 
@@ -363,6 +363,46 @@ pub unsafe extern "C" fn clipplus_download_file_archive(
 }
 
 #[no_mangle]
+/// Downloads a direct file-transfer tree from a peer and writes it to a directory.
+///
+/// # Safety
+///
+/// `host`, `transfer_id`, and `destination_dir` must be non-null valid
+/// NUL-terminated UTF-8 strings. `port` must be non-zero. The returned non-null
+/// pointer follows the same ownership rules as [`clipplus_get_status_json`] and
+/// must be released with [`clipplus_free_string`]. Null indicates invalid input,
+/// network errors, oversized payloads, unsafe paths, or IO failures.
+pub unsafe extern "C" fn clipplus_download_file_tree(
+    host: *const c_char,
+    port: u16,
+    transfer_id: *const c_char,
+    destination_dir: *const c_char,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(host) = ffi_string(host) else {
+            return ptr::null_mut();
+        };
+        let Some(transfer_id) = ffi_string(transfer_id) else {
+            return ptr::null_mut();
+        };
+        let Some(destination_dir) = ffi_string(destination_dir) else {
+            return ptr::null_mut();
+        };
+
+        FileTransferDownload::download_tree_to_directory(
+            &host,
+            port,
+            &transfer_id,
+            Path::new(&destination_dir),
+        )
+        .ok()
+        .map(|summary| file_transfer_tree_summary_to_json(&summary))
+        .map_or(ptr::null_mut(), string_to_c_ptr)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
 /// Binds a Rust file-transfer TCP server for native shells.
 ///
 /// # Safety
@@ -487,6 +527,32 @@ pub unsafe extern "C" fn clipplus_file_server_serve_next(
         handle
             .server
             .serve_next(Path::new(&temp_dir))
+            .map_or(0, |summary| summary.byte_count)
+    })
+    .unwrap_or(0)
+}
+
+#[no_mangle]
+/// Serves one registered direct file-transfer tree to the next TCP client.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`clipplus_file_server_bind`].
+/// This call blocks until one client connects or the listener errors. It returns
+/// the streamed file byte count, or `0` on null handle, unknown transfer id,
+/// invalid paths, or IO failure.
+pub unsafe extern "C" fn clipplus_file_server_serve_next_tree(
+    handle: *mut ClipPlusFileServerHandle,
+) -> u64 {
+    panic::catch_unwind(|| {
+        if handle.is_null() {
+            return 0;
+        }
+
+        let handle = unsafe { &*handle };
+        handle
+            .server
+            .serve_next_tree()
             .map_or(0, |summary| summary.byte_count)
     })
     .unwrap_or(0)
@@ -717,4 +783,27 @@ fn ffi_string(ptr: *const c_char) -> Option<String> {
 
     let value = unsafe { CStr::from_ptr(ptr) }.to_str().ok()?;
     Some(value.to_string())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferTreeSummaryJson {
+    file_count: usize,
+    byte_count: u64,
+    top_level_paths: Vec<String>,
+}
+
+fn file_transfer_tree_summary_to_json(summary: &FileTransferTreeSummary) -> String {
+    let top_level_paths = summary
+        .top_level_paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+
+    serde_json::to_string(&FileTransferTreeSummaryJson {
+        file_count: summary.file_count,
+        byte_count: summary.byte_count,
+        top_level_paths,
+    })
+    .expect("file transfer tree summary should serialize to JSON")
 }
