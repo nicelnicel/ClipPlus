@@ -379,6 +379,14 @@ public sealed class SettingsStateTests
             "dev",
             "publish-windows-single-exe.ps1"
         );
+        var versionPath = Path.Combine(repositoryRoot, "VERSION");
+        var bumpVersionScriptPath = Path.Combine(repositoryRoot, "scripts", "dev", "bump-version.sh");
+        var checkReleaseVersionScriptPath = Path.Combine(
+            repositoryRoot,
+            "scripts",
+            "dev",
+            "check-release-version.sh"
+        );
         var trayControllerPath = Path.Combine(
             repositoryRoot,
             "apps",
@@ -389,14 +397,37 @@ public sealed class SettingsStateTests
         );
 
         Assert.True(File.Exists(iconPath), $"Missing Windows icon: {iconPath}");
+        Assert.True(File.Exists(versionPath), $"Missing release VERSION file: {versionPath}");
+        Assert.True(File.Exists(bumpVersionScriptPath), $"Missing version bump script: {bumpVersionScriptPath}");
+        Assert.True(
+            File.Exists(checkReleaseVersionScriptPath),
+            $"Missing release version check script: {checkReleaseVersionScriptPath}"
+        );
+        var releaseVersion = File.ReadAllText(versionPath).Trim();
+        Assert.Matches(@"^\d+\.\d+\.\d+$", releaseVersion);
         var project = File.ReadAllText(projectPath);
         Assert.Contains("<OutputType>WinExe</OutputType>", project);
         Assert.Contains("<UseWPF>true</UseWPF>", project);
         Assert.Contains("<ApplicationIcon>Resources\\ClipPlus.ico</ApplicationIcon>", project);
+        Assert.Contains($"<Version>{releaseVersion}</Version>", project);
+        Assert.Contains($"<AssemblyVersion>{releaseVersion}.0</AssemblyVersion>", project);
+        Assert.Contains($"<FileVersion>{releaseVersion}.0</FileVersion>", project);
+        Assert.Contains($"<InformationalVersion>{releaseVersion}</InformationalVersion>", project);
         Assert.Contains("ExtractAssociatedIcon", File.ReadAllText(trayControllerPath));
         var publishScript = File.ReadAllText(publishScriptPath);
         Assert.Contains("clipplus.shared-key", publishScript);
         Assert.Contains("$preservedSharedKey", publishScript);
+        var bumpVersionScript = File.ReadAllText(bumpVersionScriptPath);
+        Assert.Contains("VERSION", bumpVersionScript);
+        Assert.Contains("Cargo.toml", bumpVersionScript);
+        Assert.Contains("Cargo.lock", bumpVersionScript);
+        Assert.Contains("ClipPlus.Windows.csproj", bumpVersionScript);
+        Assert.Contains("CoreBridge.swift", bumpVersionScript);
+        Assert.Contains("CoreBridge.cs", bumpVersionScript);
+        var checkReleaseVersionScript = File.ReadAllText(checkReleaseVersionScriptPath);
+        Assert.Contains("Release tag", checkReleaseVersionScript);
+        Assert.Contains("VERSION", checkReleaseVersionScript);
+        Assert.Contains("Cargo.lock", checkReleaseVersionScript);
     }
 
     [Fact]

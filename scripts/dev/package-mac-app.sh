@@ -22,6 +22,7 @@ done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mac_dir="$repo_root/apps/mac"
+version_file="$repo_root/VERSION"
 app_dir="$repo_root/target/macos-build.noindex/ClipPlus.app"
 legacy_indexed_app="$repo_root/target/macos/ClipPlus.app"
 installed_app="/Applications/ClipPlus.app"
@@ -49,6 +50,17 @@ unregister_app() {
     fi
 }
 
+if [[ ! -f "$version_file" ]]; then
+    echo "Missing VERSION file: $version_file" >&2
+    exit 1
+fi
+
+app_version="$(tr -d '[:space:]' < "$version_file")"
+if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "VERSION must be MAJOR.MINOR.PATCH, got: $app_version" >&2
+    exit 1
+fi
+
 cd "$repo_root"
 cargo build --release -p clipplus-ffi
 
@@ -66,7 +78,7 @@ cp "$mac_dir/Resources/ClipPlus.icns" "$resources_dir/ClipPlus.icns"
 cp "$mac_dir/Resources/ClipPlusMenuBar.png" "$resources_dir/ClipPlusMenuBar.png"
 chmod +x "$macos_dir/ClipPlusMac"
 
-cat > "$plist_path" <<'PLIST'
+cat > "$plist_path" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -86,9 +98,9 @@ cat > "$plist_path" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>${app_version}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${app_version}</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>

@@ -465,6 +465,9 @@ final class SettingsStateTests: XCTestCase {
         let windowsIconURL = repositoryRoot.appendingPathComponent("apps/windows/ClipPlus.Windows/Resources/ClipPlus.ico")
         let packageScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-app.sh")
         let dmgScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-dmg.sh")
+        let versionURL = repositoryRoot.appendingPathComponent("VERSION")
+        let bumpVersionScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/bump-version.sh")
+        let checkReleaseVersionScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/check-release-version.sh")
         let windowsRuntimeDependentScriptURL = repositoryRoot
             .appendingPathComponent("scripts/dev/publish-windows-runtime-dependent.ps1")
         let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
@@ -475,18 +478,30 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: macIconURL.path), "缺少 macOS icns 图标")
         XCTAssertTrue(FileManager.default.fileExists(atPath: macMenuBarIconURL.path), "缺少 macOS 菜单栏图标")
         XCTAssertTrue(FileManager.default.fileExists(atPath: windowsIconURL.path), "缺少 Windows ico 图标")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: versionURL.path), "Release 版本号必须有唯一 VERSION 文件")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bumpVersionScriptURL.path), "Release 前必须有版本递增脚本")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: checkReleaseVersionScriptURL.path), "Release 上传前必须校验 tag 和 VERSION")
         XCTAssertTrue(FileManager.default.fileExists(atPath: dmgScriptURL.path), "macOS 发布产物应该提供 DMG 打包脚本")
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: windowsRuntimeDependentScriptURL.path),
             "Windows 应该提供依赖系统运行环境的小体积发布脚本"
         )
+        let releaseVersion = try String(contentsOf: versionURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertNotNil(
+            releaseVersion.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression),
+            "VERSION 必须使用 MAJOR.MINOR.PATCH"
+        )
 
         let packageScript = try String(contentsOf: packageScriptURL, encoding: .utf8)
         XCTAssertTrue(packageScript.contains("CFBundleIconFile"))
         XCTAssertTrue(packageScript.contains("ClipPlus.icns"))
+        XCTAssertTrue(packageScript.contains("version_file=\"$repo_root/VERSION\""))
+        XCTAssertTrue(packageScript.contains("app_version="))
         XCTAssertTrue(packageScript.contains("/private/tmp/ClipPlusMac.app"))
         XCTAssertTrue(packageScript.contains("target/macos-build.noindex/ClipPlus.app"))
         XCTAssertFalse(packageScript.contains("app_dir=\"$repo_root/target/macos/ClipPlus.app\""))
+        XCTAssertFalse(packageScript.contains("<string>0.1.0</string>"))
         XCTAssertTrue(packageScript.contains("legacy_indexed_app=\"$repo_root/target/macos/ClipPlus.app\""))
         XCTAssertTrue(packageScript.contains("installed_app=\"/Applications/ClipPlus.app\""))
         XCTAssertTrue(packageScript.contains("unregister_app \"$installed_app\""))
@@ -501,6 +516,19 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(dmgScript.contains("-format UDZO"))
         XCTAssertTrue(dmgScript.contains("-srcfolder \"$app_dir\""))
 
+        let bumpVersionScript = try String(contentsOf: bumpVersionScriptURL, encoding: .utf8)
+        XCTAssertTrue(bumpVersionScript.contains("VERSION"))
+        XCTAssertTrue(bumpVersionScript.contains("Cargo.toml"))
+        XCTAssertTrue(bumpVersionScript.contains("Cargo.lock"))
+        XCTAssertTrue(bumpVersionScript.contains("ClipPlus.Windows.csproj"))
+        XCTAssertTrue(bumpVersionScript.contains("CoreBridge.swift"))
+        XCTAssertTrue(bumpVersionScript.contains("CoreBridge.cs"))
+
+        let checkReleaseVersionScript = try String(contentsOf: checkReleaseVersionScriptURL, encoding: .utf8)
+        XCTAssertTrue(checkReleaseVersionScript.contains("Release tag"))
+        XCTAssertTrue(checkReleaseVersionScript.contains("VERSION"))
+        XCTAssertTrue(checkReleaseVersionScript.contains("Cargo.lock"))
+
         let windowsRuntimeDependentScript = try String(contentsOf: windowsRuntimeDependentScriptURL, encoding: .utf8)
         XCTAssertTrue(windowsRuntimeDependentScript.contains("--self-contained false"))
         XCTAssertTrue(windowsRuntimeDependentScript.contains("/p:PublishSingleFile=true"))
@@ -514,6 +542,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 full exe"))
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 runtime-dependent exe"))
+        XCTAssertTrue(workflowSource.contains("./scripts/dev/check-release-version.sh \"$tag\""))
 
         let readmeSource = try String(contentsOf: readmeURL, encoding: .utf8)
         XCTAssertTrue(readmeSource.contains("ClipPlus-macOS.dmg"))
