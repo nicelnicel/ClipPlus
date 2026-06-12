@@ -22,7 +22,8 @@ done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mac_dir="$repo_root/apps/mac"
-app_dir="$repo_root/target/macos/ClipPlus.app"
+app_dir="$repo_root/target/macos-build.noindex/ClipPlus.app"
+legacy_indexed_app="$repo_root/target/macos/ClipPlus.app"
 installed_app="/Applications/ClipPlus.app"
 legacy_tmp_app="/private/tmp/ClipPlusMac.app"
 contents_dir="$app_dir/Contents"
@@ -55,7 +56,8 @@ cd "$mac_dir"
 swift build -c release
 
 cd "$repo_root"
-rm -rf "$app_dir"
+unregister_app "$legacy_indexed_app"
+rm -rf "$app_dir" "$legacy_indexed_app"
 mkdir -p "$macos_dir" "$frameworks_dir" "$resources_dir"
 
 cp "$mac_dir/.build/release/ClipPlusMac" "$macos_dir/ClipPlusMac"
@@ -108,6 +110,7 @@ if [[ "$install_app" -eq 1 ]]; then
         cp "$installed_app/Contents/MacOS/$shared_key_name" "$preserved_shared_key"
     fi
     unregister_app "$legacy_tmp_app"
+    unregister_app "$legacy_indexed_app"
     unregister_app "$app_dir"
     unregister_app "$installed_app"
     rm -rf "$installed_app"
@@ -115,7 +118,7 @@ if [[ "$install_app" -eq 1 ]]; then
     if [[ -n "$preserved_shared_key" && -f "$preserved_shared_key" ]]; then
         cp "$preserved_shared_key" "$installed_app/Contents/MacOS/$shared_key_name"
     fi
-    rm -rf "$legacy_tmp_app" "$repo_root/target/macos/ClipPlus.app"
+    rm -rf "$legacy_tmp_app" "$legacy_indexed_app" "$app_dir"
     app_dir="$installed_app"
     mdimport "$app_dir" >/dev/null 2>&1 || true
 fi

@@ -2,8 +2,9 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-app_dir="$repo_root/target/macos/ClipPlus.app"
-dmg_path="$repo_root/target/macos/ClipPlus-macOS.dmg"
+app_dir="$repo_root/target/macos-build.noindex/ClipPlus.app"
+dmg_dir="$repo_root/target/macos"
+dmg_path="$dmg_dir/ClipPlus-macOS.dmg"
 
 if ! command -v hdiutil >/dev/null 2>&1; then
     echo "hdiutil is required to package a macOS DMG." >&2
@@ -14,6 +15,7 @@ if [[ ! -d "$app_dir" ]]; then
     "$repo_root/scripts/dev/package-mac-app.sh"
 fi
 
+mkdir -p "$dmg_dir"
 rm -f "$dmg_path"
 hdiutil create \
     -volname "ClipPlus" \

@@ -485,7 +485,9 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(packageScript.contains("CFBundleIconFile"))
         XCTAssertTrue(packageScript.contains("ClipPlus.icns"))
         XCTAssertTrue(packageScript.contains("/private/tmp/ClipPlusMac.app"))
-        XCTAssertTrue(packageScript.contains("target/macos/ClipPlus.app"))
+        XCTAssertTrue(packageScript.contains("target/macos-build.noindex/ClipPlus.app"))
+        XCTAssertFalse(packageScript.contains("app_dir=\"$repo_root/target/macos/ClipPlus.app\""))
+        XCTAssertTrue(packageScript.contains("legacy_indexed_app=\"$repo_root/target/macos/ClipPlus.app\""))
         XCTAssertTrue(packageScript.contains("installed_app=\"/Applications/ClipPlus.app\""))
         XCTAssertTrue(packageScript.contains("unregister_app \"$installed_app\""))
         XCTAssertTrue(packageScript.contains("-u \"$candidate\""))
@@ -494,6 +496,7 @@ final class SettingsStateTests: XCTestCase {
 
         let dmgScript = try String(contentsOf: dmgScriptURL, encoding: .utf8)
         XCTAssertTrue(dmgScript.contains("ClipPlus-macOS.dmg"))
+        XCTAssertTrue(dmgScript.contains("target/macos-build.noindex/ClipPlus.app"))
         XCTAssertTrue(dmgScript.contains("hdiutil create"))
         XCTAssertTrue(dmgScript.contains("-format UDZO"))
         XCTAssertTrue(dmgScript.contains("-srcfolder \"$app_dir\""))
