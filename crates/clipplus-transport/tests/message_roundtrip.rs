@@ -706,6 +706,307 @@ fn file_transfer_tree_rejects_unsafe_manifest_path_without_writing_outside_stagi
     assert!(!outside_path.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn file_transfer_tree_rejects_symlink_to_file_inside_source_directory() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let outside_directory = temporary_directory.join("outside");
+    std::fs::create_dir_all(&source_directory).unwrap();
+    std::fs::create_dir_all(&outside_directory).unwrap();
+    let outside_file = outside_directory.join("secret.txt");
+    std::fs::write(&outside_file, "secret").unwrap();
+    std::os::unix::fs::symlink(&outside_file, source_directory.join("link.txt")).unwrap();
+    let mut payload = Vec::new();
+
+    let manifest_result = FileTransferTree::build_manifest(std::slice::from_ref(&source_directory));
+    let stream_result =
+        FileTransferTree::write_length_prefixed_tree(&[source_directory], &mut payload);
+
+    assert!(matches!(
+        manifest_result,
+        Err(FileTransferError::InvalidField("source_path"))
+    ));
+    assert!(matches!(
+        stream_result,
+        Err(FileTransferError::InvalidField("source_path"))
+    ));
+    assert!(payload.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn file_transfer_tree_rejects_symlink_to_directory_inside_source_directory() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let outside_directory = temporary_directory.join("outside");
+    std::fs::create_dir_all(&source_directory).unwrap();
+    std::fs::create_dir_all(&outside_directory).unwrap();
+    std::fs::write(outside_directory.join("secret.txt"), "secret").unwrap();
+    std::os::unix::fs::symlink(&outside_directory, source_directory.join("Linked")).unwrap();
+    let mut payload = Vec::new();
+
+    let manifest_result = FileTransferTree::build_manifest(std::slice::from_ref(&source_directory));
+    let stream_result =
+        FileTransferTree::write_length_prefixed_tree(&[source_directory], &mut payload);
+
+    assert!(matches!(
+        manifest_result,
+        Err(FileTransferError::InvalidField("source_path"))
+    ));
+    assert!(matches!(
+        stream_result,
+        Err(FileTransferError::InvalidField("source_path"))
+    ));
+    assert!(payload.is_empty());
+}
+
+#[test]
+fn file_transfer_tree_rejects_manifest_file_larger_than_limit_before_writing() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    let manifest = vec![FileTransferTreeEntry {
+        relative_path: "too-large.bin".to_string(),
+        byte_size: FileTransferTree::MAX_FILE_BYTES + 1,
+        is_directory: false,
+    }];
+    let payload = tree_payload_from_manifest(&manifest, &[]);
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(
+        result,
+        Err(FileTransferError::InvalidField("byte_size"))
+    ));
+    assert!(!staging_directory.exists());
+}
+
+#[test]
+fn file_transfer_tree_rejects_manifest_total_size_larger_than_limit_before_writing() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    let byte_size = FileTransferTree::MAX_TREE_BYTES / 2 + 1;
+    let manifest = vec![
+        FileTransferTreeEntry {
+            relative_path: "a.bin".to_string(),
+            byte_size,
+            is_directory: false,
+        },
+        FileTransferTreeEntry {
+            relative_path: "b.bin".to_string(),
+            byte_size,
+            is_directory: false,
+        },
+    ];
+    let payload = tree_payload_from_manifest(&manifest, &[]);
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(
+        result,
+        Err(FileTransferError::InvalidField("tree_size"))
+    ));
+    assert!(!staging_directory.exists());
+}
+
+#[test]
+fn file_transfer_tree_rejects_file_path_ancestor_conflict_before_writing() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    let manifest = vec![
+        FileTransferTreeEntry {
+            relative_path: "a".to_string(),
+            byte_size: 5,
+            is_directory: false,
+        },
+        FileTransferTreeEntry {
+            relative_path: "a/b.txt".to_string(),
+            byte_size: 4,
+            is_directory: false,
+        },
+    ];
+    let payload = tree_payload_from_manifest(&manifest, &[b"alpha", b"beta"]);
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(
+        result,
+        Err(FileTransferError::InvalidField("relative_path"))
+    ));
+    assert!(!staging_directory.join("a").exists());
+}
+
+#[test]
+fn file_transfer_tree_rejects_unsafe_manifest_path_matrix_before_writing() {
+    let cases = vec![
+        ("empty", vec![""]),
+        ("absolute", vec!["/tmp/a"]),
+        ("parent", vec!["a/../b"]),
+        ("windows_drive", vec![r"C:\tmp\a"]),
+        ("colon", vec!["a:b"]),
+        ("nul_byte", vec!["nul\0byte"]),
+        ("reserved_nul", vec!["NUL"]),
+        ("reserved_extension", vec!["CON.txt"]),
+        ("reserved_nested", vec!["Folder/COM1"]),
+        ("trailing_space", vec!["trailing. "]),
+        ("trailing_dot", vec!["trailing."]),
+        ("case_conflict", vec!["Foo.txt", "foo.txt"]),
+    ];
+
+    for (case_name, paths) in cases {
+        let temporary_directory = unique_temp_dir();
+        let staging_directory = temporary_directory.join(case_name);
+        let manifest = paths
+            .into_iter()
+            .map(|relative_path| FileTransferTreeEntry {
+                relative_path: relative_path.to_string(),
+                byte_size: 1,
+                is_directory: false,
+            })
+            .collect::<Vec<_>>();
+        let payload = tree_payload_from_manifest(&manifest, &[]);
+
+        let result = FileTransferTree::read_length_prefixed_tree(
+            &mut std::io::Cursor::new(payload),
+            &staging_directory,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(FileTransferError::InvalidField("relative_path"))
+            ),
+            "{case_name}: {result:?}"
+        );
+        assert!(!staging_directory.exists(), "{case_name}");
+    }
+}
+
+#[test]
+fn file_transfer_tree_cleans_staging_directory_when_file_stream_fails() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    let manifest = vec![
+        FileTransferTreeEntry {
+            relative_path: "a.txt".to_string(),
+            byte_size: 5,
+            is_directory: false,
+        },
+        FileTransferTreeEntry {
+            relative_path: "b.txt".to_string(),
+            byte_size: 4,
+            is_directory: false,
+        },
+    ];
+    let mut payload = tree_payload_from_manifest(&manifest, &[b"alpha"]);
+    payload.write_all(&4_u64.to_be_bytes()).unwrap();
+    payload.write_all(b"be").unwrap();
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(result, Err(FileTransferError::Io(_))));
+    assert!(!staging_directory.exists());
+}
+
+#[test]
+fn file_transfer_tree_cleans_written_files_when_existing_staging_stream_fails() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    std::fs::create_dir_all(&staging_directory).unwrap();
+    std::fs::write(staging_directory.join("keep.txt"), "keep").unwrap();
+    let manifest = vec![
+        FileTransferTreeEntry {
+            relative_path: "a.txt".to_string(),
+            byte_size: 5,
+            is_directory: false,
+        },
+        FileTransferTreeEntry {
+            relative_path: "b.txt".to_string(),
+            byte_size: 4,
+            is_directory: false,
+        },
+    ];
+    let mut payload = tree_payload_from_manifest(&manifest, &[b"alpha"]);
+    payload.write_all(&4_u64.to_be_bytes()).unwrap();
+    payload.write_all(b"be").unwrap();
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(result, Err(FileTransferError::Io(_))));
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("keep.txt")).unwrap(),
+        "keep"
+    );
+    assert!(!staging_directory.join("a.txt").exists());
+    assert!(!staging_directory.join("b.txt").exists());
+}
+
+#[test]
+fn file_transfer_tree_writer_payload_uses_manifest_and_file_lengths_in_order() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let nested_directory = source_directory.join("Folder");
+    std::fs::create_dir_all(&nested_directory).unwrap();
+    std::fs::write(source_directory.join("a.txt"), "alpha").unwrap();
+    std::fs::write(nested_directory.join("b.txt"), "beta").unwrap();
+    let mut payload = Vec::new();
+
+    let summary = FileTransferTree::write_length_prefixed_tree(
+        &[nested_directory, source_directory.join("a.txt")],
+        &mut payload,
+    )
+    .unwrap();
+
+    let mut cursor = std::io::Cursor::new(payload.as_slice());
+    let mut manifest_length_bytes = [0_u8; 8];
+    cursor.read_exact(&mut manifest_length_bytes).unwrap();
+    let manifest_length = u64::from_be_bytes(manifest_length_bytes) as usize;
+    let mut manifest_bytes = vec![0_u8; manifest_length];
+    cursor.read_exact(&mut manifest_bytes).unwrap();
+    let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest_json[0]["relativePath"], json!("Folder"));
+    assert_eq!(manifest_json[0]["byteSize"], json!(0));
+    assert_eq!(manifest_json[0]["isDirectory"], json!(true));
+    assert_eq!(manifest_json[1]["relativePath"], json!("Folder/b.txt"));
+    assert_eq!(manifest_json[1]["byteSize"], json!(4));
+    assert_eq!(manifest_json[1]["isDirectory"], json!(false));
+    assert_eq!(manifest_json[2]["relativePath"], json!("a.txt"));
+    assert_eq!(manifest_json[2]["byteSize"], json!(5));
+    assert_eq!(manifest_json[2]["isDirectory"], json!(false));
+
+    let mut file_length_bytes = [0_u8; 8];
+    cursor.read_exact(&mut file_length_bytes).unwrap();
+    assert_eq!(u64::from_be_bytes(file_length_bytes), 4);
+    let mut first_file = [0_u8; 4];
+    cursor.read_exact(&mut first_file).unwrap();
+    assert_eq!(&first_file, b"beta");
+
+    cursor.read_exact(&mut file_length_bytes).unwrap();
+    assert_eq!(u64::from_be_bytes(file_length_bytes), 5);
+    let mut second_file = [0_u8; 5];
+    cursor.read_exact(&mut second_file).unwrap();
+    assert_eq!(&second_file, b"alpha");
+
+    assert_eq!(cursor.position() as usize, payload.len());
+    assert_eq!(summary.file_count, 2);
+    assert_eq!(summary.byte_count, 9);
+}
+
 #[test]
 fn file_transfer_download_writes_tree_from_tcp_server() {
     let temporary_directory = unique_temp_dir();
@@ -942,6 +1243,24 @@ fn unique_temp_dir() -> PathBuf {
     let path = std::env::temp_dir().join(format!("clipplus-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn tree_payload_from_manifest(manifest: &[FileTransferTreeEntry], files: &[&[u8]]) -> Vec<u8> {
+    let manifest_json = serde_json::to_vec(manifest).unwrap();
+    let mut payload = Vec::new();
+    payload
+        .write_all(&(manifest_json.len() as u64).to_be_bytes())
+        .unwrap();
+    payload.write_all(&manifest_json).unwrap();
+
+    for file in files {
+        payload
+            .write_all(&(file.len() as u64).to_be_bytes())
+            .unwrap();
+        payload.write_all(file).unwrap();
+    }
+
+    payload
 }
 
 fn read_zip_entries(path: &Path) -> Vec<(String, String)> {

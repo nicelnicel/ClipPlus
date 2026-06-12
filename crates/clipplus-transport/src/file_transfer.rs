@@ -155,6 +155,8 @@ pub struct FileTransferTreeEntry {
 pub struct FileTransferTreeSummary {
     pub file_count: usize,
     pub byte_count: u64,
+    /// Writer/server summaries return relative top-level paths; reader/download summaries return
+    /// local paths under the destination staging directory.
     pub top_level_paths: Vec<PathBuf>,
 }
 
@@ -162,6 +164,8 @@ pub struct FileTransferTree;
 
 impl FileTransferTree {
     const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+    pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+    pub const MAX_TREE_BYTES: u64 = 512 * 1024 * 1024;
 
     pub fn build_manifest(
         source_paths: &[PathBuf],
@@ -181,6 +185,7 @@ impl FileTransferTree {
             .iter()
             .map(|source_entry| source_entry.entry.clone())
             .collect::<Vec<_>>();
+        let summary = summarize_tree_manifest(&manifest, None)?;
         let manifest_json = serde_json::to_vec(&manifest)?;
         writer.write_all(&(manifest_json.len() as u64).to_be_bytes())?;
         writer.write_all(&manifest_json)?;
@@ -197,7 +202,7 @@ impl FileTransferTree {
             write_file_bytes_exact(source_path, source_entry.entry.byte_size, writer)?;
         }
 
-        summarize_tree_manifest(&manifest, None)
+        Ok(summary)
     }
 
     pub fn read_length_prefixed_tree<R: Read>(
@@ -220,28 +225,23 @@ impl FileTransferTree {
         let manifest = serde_json::from_slice::<Vec<FileTransferTreeEntry>>(&manifest_json)?;
         let validated_entries = validate_tree_manifest(&manifest)?;
 
+        let staging_existed = staging_directory.exists();
         std::fs::create_dir_all(staging_directory)?;
 
-        for validated_entry in &validated_entries {
-            let destination_path = staging_directory.join(&validated_entry.relative_path);
-            if validated_entry.entry.is_directory {
-                std::fs::create_dir_all(&destination_path)?;
-                continue;
+        let mut created_paths = Vec::new();
+        let result = materialize_tree_entries(
+            reader,
+            staging_directory,
+            &validated_entries,
+            &mut created_paths,
+        );
+        if let Err(error) = result {
+            if !staging_existed {
+                let _ = std::fs::remove_dir_all(staging_directory);
+            } else {
+                cleanup_created_tree_paths(&created_paths);
             }
-
-            if let Some(parent) = destination_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let mut file_length_bytes = [0_u8; 8];
-            reader.read_exact(&mut file_length_bytes)?;
-            let file_length = u64::from_be_bytes(file_length_bytes);
-            if file_length != validated_entry.entry.byte_size {
-                return Err(FileTransferError::InvalidField("file_size"));
-            }
-
-            let mut file = File::create(&destination_path)?;
-            copy_bytes_exact(reader, &mut file, file_length)?;
+            return Err(error);
         }
 
         summarize_tree_manifest(&manifest, Some(staging_directory))
@@ -256,9 +256,6 @@ impl FileTransferTree {
 
         let mut entries = Vec::new();
         for source_path in source_paths {
-            if !source_path.exists() {
-                return Err(FileTransferError::InvalidField("source_path"));
-            }
             let base_path = source_path
                 .parent()
                 .ok_or(FileTransferError::InvalidField("source_path"))?;
@@ -266,13 +263,91 @@ impl FileTransferTree {
         }
 
         entries.sort_by(|left, right| left.entry.relative_path.cmp(&right.entry.relative_path));
-        reject_duplicate_tree_paths(
-            entries
-                .iter()
-                .map(|entry| entry.entry.relative_path.as_str()),
-        )?;
+        let manifest = entries
+            .iter()
+            .map(|entry| entry.entry.clone())
+            .collect::<Vec<_>>();
+        validate_tree_manifest(&manifest)?;
 
         Ok(entries)
+    }
+}
+
+fn materialize_tree_entries<R: Read>(
+    reader: &mut R,
+    staging_directory: &Path,
+    validated_entries: &[ValidatedFileTransferTreeEntry],
+    created_paths: &mut Vec<CreatedTreePath>,
+) -> Result<(), FileTransferError> {
+    for validated_entry in validated_entries {
+        let destination_path = staging_directory.join(&validated_entry.relative_path);
+        if validated_entry.entry.is_directory {
+            record_missing_directories(&destination_path, staging_directory, created_paths);
+            std::fs::create_dir_all(&destination_path)?;
+            continue;
+        }
+
+        if let Some(parent) = destination_path.parent() {
+            record_missing_directories(parent, staging_directory, created_paths);
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut file_length_bytes = [0_u8; 8];
+        reader.read_exact(&mut file_length_bytes)?;
+        let file_length = u64::from_be_bytes(file_length_bytes);
+        if file_length != validated_entry.entry.byte_size {
+            return Err(FileTransferError::InvalidField("file_size"));
+        }
+
+        let file_existed = destination_path.exists();
+        let mut file = File::create(&destination_path)?;
+        if !file_existed {
+            created_paths.push(CreatedTreePath::File(destination_path));
+        }
+        copy_bytes_exact(reader, &mut file, file_length)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum CreatedTreePath {
+    Directory(PathBuf),
+    File(PathBuf),
+}
+
+fn record_missing_directories(
+    directory_path: &Path,
+    staging_directory: &Path,
+    created_paths: &mut Vec<CreatedTreePath>,
+) {
+    let mut missing_directories = Vec::new();
+    let mut current_path = Some(directory_path);
+    while let Some(path) = current_path {
+        if path == staging_directory || !path.starts_with(staging_directory) {
+            break;
+        }
+        if !path.exists() {
+            missing_directories.push(path.to_path_buf());
+        }
+        current_path = path.parent();
+    }
+
+    for directory in missing_directories.into_iter().rev() {
+        created_paths.push(CreatedTreePath::Directory(directory));
+    }
+}
+
+fn cleanup_created_tree_paths(created_paths: &[CreatedTreePath]) {
+    for created_path in created_paths.iter().rev() {
+        match created_path {
+            CreatedTreePath::Directory(path) => {
+                let _ = std::fs::remove_dir(path);
+            }
+            CreatedTreePath::File(path) => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
     }
 }
 
@@ -576,7 +651,7 @@ fn collect_tree_source_entries(
     base_path: &Path,
     entries: &mut Vec<FileTransferTreeSourceEntry>,
 ) -> Result<(), FileTransferError> {
-    let metadata = std::fs::metadata(path)?;
+    let metadata = source_path_metadata(path)?;
     let relative_path = relative_tree_path(base_path, path)?;
 
     if metadata.is_dir() {
@@ -613,6 +688,21 @@ fn collect_tree_source_entries(
     Err(FileTransferError::InvalidField("source_path"))
 }
 
+fn source_path_metadata(path: &Path) -> Result<std::fs::Metadata, FileTransferError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            FileTransferError::InvalidField("source_path")
+        } else {
+            FileTransferError::Io(error)
+        }
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(FileTransferError::InvalidField("source_path"));
+    }
+
+    Ok(metadata)
+}
+
 fn relative_tree_path(base_path: &Path, file_path: &Path) -> Result<String, FileTransferError> {
     let relative_path = file_path
         .strip_prefix(base_path)
@@ -629,14 +719,27 @@ fn relative_tree_path(base_path: &Path, file_path: &Path) -> Result<String, File
 fn validate_tree_manifest(
     manifest: &[FileTransferTreeEntry],
 ) -> Result<Vec<ValidatedFileTransferTreeEntry>, FileTransferError> {
-    reject_duplicate_tree_paths(manifest.iter().map(|entry| entry.relative_path.as_str()))?;
-
-    manifest
+    let mut total_byte_size = 0_u64;
+    let mut folded_paths = BTreeSet::new();
+    let validated_entries = manifest
         .iter()
         .map(|entry| {
             let relative_path = normalize_safe_tree_relative_path(&entry.relative_path)?;
+            let folded_path = fold_tree_relative_path(&relative_path);
+            if !folded_paths.insert(folded_path) {
+                return Err(FileTransferError::InvalidField("relative_path"));
+            }
             if entry.is_directory && entry.byte_size != 0 {
                 return Err(FileTransferError::InvalidField("byte_size"));
+            }
+            if !entry.is_directory {
+                if entry.byte_size > FileTransferTree::MAX_FILE_BYTES {
+                    return Err(FileTransferError::InvalidField("byte_size"));
+                }
+                total_byte_size = total_byte_size
+                    .checked_add(entry.byte_size)
+                    .filter(|byte_size| *byte_size <= FileTransferTree::MAX_TREE_BYTES)
+                    .ok_or(FileTransferError::InvalidField("tree_size"))?;
             }
 
             Ok(ValidatedFileTransferTreeEntry {
@@ -648,21 +751,11 @@ fn validate_tree_manifest(
                 relative_path: normalized_tree_path_buf(&relative_path),
             })
         })
-        .collect()
-}
+        .collect::<Result<Vec<_>, _>>()?;
 
-fn reject_duplicate_tree_paths<'a>(
-    paths: impl Iterator<Item = &'a str>,
-) -> Result<(), FileTransferError> {
-    let mut seen = BTreeSet::new();
-    for path in paths {
-        let normalized_path = normalize_safe_tree_relative_path(path)?;
-        if !seen.insert(normalized_path) {
-            return Err(FileTransferError::InvalidField("relative_path"));
-        }
-    }
+    reject_file_ancestor_conflicts(&validated_entries)?;
 
-    Ok(())
+    Ok(validated_entries)
 }
 
 fn summarize_tree_manifest(
@@ -710,14 +803,62 @@ fn normalize_safe_tree_relative_path(value: &str) -> Result<String, FileTransfer
         return Err(FileTransferError::InvalidField("relative_path"));
     }
 
-    if !normalized
-        .split('/')
-        .all(|component| !component.is_empty() && component != "." && component != "..")
-    {
-        return Err(FileTransferError::InvalidField("relative_path"));
+    for component in normalized.split('/') {
+        if !is_safe_tree_path_component(component) {
+            return Err(FileTransferError::InvalidField("relative_path"));
+        }
     }
 
     Ok(normalized)
+}
+
+fn is_safe_tree_path_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && !component.ends_with(' ')
+        && !component.ends_with('.')
+        && !is_windows_reserved_device_name(component)
+}
+
+fn is_windows_reserved_device_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component);
+    let upper_stem = stem.to_ascii_uppercase();
+
+    matches!(upper_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper_stem.strip_prefix("COM").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
+        || upper_stem.strip_prefix("LPT").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
+}
+
+fn reject_file_ancestor_conflicts(
+    entries: &[ValidatedFileTransferTreeEntry],
+) -> Result<(), FileTransferError> {
+    let file_paths = entries
+        .iter()
+        .filter(|entry| !entry.entry.is_directory)
+        .map(|entry| fold_tree_relative_path(&entry.entry.relative_path))
+        .collect::<BTreeSet<_>>();
+
+    for entry in entries {
+        let mut components = entry.entry.relative_path.split('/').collect::<Vec<_>>();
+        while components.len() > 1 {
+            components.pop();
+            let ancestor = components.join("/");
+            if file_paths.contains(&fold_tree_relative_path(&ancestor)) {
+                return Err(FileTransferError::InvalidField("relative_path"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn fold_tree_relative_path(value: &str) -> String {
+    value.to_lowercase()
 }
 
 fn normalized_tree_path_buf(value: &str) -> PathBuf {
@@ -729,6 +870,10 @@ fn write_file_bytes_exact<W: Write>(
     byte_count: u64,
     writer: &mut W,
 ) -> Result<(), FileTransferError> {
+    let metadata = source_path_metadata(file_path)?;
+    if !metadata.is_file() || metadata.len() != byte_count {
+        return Err(FileTransferError::InvalidField("source_path"));
+    }
     let mut file = File::open(file_path)?;
     copy_bytes_exact(&mut file, writer, byte_count)
 }
