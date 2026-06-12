@@ -76,6 +76,11 @@ public sealed class CoreBridge
         return Ffi.Value?.DownloadFileArchive(host, port, transferId, destinationPath) == true;
     }
 
+    public FileTreeDownloadResult? DownloadFileTree(string host, int port, string transferId, string destinationDirectory)
+    {
+        return Ffi.Value?.DownloadFileTree(host, port, transferId, destinationDirectory);
+    }
+
     public RustUdpSocket? OpenUdpSocket(int bindPort)
     {
         return Ffi.Value?.OpenUdpSocket(bindPort);
@@ -104,6 +109,8 @@ public sealed class CoreBridge
 }
 
 public sealed record RustUdpDatagram(byte[] Payload, string SourceHost, int SourcePort);
+
+public sealed record FileTreeDownloadResult(int FileCount, ulong ByteCount, IReadOnlyList<string> TopLevelPaths);
 
 public sealed class RustUdpSocket : IDisposable
 {
@@ -200,6 +207,19 @@ public sealed class RustFileServer : IDisposable
         }
     }
 
+    public FileTreeDownloadResult? ServeNextTree()
+    {
+        handleLock.EnterReadLock();
+        try
+        {
+            return handle == IntPtr.Zero ? null : bridge.FileServerServeNextTree(handle);
+        }
+        finally
+        {
+            handleLock.ExitReadLock();
+        }
+    }
+
     public void Dispose()
     {
         if (System.Threading.Interlocked.Exchange(ref disposed, 1) == 1)
@@ -288,6 +308,13 @@ internal sealed class ClipPlusFfiBridge
         IntPtr destinationPath);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr DownloadFileTreeDelegate(
+        IntPtr host,
+        ushort port,
+        IntPtr transferId,
+        IntPtr destinationDirectory);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate IntPtr UdpSocketBindDelegate(ushort bindPort);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -336,6 +363,9 @@ internal sealed class ClipPlusFfiBridge
         IntPtr tempDirectory);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr FileServerServeNextTreeDelegate(IntPtr handle);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
 
     private static readonly JsonSerializerOptions FilesJsonOptions = new()
@@ -351,6 +381,7 @@ internal sealed class ClipPlusFfiBridge
     private readonly WriteFileArchiveZipDelegate writeFileArchiveZip;
     private readonly ServeFileArchiveToSocketDelegate serveFileArchiveToSocket;
     private readonly DownloadFileArchiveDelegate downloadFileArchive;
+    private readonly DownloadFileTreeDelegate downloadFileTree;
     private readonly UdpSocketBindDelegate udpSocketBind;
     private readonly UdpSocketFreeDelegate udpSocketFree;
     private readonly UdpSocketLocalPortDelegate udpSocketLocalPort;
@@ -361,8 +392,14 @@ internal sealed class ClipPlusFfiBridge
     private readonly FileServerLocalPortDelegate fileServerLocalPort;
     private readonly FileServerRegisterTransferDelegate fileServerRegisterTransfer;
     private readonly FileServerServeNextDelegate fileServerServeNext;
+    private readonly FileServerServeNextTreeDelegate fileServerServeNextTree;
     private readonly CreateTextMessageJsonDelegate createTrustMessageJson;
     private readonly FreeStringDelegate freeString;
+
+    private static readonly JsonSerializerOptions TreeSummaryJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     private ClipPlusFfiBridge(
         DeriveGroupIdDelegate deriveGroupId,
@@ -373,6 +410,7 @@ internal sealed class ClipPlusFfiBridge
         WriteFileArchiveZipDelegate writeFileArchiveZip,
         ServeFileArchiveToSocketDelegate serveFileArchiveToSocket,
         DownloadFileArchiveDelegate downloadFileArchive,
+        DownloadFileTreeDelegate downloadFileTree,
         UdpSocketBindDelegate udpSocketBind,
         UdpSocketFreeDelegate udpSocketFree,
         UdpSocketLocalPortDelegate udpSocketLocalPort,
@@ -383,6 +421,7 @@ internal sealed class ClipPlusFfiBridge
         FileServerLocalPortDelegate fileServerLocalPort,
         FileServerRegisterTransferDelegate fileServerRegisterTransfer,
         FileServerServeNextDelegate fileServerServeNext,
+        FileServerServeNextTreeDelegate fileServerServeNextTree,
         CreateTextMessageJsonDelegate createTrustMessageJson,
         FreeStringDelegate freeString)
     {
@@ -394,6 +433,7 @@ internal sealed class ClipPlusFfiBridge
         this.writeFileArchiveZip = writeFileArchiveZip;
         this.serveFileArchiveToSocket = serveFileArchiveToSocket;
         this.downloadFileArchive = downloadFileArchive;
+        this.downloadFileTree = downloadFileTree;
         this.udpSocketBind = udpSocketBind;
         this.udpSocketFree = udpSocketFree;
         this.udpSocketLocalPort = udpSocketLocalPort;
@@ -404,6 +444,7 @@ internal sealed class ClipPlusFfiBridge
         this.fileServerLocalPort = fileServerLocalPort;
         this.fileServerRegisterTransfer = fileServerRegisterTransfer;
         this.fileServerServeNext = fileServerServeNext;
+        this.fileServerServeNextTree = fileServerServeNextTree;
         this.createTrustMessageJson = createTrustMessageJson;
         this.freeString = freeString;
     }
@@ -430,6 +471,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_write_file_archive_zip", out var writeFileArchiveZipSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_serve_file_archive_to_socket", out var serveFileArchiveToSocketSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out var downloadFileArchiveSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_download_file_tree", out var downloadFileTreeSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out var udpSocketBindSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_free", out var udpSocketFreeSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_local_port", out var udpSocketLocalPortSymbol)
@@ -440,6 +482,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_local_port", out var fileServerLocalPortSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_register_transfer", out var fileServerRegisterTransferSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_serve_next", out var fileServerServeNextSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_serve_next_tree", out var fileServerServeNextTreeSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_trust_message_json", out var createTrustMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
@@ -456,6 +499,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<WriteFileArchiveZipDelegate>(writeFileArchiveZipSymbol),
                 Marshal.GetDelegateForFunctionPointer<ServeFileArchiveToSocketDelegate>(serveFileArchiveToSocketSymbol),
                 Marshal.GetDelegateForFunctionPointer<DownloadFileArchiveDelegate>(downloadFileArchiveSymbol),
+                Marshal.GetDelegateForFunctionPointer<DownloadFileTreeDelegate>(downloadFileTreeSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketBindDelegate>(udpSocketBindSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketFreeDelegate>(udpSocketFreeSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketLocalPortDelegate>(udpSocketLocalPortSymbol),
@@ -466,6 +510,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<FileServerLocalPortDelegate>(fileServerLocalPortSymbol),
                 Marshal.GetDelegateForFunctionPointer<FileServerRegisterTransferDelegate>(fileServerRegisterTransferSymbol),
                 Marshal.GetDelegateForFunctionPointer<FileServerServeNextDelegate>(fileServerServeNextSymbol),
+                Marshal.GetDelegateForFunctionPointer<FileServerServeNextTreeDelegate>(fileServerServeNextTreeSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTrustMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
@@ -510,10 +555,12 @@ internal sealed class ClipPlusFfiBridge
             {
                 lines.Add($"export_clipplus_derive_group_id={NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out _)}");
                 lines.Add($"export_clipplus_download_file_archive={NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out _)}");
+                lines.Add($"export_clipplus_download_file_tree={NativeLibrary.TryGetExport(handle, "clipplus_download_file_tree", out _)}");
                 lines.Add($"export_clipplus_udp_socket_bind={NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out _)}");
                 lines.Add($"export_clipplus_file_server_bind={NativeLibrary.TryGetExport(handle, "clipplus_file_server_bind", out _)}");
                 lines.Add($"export_clipplus_file_server_register_transfer={NativeLibrary.TryGetExport(handle, "clipplus_file_server_register_transfer", out _)}");
                 lines.Add($"export_clipplus_file_server_serve_next={NativeLibrary.TryGetExport(handle, "clipplus_file_server_serve_next", out _)}");
+                lines.Add($"export_clipplus_file_server_serve_next_tree={NativeLibrary.TryGetExport(handle, "clipplus_file_server_serve_next_tree", out _)}");
                 lines.Add($"export_clipplus_free_string={NativeLibrary.TryGetExport(handle, "clipplus_free_string", out _)}");
             }
             finally
@@ -734,6 +781,36 @@ internal sealed class ClipPlusFfiBridge
         }
     }
 
+    public FileTreeDownloadResult? DownloadFileTree(string host, int port, string transferId, string destinationDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(host)
+            || string.IsNullOrWhiteSpace(transferId)
+            || string.IsNullOrWhiteSpace(destinationDirectory)
+            || port <= 0
+            || port > ushort.MaxValue)
+        {
+            return null;
+        }
+
+        var hostPointer = Marshal.StringToCoTaskMemUTF8(host);
+        var transferIdPointer = Marshal.StringToCoTaskMemUTF8(transferId);
+        var destinationDirectoryPointer = Marshal.StringToCoTaskMemUTF8(destinationDirectory);
+        try
+        {
+            return TakeOwnedTreeSummary(downloadFileTree(
+                hostPointer,
+                (ushort)port,
+                transferIdPointer,
+                destinationDirectoryPointer));
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(hostPointer);
+            Marshal.FreeCoTaskMem(transferIdPointer);
+            Marshal.FreeCoTaskMem(destinationDirectoryPointer);
+        }
+    }
+
     public RustUdpSocket? OpenUdpSocket(int bindPort)
     {
         if (bindPort < 0 || bindPort > ushort.MaxValue)
@@ -872,6 +949,11 @@ internal sealed class ClipPlusFfiBridge
         }
     }
 
+    internal FileTreeDownloadResult? FileServerServeNextTree(IntPtr handle)
+    {
+        return TakeOwnedTreeSummary(fileServerServeNextTree(handle));
+    }
+
     internal void FileServerFree(IntPtr handle)
     {
         fileServerFree(handle);
@@ -920,6 +1002,23 @@ internal sealed class ClipPlusFfiBridge
         {
             freeString(resultPointer);
         }
+    }
+
+    private FileTreeDownloadResult? TakeOwnedTreeSummary(IntPtr resultPointer)
+    {
+        var json = TakeOwnedString(resultPointer);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        var result = JsonSerializer.Deserialize<FileTreeDownloadResult>(json, TreeSummaryJsonOptions);
+        if (result is null || result.TopLevelPaths.Count == 0)
+        {
+            return null;
+        }
+
+        return result;
     }
 
     private static IEnumerable<string> LibraryCandidatePaths()

@@ -1,6 +1,8 @@
 namespace ClipPlus.Windows.Clipboard;
 
+using System.Collections.Specialized;
 using System.IO;
+using System.Threading;
 using System.Windows.Media.Imaging;
 
 public sealed class NativeClipboard
@@ -15,6 +17,36 @@ public sealed class NativeClipboard
         return System.Windows.Clipboard.GetFileDropList()
             .Cast<string>()
             .ToArray();
+    }
+
+    public bool WriteFilePaths(IReadOnlyList<string> paths)
+    {
+        // WPF Clipboard requires an STA thread; callers should use the UI Dispatcher.
+        if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA || paths.Count == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var collection = new StringCollection();
+            foreach (var path in paths.Where(path => !string.IsNullOrWhiteSpace(path)))
+            {
+                collection.Add(path);
+            }
+
+            if (collection.Count == 0)
+            {
+                return false;
+            }
+
+            System.Windows.Clipboard.SetFileDropList(collection);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     public string? ReadText()

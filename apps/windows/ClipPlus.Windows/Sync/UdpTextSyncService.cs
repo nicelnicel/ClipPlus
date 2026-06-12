@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Threading;
 using ClipPlus.Windows.Clipboard;
 using ClipPlus.Windows.CoreBridge;
@@ -15,6 +16,7 @@ public sealed class UdpTextSyncService : IDisposable
 {
     private const int Port = 47_631;
     private const int ArchivePort = 47_632;
+    private const int MaxSafeTransferIdLength = 128;
 
     private readonly SettingsState state;
     private readonly NativeClipboard clipboard = new();
@@ -25,6 +27,7 @@ public sealed class UdpTextSyncService : IDisposable
     private readonly string deviceName;
     private readonly IReadOnlyList<string> peerHosts;
     private readonly object udpSocketLock = new();
+    private readonly object fileSignatureLock = new();
 
     private RustUdpSocket? udpSocket;
     private RustFileServer? fileServer;
@@ -34,7 +37,10 @@ public sealed class UdpTextSyncService : IDisposable
     private string? lastLocalImageHash;
     private string? lastRemoteImageHash;
     private string? lastLocalFileSignature;
+    private string? lastRemoteFileSignature;
     private int tickCount;
+
+    private static readonly Regex SafeTransferIdPattern = new("^[A-Za-z0-9-]+$", RegexOptions.Compiled);
 
     public UdpTextSyncService(SettingsState state, ClipPlusLogger logger, Dispatcher dispatcher)
     {
@@ -78,7 +84,7 @@ public sealed class UdpTextSyncService : IDisposable
             }
 
             _ = Task.Run(() => ReceiveLoopAsync(cancellation.Token));
-            _ = Task.Run(() => FileArchiveLoop(cancellation.Token));
+            _ = Task.Run(() => FileTreeLoop(cancellation.Token));
             timer.Start();
             SendHello();
             logger.Info($"sync service started on UDP {Port}");
@@ -193,10 +199,26 @@ public sealed class UdpTextSyncService : IDisposable
         var filePaths = clipboard.ReadFilePaths();
         if (filePaths.Count > 0)
         {
-            var signature = string.Join("|", filePaths.OrderBy(path => path, StringComparer.Ordinal));
-            if (!string.Equals(signature, lastLocalFileSignature, StringComparison.Ordinal))
+            var signature = BuildFileSignature(filePaths);
+            if (filePaths.Any(IsPathUnderStagingRoot))
             {
-                lastLocalFileSignature = signature;
+                SetLastLocalFileSignature(signature);
+                return;
+            }
+
+            var shouldPublish = false;
+            lock (fileSignatureLock)
+            {
+                shouldPublish = !string.Equals(signature, lastLocalFileSignature, StringComparison.Ordinal)
+                    && !string.Equals(signature, lastRemoteFileSignature, StringComparison.Ordinal);
+                if (shouldPublish)
+                {
+                    lastLocalFileSignature = signature;
+                }
+            }
+
+            if (shouldPublish)
+            {
                 PublishFileOffer(filePaths);
             }
 
@@ -388,7 +410,7 @@ public sealed class UdpTextSyncService : IDisposable
         );
     }
 
-    private void FileArchiveLoop(CancellationToken token)
+    private void FileTreeLoop(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
@@ -400,14 +422,14 @@ public sealed class UdpTextSyncService : IDisposable
                     return;
                 }
 
-                var byteCount = server.ServeNext(Path.GetTempPath());
+                var result = server.ServeNextTree();
                 if (token.IsCancellationRequested)
                 {
                     return;
                 }
-                if (byteCount > 0)
+                if (result is not null)
                 {
-                    logger.Info($"served file archive byte_count={byteCount}");
+                    logger.Info($"served file tree file_count={result.FileCount} byte_count={result.ByteCount}");
                 }
             }
             catch (OperationCanceledException)
@@ -420,7 +442,7 @@ public sealed class UdpTextSyncService : IDisposable
             }
             catch (Exception error)
             {
-                logger.Error($"file archive loop error: {error.Message}");
+                logger.Error($"file tree loop error: {error.Message}");
             }
         }
     }
@@ -438,30 +460,45 @@ public sealed class UdpTextSyncService : IDisposable
 
     private async Task DownloadRemoteFileOfferAsync(RemoteFileOfferSummary offer)
     {
-        var destinationPath = UniqueDownloadPath(offer.TransferId);
         try
         {
-            if (!new ClipPlus.Windows.CoreBridge.CoreBridge().DownloadFileArchive(
+            var safeTransferId = SafeTransferIdOrThrow(offer.TransferId);
+            var destinationDirectory = StagingDirectoryForTransfer(safeTransferId);
+            if (Directory.Exists(destinationDirectory))
+            {
+                Directory.Delete(destinationDirectory, recursive: true);
+            }
+
+            var result = new ClipPlus.Windows.CoreBridge.CoreBridge().DownloadFileTree(
                 offer.SourceHost,
                 ArchivePort,
                 offer.TransferId,
-                destinationPath))
+                destinationDirectory);
+            if (result is null)
             {
-                if (File.Exists(destinationPath))
-                {
-                    File.Delete(destinationPath);
-                }
-
                 throw new InvalidOperationException("file transfer download failed");
             }
 
-            var byteCount = new FileInfo(destinationPath).Length;
+            var topLevelPaths = result.TopLevelPaths.ToArray();
             await dispatcher.InvokeAsync(() =>
             {
+                var signature = BuildFileSignature(topLevelPaths);
+                if (!clipboard.WriteFilePaths(topLevelPaths))
+                {
+                    state.LastStatusMessage = "文件接收失败";
+                    throw new InvalidOperationException("file drop list clipboard write failed");
+                }
+
+                lock (fileSignatureLock)
+                {
+                    lastRemoteFileSignature = signature;
+                    lastLocalFileSignature = signature;
+                }
+
                 state.ClearRemoteFileOffer(offer.TransferId);
-                state.LastStatusMessage = $"文件已接收到 {Path.GetFileName(destinationPath)}";
+                state.LastStatusMessage = "文件已写入剪贴板，可在资源管理器粘贴";
             });
-            logger.Info($"downloaded file archive byte_count={byteCount}");
+            logger.Info($"downloaded file tree file_count={result.FileCount} byte_count={result.ByteCount}");
         }
         catch (Exception error)
         {
@@ -470,19 +507,102 @@ public sealed class UdpTextSyncService : IDisposable
         }
     }
 
-    private static string UniqueDownloadPath(string transferId)
+    private static string SafeTransferIdOrThrow(string transferId)
     {
-        var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-        Directory.CreateDirectory(downloads);
-        var candidate = Path.Combine(downloads, $"ClipPlus-Received-{transferId}.zip");
-        var index = 2;
-        while (File.Exists(candidate))
+        if (string.IsNullOrWhiteSpace(transferId)
+            || transferId.Length > MaxSafeTransferIdLength
+            || !SafeTransferIdPattern.IsMatch(transferId))
         {
-            candidate = Path.Combine(downloads, $"ClipPlus-Received-{transferId}-{index}.zip");
-            index++;
+            throw new InvalidOperationException("invalid file transfer id");
         }
 
-        return candidate;
+        return transferId;
+    }
+
+    private static string StagingRootDirectory()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClipPlus",
+            "Staging");
+    }
+
+    private static string StagingDirectoryForTransfer(string safeTransferId)
+    {
+        var root = StagingRootDirectory();
+        Directory.CreateDirectory(root);
+        var destinationDirectory = Path.Combine(root, safeTransferId);
+        var rootFullPath = Path.GetFullPath(root);
+        var destinationFullPath = Path.GetFullPath(destinationDirectory);
+        if (!IsSameOrChildPath(rootFullPath, destinationFullPath))
+        {
+            throw new InvalidOperationException("invalid staging destination");
+        }
+
+        return destinationFullPath;
+    }
+
+    private static bool IsPathUnderStagingRoot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            return IsSameOrChildPath(
+                Path.GetFullPath(StagingRootDirectory()),
+                Path.GetFullPath(path));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSameOrChildPath(string parentPath, string childPath)
+    {
+        var normalizedParent = Path.TrimEndingDirectorySeparator(parentPath);
+        var normalizedChild = Path.TrimEndingDirectorySeparator(childPath);
+        return string.Equals(normalizedParent, normalizedChild, StringComparison.OrdinalIgnoreCase)
+            || normalizedChild.StartsWith(
+                normalizedParent + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildFileSignature(IReadOnlyList<string> paths)
+    {
+        var canonicalPaths = new List<string>();
+        foreach (var path in paths.Where(path => !string.IsNullOrWhiteSpace(path)))
+        {
+            try
+            {
+                canonicalPaths.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)));
+            }
+            catch (Exception)
+            {
+                // Ignore malformed clipboard paths; valid paths still produce a stable signature.
+            }
+        }
+
+        var builder = new StringBuilder();
+        foreach (var path in canonicalPaths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            builder.Append(path.Length);
+            builder.Append(':');
+            builder.Append(path);
+        }
+
+        return builder.ToString();
+    }
+
+    private void SetLastLocalFileSignature(string signature)
+    {
+        lock (fileSignatureLock)
+        {
+            lastLocalFileSignature = signature;
+        }
     }
 
     private void SendHello()

@@ -985,6 +985,115 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public async Task CoreBridgeFileServerServesRegisteredDirectFileTreeWhenFfiLibraryIsAvailable()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(temporaryDirectory);
+        var sourceDirectory = Path.Combine(temporaryDirectory, "SourceFolder");
+        var nestedDirectory = Path.Combine(sourceDirectory, "Nested");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "root.txt"), "root from windows ffi file tree");
+        File.WriteAllText(Path.Combine(nestedDirectory, "child.txt"), "nested from windows ffi file tree");
+        var destinationDirectory = Path.Combine(temporaryDirectory, "received-tree");
+        using var server = new ClipPlus.Windows.CoreBridge.CoreBridge().OpenFileServer(0);
+        Assert.NotNull(server);
+        Assert.NotEqual(0, server.LocalPort);
+        Assert.True(server.RegisterTransfer("transfer-tree-a", new[] { sourceDirectory }));
+        var serverTask = Task.Run(() => server.ServeNextTree());
+
+        try
+        {
+            var result = new ClipPlus.Windows.CoreBridge.CoreBridge().DownloadFileTree(
+                "127.0.0.1",
+                server.LocalPort,
+                "transfer-tree-a",
+                destinationDirectory
+            );
+            var servedResult = await serverTask.WaitAsync(TimeSpan.FromSeconds(6));
+
+            Assert.NotNull(result);
+            Assert.NotNull(servedResult);
+            Assert.Equal(2, result.FileCount);
+            Assert.Equal(result.FileCount, servedResult.FileCount);
+            Assert.Equal(result.ByteCount, servedResult.ByteCount);
+            Assert.Contains("SourceFolder", servedResult.TopLevelPaths);
+            Assert.Contains(Path.Combine(destinationDirectory, "SourceFolder"), result.TopLevelPaths);
+            Assert.Equal("root from windows ffi file tree", File.ReadAllText(Path.Combine(destinationDirectory, "SourceFolder", "root.txt")));
+            Assert.Equal("nested from windows ffi file tree", File.ReadAllText(Path.Combine(destinationDirectory, "SourceFolder", "Nested", "child.txt")));
+        }
+        finally
+        {
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CoreBridgeDownloadsDirectFileTreeWhenFfiLibraryIsAvailable()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(temporaryDirectory);
+        var sourceDirectory = Path.Combine(temporaryDirectory, "Published");
+        var nestedDirectory = Path.Combine(sourceDirectory, "Nested");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "a.txt"), "alpha direct tree");
+        File.WriteAllText(Path.Combine(nestedDirectory, "b.txt"), "beta direct tree");
+        var destinationDirectory = Path.Combine(temporaryDirectory, "staging");
+        using var server = new ClipPlus.Windows.CoreBridge.CoreBridge().OpenFileServer(0);
+        Assert.NotNull(server);
+        Assert.True(server.RegisterTransfer("transfer-tree-b", new[] { sourceDirectory }));
+        var serverTask = Task.Run(() => server.ServeNextTree());
+
+        try
+        {
+            var result = new ClipPlus.Windows.CoreBridge.CoreBridge().DownloadFileTree(
+                "127.0.0.1",
+                server.LocalPort,
+                "transfer-tree-b",
+                destinationDirectory
+            );
+            await serverTask.WaitAsync(TimeSpan.FromSeconds(6));
+
+            Assert.NotNull(result);
+            Assert.Equal(2, result.FileCount);
+            Assert.Equal((ulong)Encoding.UTF8.GetByteCount("alpha direct tree" + "beta direct tree"), result.ByteCount);
+            Assert.Single(result.TopLevelPaths);
+            Assert.Equal(Path.Combine(destinationDirectory, "Published"), result.TopLevelPaths[0]);
+            Assert.Equal("alpha direct tree", File.ReadAllText(Path.Combine(destinationDirectory, "Published", "a.txt")));
+            Assert.Equal("beta direct tree", File.ReadAllText(Path.Combine(destinationDirectory, "Published", "Nested", "b.txt")));
+        }
+        finally
+        {
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void UdpTextSyncServiceUsesDirectFileTreeInsteadOfDownloadsZipRuntime()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+
+        Assert.DoesNotContain("ClipPlus-Received-", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("UniqueDownloadPath", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("DownloadFileArchive(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("string.Join(\"|\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Downloads\"", source, StringComparison.Ordinal);
+        Assert.Contains("DownloadFileTree(", source, StringComparison.Ordinal);
+        Assert.Contains("WriteFilePaths", source, StringComparison.Ordinal);
+        Assert.Contains("BuildFileSignature", source, StringComparison.Ordinal);
+        Assert.Contains("Staging", source, StringComparison.Ordinal);
+        Assert.Contains("served file tree", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable()
     {
         var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
