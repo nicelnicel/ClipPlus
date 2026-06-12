@@ -244,6 +244,8 @@ public sealed class SettingsStateTests
         Assert.Contains("SizeToContent=\"Height\"", settingsXaml);
         Assert.DoesNotContain("Height=\"255\"", settingsXaml);
         Assert.DoesNotContain("Height=\"210\"", settingsXaml);
+        Assert.Contains("AppVersion.SettingsWindowTitle", settingsCode);
+        Assert.Contains("AppVersion.TrayText", traySource);
         Assert.Contains("开启局域网剪贴板", settingsXaml);
         Assert.Contains("开机启动", settingsXaml);
         Assert.Contains("by.YJY_hi", settingsXaml);

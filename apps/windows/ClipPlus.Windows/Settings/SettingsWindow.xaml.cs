@@ -17,6 +17,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(SettingsState state)
     {
         InitializeComponent();
+        Title = AppVersion.SettingsWindowTitle;
         this.state = state;
         DataContext = state;
         state.PropertyChanged += State_PropertyChanged;

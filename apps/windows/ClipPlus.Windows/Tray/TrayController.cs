@@ -20,7 +20,7 @@ public sealed class TrayController : IDisposable
         notifyIcon = new NotifyIcon
         {
             Icon = icon,
-            Text = "ClipPlus",
+            Text = AppVersion.TrayText,
             Visible = true
         };
         notifyIcon.ContextMenuStrip = BuildMenu();

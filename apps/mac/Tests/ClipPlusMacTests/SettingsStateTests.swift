@@ -190,12 +190,15 @@ final class SettingsStateTests: XCTestCase {
             .appendingPathComponent("Sources/ClipPlusMac/MenuBar/MenuBarController.swift")
         let syncServiceURL = packageRoot
             .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let appSourceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/App/ClipPlusApp.swift")
         let settingsSource = try String(contentsOf: settingsViewURL, encoding: .utf8)
         let sharedKeyInputFieldSource = try String(contentsOf: sharedKeyInputFieldURL, encoding: .utf8)
         let settingsViewStart = try XCTUnwrap(settingsSource.range(of: "struct SettingsView: View")?.lowerBound)
         let visibleSettingsSource = String(settingsSource[settingsViewStart...])
         let menuBarSource = try String(contentsOf: menuBarURL, encoding: .utf8)
         let syncSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+        let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
 
         XCTAssertContainsVisibleControl("输入 Key", in: settingsSource)
         XCTAssertContainsVisibleControl("开启局域网剪贴板", in: visibleSettingsSource)
@@ -249,6 +252,14 @@ final class SettingsStateTests: XCTestCase {
         )
         XCTAssertContainsVisibleControl("开机启动", in: visibleSettingsSource)
         XCTAssertContainsVisibleControl("ClipPlus", in: visibleSettingsSource)
+        XCTAssertTrue(
+            visibleSettingsSource.contains("AppVersion.display"),
+            "设置界面的标题必须显示当前版本号，避免用户误跑旧版本时无法辨认"
+        )
+        XCTAssertTrue(
+            appSource.contains("AppVersion.settingsWindowTitle"),
+            "macOS 设置窗口标题栏必须包含当前版本号"
+        )
         XCTAssertContainsVisibleControl("局域网剪贴板", in: visibleSettingsSource)
         XCTAssertContainsVisibleControl("退出 ClipPlus", in: visibleSettingsSource)
         XCTAssertTrue(visibleSettingsSource.contains(".accessibilityLabel(\"退出 ClipPlus\")"))

@@ -64,7 +64,7 @@ struct ClipPlusApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("ClipPlus 设置", id: "settings") {
+        Window(AppVersion.settingsWindowTitle, id: "settings") {
             SettingsView(state: appModel.settingsState)
         }
 

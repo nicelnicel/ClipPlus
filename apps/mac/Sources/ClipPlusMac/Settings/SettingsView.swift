@@ -440,8 +440,14 @@ struct SettingsView: View {
     private var infoBox: some View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("ClipPlus")
-                    .font(.headline)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("ClipPlus")
+                        .font(.headline)
+
+                    Text(AppVersion.display)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
 
                 Text("局域网剪贴板")
                     .font(.subheadline)
