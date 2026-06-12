@@ -36,6 +36,8 @@ pub struct NativeClipboardMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transfer_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfer_format: Option<NativeFileTransferFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<NativeFileTransferItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archive_port: Option<u16>,
@@ -48,6 +50,12 @@ pub struct NativeFileTransferItem {
     pub relative_path: String,
     pub byte_size: u64,
     pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeFileTransferFormat {
+    DirectTree,
 }
 
 #[derive(Debug, Error)]
@@ -134,6 +142,7 @@ impl NativeClipboardMessage {
             image_content_hash: Some(sha256_hex(image_bytes)),
             approved_device_id: None,
             transfer_id: None,
+            transfer_format: None,
             files: None,
             archive_port: None,
             created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -163,6 +172,7 @@ impl NativeClipboardMessage {
             image_content_hash: None,
             approved_device_id: None,
             transfer_id: Some(transfer_id.into()),
+            transfer_format: Some(NativeFileTransferFormat::DirectTree),
             files: Some(files),
             archive_port: Some(archive_port),
             created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -192,6 +202,7 @@ impl NativeClipboardMessage {
             image_content_hash: None,
             approved_device_id,
             transfer_id: None,
+            transfer_format: None,
             files: None,
             archive_port: None,
             created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -275,6 +286,9 @@ impl NativeClipboardMessage {
                 .is_none_or(|value| value.trim().is_empty())
             {
                 return Err(NativeClipboardMessageError::InvalidField("transfer_id"));
+            }
+            if self.transfer_format != Some(NativeFileTransferFormat::DirectTree) {
+                return Err(NativeClipboardMessageError::InvalidField("transfer_format"));
             }
             if self.archive_port.is_none_or(|value| value == 0) {
                 return Err(NativeClipboardMessageError::InvalidField("archive_port"));

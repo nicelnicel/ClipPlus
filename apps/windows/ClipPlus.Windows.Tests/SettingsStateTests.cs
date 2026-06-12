@@ -760,6 +760,7 @@ public sealed class SettingsStateTests
 
         Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded.Kind);
         Assert.Equal("transfer-1", decoded.TransferId);
+        Assert.Equal(ClipPlus.Windows.Sync.FileTransferFormat.DirectTree, decoded.TransferFormat);
         Assert.Equal(47_632, decoded.ArchivePort);
         Assert.Equal(new[] { item }, decoded.Files);
         Assert.DoesNotContain(@"C:\\", json);
@@ -789,10 +790,39 @@ public sealed class SettingsStateTests
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("transfer-1", decoded.TransferId);
+        Assert.Equal(ClipPlus.Windows.Sync.FileTransferFormat.DirectTree, decoded.TransferFormat);
         Assert.Equal(47_632, decoded.ArchivePort);
         Assert.Equal(new[] { item }, decoded.Files);
         Assert.DoesNotContain(@"C:\\", json);
         Assert.DoesNotContain("/Users/", json);
+    }
+
+    [Fact]
+    public void RemoteFileTransferGateRejectsInFlightAndCompletedDuplicates()
+    {
+        var gate = new ClipPlus.Windows.Sync.RemoteFileTransferGate();
+
+        Assert.True(gate.CanAcceptOffer("transfer-a"));
+        Assert.True(gate.Begin("transfer-a"));
+        Assert.False(gate.CanAcceptOffer("transfer-a"));
+        Assert.False(gate.Begin("transfer-a"));
+
+        gate.Complete("transfer-a");
+
+        Assert.False(gate.CanAcceptOffer("transfer-a"));
+        Assert.False(gate.Begin("transfer-a"));
+    }
+
+    [Fact]
+    public void RemoteFileTransferGateAllowsRetryAfterFailure()
+    {
+        var gate = new ClipPlus.Windows.Sync.RemoteFileTransferGate();
+
+        Assert.True(gate.Begin("transfer-a"));
+        gate.Fail("transfer-a");
+
+        Assert.True(gate.CanAcceptOffer("transfer-a"));
+        Assert.True(gate.Begin("transfer-a"));
     }
 
     [Fact]
@@ -1088,9 +1118,11 @@ public sealed class SettingsStateTests
         Assert.DoesNotContain("\"Downloads\"", source, StringComparison.Ordinal);
         Assert.Contains("DownloadFileTree(", source, StringComparison.Ordinal);
         Assert.Contains("WriteFilePaths", source, StringComparison.Ordinal);
+        Assert.Contains("message.TransferFormat != ClipPlus.Windows.Sync.FileTransferFormat.DirectTree", source, StringComparison.Ordinal);
         Assert.Contains("BuildFileSignature", source, StringComparison.Ordinal);
         Assert.Contains("Staging", source, StringComparison.Ordinal);
         Assert.Contains("served file tree", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("file transfer download failed: {error.Message}", source, StringComparison.Ordinal);
     }
 
     [Fact]

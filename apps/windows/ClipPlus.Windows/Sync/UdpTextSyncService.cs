@@ -22,6 +22,7 @@ public sealed class UdpTextSyncService : IDisposable
     private readonly NativeClipboard clipboard = new();
     private readonly ClipPlusLogger logger;
     private readonly Dispatcher dispatcher;
+    private readonly RemoteFileTransferGate remoteFileTransfers = new();
     private readonly DispatcherTimer timer;
     private readonly string deviceId;
     private readonly string deviceName;
@@ -348,8 +349,10 @@ public sealed class UdpTextSyncService : IDisposable
             case ClipPlusMessageKind.FileOffer:
                 if (!state.SharingEnabled
                     || string.IsNullOrEmpty(message.TransferId)
+                    || message.TransferFormat != ClipPlus.Windows.Sync.FileTransferFormat.DirectTree
                     || message.Files is null
-                    || message.Files.Count == 0)
+                    || message.Files.Count == 0
+                    || !remoteFileTransfers.CanAcceptOffer(message.TransferId))
                 {
                     return;
                 }
@@ -454,6 +457,10 @@ public sealed class UdpTextSyncService : IDisposable
         {
             return;
         }
+        if (!remoteFileTransfers.Begin(transferId))
+        {
+            return;
+        }
 
         _ = Task.Run(async () => await DownloadRemoteFileOfferAsync(offer));
     }
@@ -497,13 +504,15 @@ public sealed class UdpTextSyncService : IDisposable
 
                 state.ClearRemoteFileOffer(offer.TransferId);
                 state.LastStatusMessage = "文件已写入剪贴板，可在资源管理器粘贴";
+                remoteFileTransfers.Complete(offer.TransferId);
             });
             logger.Info($"downloaded file tree file_count={result.FileCount} byte_count={result.ByteCount}");
         }
         catch (Exception error)
         {
+            remoteFileTransfers.Fail(offer.TransferId);
             await dispatcher.InvokeAsync(() => state.LastStatusMessage = "文件接收失败");
-            logger.Error($"file transfer download failed: {error.Message}");
+            logger.Error($"file transfer download failed stage=receive error_type={error.GetType().Name}");
         }
     }
 

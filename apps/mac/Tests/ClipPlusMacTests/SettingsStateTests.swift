@@ -845,6 +845,7 @@ final class SettingsStateTests: XCTestCase {
 
         XCTAssertEqual(decoded.kind, .fileOffer)
         XCTAssertEqual(decoded.transferId, "transfer-1")
+        XCTAssertEqual(decoded.transferFormat, .directTree)
         XCTAssertEqual(decoded.archivePort, 47_632)
         XCTAssertEqual(decoded.files, [item])
         XCTAssertFalse(json.contains("/Users/"))
@@ -872,10 +873,35 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(decoded.groupId, "group-1")
         XCTAssertEqual(decoded.senderDeviceId, "mac-device")
         XCTAssertEqual(decoded.transferId, "transfer-1")
+        XCTAssertEqual(decoded.transferFormat, .directTree)
         XCTAssertEqual(decoded.archivePort, 47_632)
         XCTAssertEqual(decoded.files, [item])
         XCTAssertFalse(json.contains("/Users/"))
         XCTAssertFalse(json.contains("C:\\\\"))
+    }
+
+    func testRemoteFileTransferGateRejectsInFlightAndCompletedDuplicates() {
+        let gate = RemoteFileTransferGate()
+
+        XCTAssertTrue(gate.canAcceptOffer("transfer-a"))
+        XCTAssertTrue(gate.begin("transfer-a"))
+        XCTAssertFalse(gate.canAcceptOffer("transfer-a"))
+        XCTAssertFalse(gate.begin("transfer-a"))
+
+        gate.complete("transfer-a")
+
+        XCTAssertFalse(gate.canAcceptOffer("transfer-a"))
+        XCTAssertFalse(gate.begin("transfer-a"))
+    }
+
+    func testRemoteFileTransferGateAllowsRetryAfterFailure() {
+        let gate = RemoteFileTransferGate()
+
+        XCTAssertTrue(gate.begin("transfer-a"))
+        gate.fail("transfer-a")
+
+        XCTAssertTrue(gate.canAcceptOffer("transfer-a"))
+        XCTAssertTrue(gate.begin("transfer-a"))
     }
 
     func testRemoteFileOfferCanRequestReceive() {
@@ -1175,7 +1201,7 @@ final class SettingsStateTests: XCTestCase {
         ))
         wait(for: [served], timeout: 2)
 
-        XCTAssertEqual(requestedTransferId, "transfer-a")
+        XCTAssertEqual(requestedTransferId, "tree:transfer-a")
         XCTAssertEqual(result.fileCount, 1)
         XCTAssertEqual(result.byteCount, 8)
         XCTAssertEqual(result.topLevelPaths, [stagingURL.appendingPathComponent("ffi.txt").path])
@@ -1324,10 +1350,12 @@ final class SettingsStateTests: XCTestCase {
 
         XCTAssertTrue(syncServiceSource.contains("downloadFileTree("))
         XCTAssertTrue(syncServiceSource.contains("writeFileURLs"))
+        XCTAssertTrue(syncServiceSource.contains("message.transferFormat == .directTree"))
         XCTAssertFalse(syncServiceSource.contains("ClipPlus-Received"))
         XCTAssertFalse(syncServiceSource.contains(".downloadsDirectory"))
         XCTAssertFalse(syncServiceSource.contains("downloadFileArchive("))
         XCTAssertFalse(syncServiceSource.contains("serveNext(tempDirectory:"))
+        XCTAssertFalse(syncServiceSource.contains("logger.error(\"file tree staging failed: \\(error.localizedDescription)\""))
     }
 
     func testMacFileRuntimeSynchronizesFileSignaturesThroughLock() throws {

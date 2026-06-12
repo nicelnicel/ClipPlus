@@ -228,6 +228,7 @@ fn native_clipboard_file_offer_message_uses_current_shell_wire_format() {
     assert_eq!(encoded["groupId"], json!("group-1"));
     assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
     assert_eq!(encoded["transferId"], json!("transfer-1"));
+    assert_eq!(encoded["transferFormat"], json!("directTree"));
     assert_eq!(encoded["archivePort"], json!(47_632));
     assert_eq!(encoded["files"][0]["relativePath"], json!("Reports/Q1.txt"));
     assert_eq!(encoded["files"][0]["byteSize"], json!(12));
@@ -244,6 +245,33 @@ fn native_clipboard_file_offer_message_uses_current_shell_wire_format() {
     assert_eq!(decoded.kind, NativeClipboardMessageKind::FileOffer);
     assert_eq!(decoded.transfer_id.as_deref(), Some("transfer-1"));
     assert_eq!(decoded.files.as_deref(), Some(files.as_slice()));
+}
+
+#[test]
+fn native_clipboard_file_offer_message_rejects_missing_transfer_format() {
+    let mut value = serde_json::to_value(
+        NativeClipboardMessage::file_offer(
+            "group-1",
+            "mac-device",
+            "Mac",
+            "transfer-1",
+            vec![NativeFileTransferItem {
+                relative_path: "Reports/Q1.txt".to_string(),
+                byte_size: 12,
+                is_directory: false,
+            }],
+            47_632,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    value.as_object_mut().unwrap().remove("transferFormat");
+    let json = serde_json::to_string(&value).unwrap();
+
+    assert!(matches!(
+        NativeClipboardMessage::from_json(&json),
+        Err(NativeClipboardMessageError::InvalidField("transfer_format"))
+    ));
 }
 
 #[test]
@@ -1092,7 +1120,7 @@ fn file_transfer_download_writes_tree_from_tcp_server() {
         let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
         let mut transfer_id = String::new();
         reader.read_line(&mut transfer_id).unwrap();
-        assert_eq!(transfer_id.trim(), "transfer-a");
+        assert_eq!(transfer_id.trim(), "tree:transfer-a");
 
         let manifest = serde_json::to_vec(&vec![FileTransferTreeEntry {
             relative_path: "received.txt".to_string(),
@@ -1151,7 +1179,7 @@ fn file_transfer_server_serves_registered_tree_over_tcp() {
     client
         .set_write_timeout(Some(Duration::from_secs(2)))
         .unwrap();
-    client.write_all(b"transfer-a\n").unwrap();
+    client.write_all(b"tree:transfer-a\n").unwrap();
     let staging_directory = temporary_directory.join("received");
     let received =
         FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
@@ -1168,6 +1196,39 @@ fn file_transfer_server_serves_registered_tree_over_tcp() {
         std::fs::read_to_string(staging_directory.join("registered.txt")).unwrap(),
         "registered direct"
     );
+}
+
+#[test]
+fn file_transfer_server_rejects_legacy_bare_request_for_tree() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("registered.txt");
+    std::fs::write(&source_file, "registered direct").unwrap();
+    let server = FileTransferServer::bind(0).unwrap();
+    let port = server.local_port().unwrap();
+    server
+        .register_transfer("transfer-a", vec![source_file])
+        .unwrap();
+    let (result_sender, result_receiver) = mpsc::channel();
+    thread::spawn(move || {
+        result_sender.send(server.serve_next_tree()).unwrap();
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client.write_all(b"transfer-a\n").unwrap();
+    let mut length_bytes = [0_u8; 8];
+    let read_result = client.read_exact(&mut length_bytes);
+    let served = result_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+
+    assert!(read_result.is_err());
+    assert!(matches!(
+        served,
+        Err(FileTransferError::InvalidField("transfer_request"))
+    ));
 }
 
 #[test]

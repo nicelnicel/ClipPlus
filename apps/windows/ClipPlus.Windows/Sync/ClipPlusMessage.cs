@@ -14,6 +14,11 @@ public enum ClipPlusMessageKind
 
 public sealed record FileTransferItem(string RelativePath, long ByteSize, bool IsDirectory);
 
+public enum FileTransferFormat
+{
+    DirectTree
+}
+
 public sealed class ClipPlusMessage
 {
     public const int MaxInlineImageBytes = 32 * 1024;
@@ -36,6 +41,7 @@ public sealed class ClipPlusMessage
     public string? ImageContentHash { get; init; }
     public string? ApprovedDeviceId { get; init; }
     public string? TransferId { get; init; }
+    public FileTransferFormat? TransferFormat { get; init; }
     public IReadOnlyList<FileTransferItem>? Files { get; init; }
     public int? ArchivePort { get; init; }
     public string CreatedAt { get; init; } = DateTimeOffset.UtcNow.ToString("O");

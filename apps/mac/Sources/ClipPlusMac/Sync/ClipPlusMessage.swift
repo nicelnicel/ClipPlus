@@ -14,6 +14,10 @@ struct FileTransferItem: Codable, Equatable {
     let isDirectory: Bool
 }
 
+enum FileTransferFormat: String, Codable {
+    case directTree
+}
+
 struct ClipPlusMessage: Codable, Equatable {
     static let maxInlineImageBytes = 32 * 1024
 
@@ -29,6 +33,7 @@ struct ClipPlusMessage: Codable, Equatable {
     let imageContentHash: String?
     let approvedDeviceId: String?
     let transferId: String?
+    let transferFormat: FileTransferFormat?
     let files: [FileTransferItem]?
     let archivePort: Int?
     let createdAt: String

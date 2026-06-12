@@ -389,6 +389,7 @@ fn ffi_creates_file_offer_message_json_for_native_shells() {
     assert_eq!(value["groupId"], "group-1");
     assert_eq!(value["senderDeviceId"], "mac-device");
     assert_eq!(value["transferId"], "transfer-1");
+    assert_eq!(value["transferFormat"], "directTree");
     assert_eq!(value["archivePort"], 47_632);
     assert_eq!(value["files"][0]["relativePath"], "Reports/Q1.txt");
     assert_eq!(value["files"][0]["byteSize"], 12);
@@ -642,7 +643,7 @@ fn ffi_file_server_serves_registered_file_tree_for_native_shells() {
     });
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    client.write_all(b"transfer-a\n").unwrap();
+    client.write_all(b"tree:transfer-a\n").unwrap();
     let staging_directory = temporary_directory.join("received");
     let summary =
         FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
@@ -691,7 +692,7 @@ fn ffi_file_server_serves_zero_byte_file_tree_for_native_shells() {
     });
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    client.write_all(b"transfer-a\n").unwrap();
+    client.write_all(b"tree:transfer-a\n").unwrap();
     let staging_directory = temporary_directory.join("received");
     let summary =
         FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
@@ -738,7 +739,7 @@ fn ffi_file_server_serves_empty_directory_tree_for_native_shells() {
     });
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    client.write_all(b"transfer-a\n").unwrap();
+    client.write_all(b"tree:transfer-a\n").unwrap();
     let staging_directory = temporary_directory.join("received");
     let summary =
         FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
@@ -905,7 +906,7 @@ fn ffi_downloads_file_tree_for_native_shells() {
         let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
         let mut transfer_id = String::new();
         reader.read_line(&mut transfer_id).unwrap();
-        assert_eq!(transfer_id.trim(), "transfer-a");
+        assert_eq!(transfer_id.trim(), "tree:transfer-a");
 
         let manifest = serde_json::to_vec(&[FileTransferTreeEntry {
             relative_path: "ffi.txt".to_string(),

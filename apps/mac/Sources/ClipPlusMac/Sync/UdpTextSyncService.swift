@@ -1,12 +1,68 @@
 import Darwin
 import Foundation
 
+final class RemoteFileTransferGate {
+    private let lock = NSLock()
+    private let maxCompletedCount = 128
+    private var activeTransferIds = Set<String>()
+    private var completedTransferIds = Set<String>()
+    private var completedOrder: [String] = []
+
+    func canAcceptOffer(_ transferId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isUsableTransferId(transferId)
+            && !activeTransferIds.contains(transferId)
+            && !completedTransferIds.contains(transferId)
+    }
+
+    @discardableResult
+    func begin(_ transferId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isUsableTransferId(transferId),
+              !activeTransferIds.contains(transferId),
+              !completedTransferIds.contains(transferId) else {
+            return false
+        }
+
+        activeTransferIds.insert(transferId)
+        return true
+    }
+
+    func complete(_ transferId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        activeTransferIds.remove(transferId)
+        guard completedTransferIds.insert(transferId).inserted else {
+            return
+        }
+
+        completedOrder.append(transferId)
+        while completedOrder.count > maxCompletedCount {
+            let removedTransferId = completedOrder.removeFirst()
+            completedTransferIds.remove(removedTransferId)
+        }
+    }
+
+    func fail(_ transferId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        activeTransferIds.remove(transferId)
+    }
+
+    private func isUsableTransferId(_ transferId: String) -> Bool {
+        !transferId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 final class UdpTextSyncService {
     private let port: UInt16 = 47_631
     private let archivePort: UInt16 = 47_632
     private let state: SettingsState
     private let clipboard = NativeClipboard()
     private let logger: ClipPlusLogger
+    private let remoteFileTransfers = RemoteFileTransferGate()
     private let receiveQueue = DispatchQueue(label: "clipplus.mac.udp.receive")
     private let clipboardQueue = DispatchQueue(label: "clipplus.mac.clipboard.poll")
     private let fileQueue = DispatchQueue(label: "clipplus.mac.file.transfer", attributes: .concurrent)
@@ -304,8 +360,10 @@ final class UdpTextSyncService {
         case .fileOffer:
             guard state.sharingEnabled,
                   let transferId = message.transferId,
+                  message.transferFormat == .directTree,
                   let files = message.files,
-                  !files.isEmpty else {
+                  !files.isEmpty,
+                  remoteFileTransfers.canAcceptOffer(transferId) else {
                 return
             }
 
@@ -390,6 +448,9 @@ final class UdpTextSyncService {
               offer.transferId == transferId else {
             return
         }
+        guard remoteFileTransfers.begin(transferId) else {
+            return
+        }
 
         fileQueue.async { [weak self] in
             self?.downloadRemoteFileOffer(offer)
@@ -401,6 +462,7 @@ final class UdpTextSyncService {
             DispatchQueue.main.async { [weak self] in
                 self?.state.lastStatusMessage = "文件接收失败"
             }
+            remoteFileTransfers.fail(offer.transferId)
             logger.error("file tree staging failed: invalid transfer id")
             return
         }
@@ -417,7 +479,8 @@ final class UdpTextSyncService {
             DispatchQueue.main.async { [weak self] in
                 self?.state.lastStatusMessage = "文件接收失败"
             }
-            logger.error("file tree staging failed: \(error.localizedDescription)")
+            remoteFileTransfers.fail(offer.transferId)
+            logger.error("file tree staging failed")
             return
         }
 
@@ -430,6 +493,7 @@ final class UdpTextSyncService {
             DispatchQueue.main.async { [weak self] in
                 self?.state.lastStatusMessage = "文件接收失败"
             }
+            remoteFileTransfers.fail(offer.transferId)
             logger.error("file tree download failed")
             return
         }
@@ -444,6 +508,7 @@ final class UdpTextSyncService {
             recordRemoteFileSignature(remoteSignature)
             guard clipboard.writeFileURLs(urls) else {
                 clearRemoteFileSignature(ifMatching: remoteSignature)
+                remoteFileTransfers.fail(offer.transferId)
                 state.lastStatusMessage = "文件接收失败"
                 logger.error("file clipboard write failed")
                 return
@@ -456,6 +521,7 @@ final class UdpTextSyncService {
 
             state.clearRemoteFileOffer(transferId: offer.transferId)
             state.lastStatusMessage = "文件已放入剪贴板，可在目标文件夹粘贴"
+            remoteFileTransfers.complete(offer.transferId)
         }
 
         logger.info("downloaded file tree file_count=\(result.fileCount) byte_count=\(result.byteCount)")

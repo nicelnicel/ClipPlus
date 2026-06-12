@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zip::write::SimpleFileOptions;
 
+const TREE_TRANSFER_REQUEST_PREFIX: &str = "tree:";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferState {
     Available,
@@ -477,7 +479,7 @@ impl FileTransferServer {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-        let transfer_id = read_transfer_request_line(&mut stream)?;
+        let transfer_id = read_tree_transfer_request_line(&mut stream)?;
         let source_paths = self
             .transfers
             .lock()
@@ -598,11 +600,24 @@ impl FileTransferDownload {
         let mut stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))?;
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        stream.write_all(TREE_TRANSFER_REQUEST_PREFIX.as_bytes())?;
         stream.write_all(transfer_id.as_bytes())?;
         stream.write_all(b"\n")?;
 
         FileTransferTree::read_length_prefixed_tree(&mut stream, destination_directory)
     }
+}
+
+fn read_tree_transfer_request_line(stream: &mut TcpStream) -> Result<String, FileTransferError> {
+    let request = read_transfer_request_line(stream)?;
+    let Some(transfer_id) = request.strip_prefix(TREE_TRANSFER_REQUEST_PREFIX) else {
+        return Err(FileTransferError::InvalidField("transfer_request"));
+    };
+    if transfer_id.trim().is_empty() || transfer_id != transfer_id.trim() {
+        return Err(FileTransferError::InvalidField("transfer_request"));
+    }
+
+    Ok(transfer_id.to_string())
 }
 
 fn read_transfer_request_line(stream: &mut TcpStream) -> Result<String, FileTransferError> {
