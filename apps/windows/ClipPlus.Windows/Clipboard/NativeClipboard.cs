@@ -30,9 +30,11 @@ public sealed class NativeClipboard
         try
         {
             var collection = new StringCollection();
+            var validPaths = new List<string>();
             foreach (var path in paths.Where(path => !string.IsNullOrWhiteSpace(path)))
             {
                 collection.Add(path);
+                validPaths.Add(path);
             }
 
             if (collection.Count == 0)
@@ -40,7 +42,15 @@ public sealed class NativeClipboard
                 return false;
             }
 
-            System.Windows.Clipboard.SetFileDropList(collection);
+            var dataObject = new System.Windows.DataObject();
+            dataObject.SetFileDropList(collection);
+            var image = LoadImageForSingleImageFile(validPaths);
+            if (image is not null)
+            {
+                dataObject.SetImage(image);
+            }
+
+            System.Windows.Clipboard.SetDataObject(dataObject, true);
             return true;
         }
         catch (Exception)
@@ -91,5 +101,40 @@ public sealed class NativeClipboard
         bitmap.EndInit();
         bitmap.Freeze();
         System.Windows.Clipboard.SetImage(bitmap);
+    }
+
+    private static BitmapSource? LoadImageForSingleImageFile(IReadOnlyList<string> paths)
+    {
+        if (paths.Count != 1)
+        {
+            return null;
+        }
+
+        var path = paths[0];
+        if (!IsSupportedImageFile(path) || !File.Exists(path))
+        {
+            return null;
+        }
+
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.UriSource = new Uri(path, UriKind.Absolute);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static bool IsSupportedImageFile(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        return extension is ".png"
+            or ".jpg"
+            or ".jpeg"
+            or ".gif"
+            or ".bmp"
+            or ".tif"
+            or ".tiff"
+            or ".webp";
     }
 }

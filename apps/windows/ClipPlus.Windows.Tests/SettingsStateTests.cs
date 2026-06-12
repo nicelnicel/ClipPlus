@@ -3,6 +3,11 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using ClipPlus.Windows.Clipboard;
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
 using ClipPlus.Windows.Diagnostics;
@@ -1234,6 +1239,48 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void NativeClipboardWritesSingleImageFileAsFileDropAndImage()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusImageClipboard-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(directory);
+                var imagePath = Path.Combine(directory, "copied-image.png");
+                try
+                {
+                    WriteTestPng(imagePath);
+                    var clipboard = new NativeClipboard();
+
+                    Assert.True(clipboard.WriteFilePaths(new[] { imagePath }));
+                    Assert.True(System.Windows.Clipboard.ContainsFileDropList());
+                    Assert.True(System.Windows.Clipboard.ContainsImage());
+                    Assert.Equal(imagePath, Assert.Single(System.Windows.Clipboard.GetFileDropList().Cast<string>()));
+                }
+                finally
+                {
+                    System.Windows.Clipboard.Clear();
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (failure is not null)
+        {
+            throw failure;
+        }
+    }
+
+    [Fact]
     public void UdpTextSyncServiceUsesDirectImageTransferForOversizedImages()
     {
         var source = File.ReadAllText(Path.Combine(
@@ -1476,6 +1523,40 @@ public sealed class SettingsStateTests
             "net8.0-windows",
             "ClipPlus.Windows.exe"
         ));
+    }
+
+    private static void WriteTestPng(string path)
+    {
+        const int width = 24;
+        const int height = 18;
+        var stride = width * 4;
+        var pixels = new byte[stride * height];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var offset = (y * stride) + (x * 4);
+                pixels[offset] = (byte)(30 + x);
+                pixels[offset + 1] = (byte)(80 + y);
+                pixels[offset + 2] = 190;
+                pixels[offset + 3] = 255;
+            }
+        }
+
+        var bitmap = BitmapSource.Create(
+            width,
+            height,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null,
+            pixels,
+            stride
+        );
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
     }
 
     private static string FindRepositoryRoot()

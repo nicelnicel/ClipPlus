@@ -1468,6 +1468,34 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(NativeClipboard().readFileURLs().map(\.standardizedFileURL.path), [sourceURL.path])
     }
 
+    func testNativeClipboardWritesSingleImageFileAsFileAndImage() throws {
+        let originalPasteboard = PasteboardSnapshot.capture()
+        defer {
+            originalPasteboard.restore()
+        }
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let sourceURL = temporaryDirectory.appendingPathComponent("copied-image.png")
+        let pngData = try makeTestPNGData(width: 24, height: 18)
+        try pngData.write(to: sourceURL)
+
+        let writeSucceeded: Bool
+        if Thread.isMainThread {
+            writeSucceeded = NativeClipboard().writeFileURLs([sourceURL])
+        } else {
+            writeSucceeded = DispatchQueue.main.sync {
+                NativeClipboard().writeFileURLs([sourceURL])
+            }
+        }
+
+        XCTAssertTrue(writeSucceeded)
+        XCTAssertEqual(NativeClipboard().readFileURLs().map(\.standardizedFileURL.path), [sourceURL.path])
+        XCTAssertEqual(NativeClipboard().readPngImageData(), pngData)
+    }
+
     func testMacFileRuntimeNoLongerUsesDownloadsZip() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1706,6 +1734,24 @@ private func XCTAssertContainsVisibleControl(
     line: UInt = #line
 ) {
     XCTAssertTrue(source.contains(label), "设置界面缺少必要控件：\(label)", file: file, line: line)
+}
+
+private func makeTestPNGData(width: Int, height: Int) throws -> Data {
+    let image = NSImage(size: NSSize(width: width, height: height))
+    image.lockFocus()
+    NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.83, alpha: 1).setFill()
+    NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
+    NSColor.white.setFill()
+    NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: max(4, width / 2), height: max(4, height / 2))).fill()
+    image.unlockFocus()
+
+    guard let tiffData = image.tiffRepresentation,
+          let imageRep = NSBitmapImageRep(data: tiffData),
+          let pngData = imageRep.representation(using: .png, properties: [:]) else {
+        throw NSError(domain: "ClipPlusMacTests", code: 1)
+    }
+
+    return pngData
 }
 
 private struct PasteboardSnapshot {

@@ -30,8 +30,13 @@ struct NativeClipboard {
             return false
         }
 
+        let pngData = pngImageDataForSingleImageFile(fileURLs)
         NSPasteboard.general.clearContents()
-        return NSPasteboard.general.writeObjects(fileURLs as [NSURL])
+        let wroteFiles = NSPasteboard.general.writeObjects(fileURLs as [NSURL])
+        if let pngData {
+            NSPasteboard.general.setData(pngData, forType: .png)
+        }
+        return wroteFiles
     }
 
     func readPngImageData() -> Data? {
@@ -50,5 +55,46 @@ struct NativeClipboard {
     func writePngImageData(_ pngData: Data) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(pngData, forType: .png)
+    }
+
+    private func pngImageDataForSingleImageFile(_ urls: [URL]) -> Data? {
+        guard urls.count == 1 else {
+            return nil
+        }
+
+        let url = urls[0]
+        guard isSupportedImageFile(url) else {
+            return nil
+        }
+
+        if url.pathExtension.lowercased() == "png",
+           let data = try? Data(contentsOf: url),
+           NSBitmapImageRep(data: data) != nil {
+            return data
+        }
+
+        guard let image = NSImage(contentsOf: url),
+              let tiffData = image.tiffRepresentation,
+              let imageRep = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+
+        return imageRep.representation(using: .png, properties: [:])
+    }
+
+    private func isSupportedImageFile(_ url: URL) -> Bool {
+        let supportedExtensions: Set<String> = [
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "bmp",
+            "tif",
+            "tiff",
+            "webp",
+            "heic",
+            "heif"
+        ]
+        return supportedExtensions.contains(url.pathExtension.lowercased())
     }
 }
