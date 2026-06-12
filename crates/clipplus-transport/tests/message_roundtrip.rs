@@ -761,6 +761,52 @@ fn file_transfer_tree_rejects_symlink_to_directory_inside_source_directory() {
     assert!(payload.is_empty());
 }
 
+#[cfg(windows)]
+#[test]
+fn file_transfer_tree_rejects_windows_junction_inside_source_directory() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let outside_directory = temporary_directory.join("outside");
+    let junction_path = source_directory.join("Linked");
+    std::fs::create_dir_all(&source_directory).unwrap();
+    std::fs::create_dir_all(&outside_directory).unwrap();
+    std::fs::write(outside_directory.join("secret.txt"), "secret").unwrap();
+    let output = std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            junction_path.to_str().unwrap(),
+            outside_directory.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    if !output.status.success() {
+        eprintln!(
+            "skipping junction test because mklink failed: status={:?} stdout={} stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let mut payload = Vec::new();
+
+    let manifest_result = FileTransferTree::build_manifest(std::slice::from_ref(&source_directory));
+    let stream_result =
+        FileTransferTree::write_length_prefixed_tree(&[source_directory], &mut payload);
+
+    assert!(matches!(
+        manifest_result,
+        Err(FileTransferError::InvalidField("source_path"))
+    ));
+    assert!(matches!(
+        stream_result,
+        Err(FileTransferError::InvalidField("source_path"))
+    ));
+    assert!(payload.is_empty());
+}
+
 #[test]
 fn file_transfer_tree_rejects_manifest_file_larger_than_limit_before_writing() {
     let temporary_directory = unique_temp_dir();
@@ -813,6 +859,34 @@ fn file_transfer_tree_rejects_manifest_total_size_larger_than_limit_before_writi
         Err(FileTransferError::InvalidField("tree_size"))
     ));
     assert!(!staging_directory.exists());
+}
+
+#[test]
+fn file_transfer_tree_rejects_existing_destination_file_without_overwriting() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    std::fs::create_dir_all(&staging_directory).unwrap();
+    std::fs::write(staging_directory.join("a.txt"), "original").unwrap();
+    let manifest = vec![FileTransferTreeEntry {
+        relative_path: "a.txt".to_string(),
+        byte_size: 5,
+        is_directory: false,
+    }];
+    let payload = tree_payload_from_manifest(&manifest, &[b"alpha"]);
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(
+        result,
+        Err(FileTransferError::InvalidField("destination_path"))
+    ));
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("a.txt")).unwrap(),
+        "original"
+    );
 }
 
 #[test]

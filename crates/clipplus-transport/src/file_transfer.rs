@@ -1,7 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -186,7 +188,7 @@ impl FileTransferTree {
             .map(|source_entry| source_entry.entry.clone())
             .collect::<Vec<_>>();
         let summary = summarize_tree_manifest(&manifest, None)?;
-        let manifest_json = serde_json::to_vec(&manifest)?;
+        let manifest_json = serialize_tree_manifest(&manifest)?;
         writer.write_all(&(manifest_json.len() as u64).to_be_bytes())?;
         writer.write_all(&manifest_json)?;
 
@@ -229,12 +231,15 @@ impl FileTransferTree {
         std::fs::create_dir_all(staging_directory)?;
 
         let mut created_paths = Vec::new();
-        let result = materialize_tree_entries(
-            reader,
-            staging_directory,
-            &validated_entries,
-            &mut created_paths,
-        );
+        let result = reject_existing_destination_paths(staging_directory, &validated_entries)
+            .and_then(|()| {
+                materialize_tree_entries(
+                    reader,
+                    staging_directory,
+                    &validated_entries,
+                    &mut created_paths,
+                )
+            });
         if let Err(error) = result {
             if !staging_existed {
                 let _ = std::fs::remove_dir_all(staging_directory);
@@ -299,15 +304,42 @@ fn materialize_tree_entries<R: Read>(
             return Err(FileTransferError::InvalidField("file_size"));
         }
 
-        let file_existed = destination_path.exists();
-        let mut file = File::create(&destination_path)?;
-        if !file_existed {
-            created_paths.push(CreatedTreePath::File(destination_path));
-        }
+        let mut file = create_new_tree_file(&destination_path)?;
+        created_paths.push(CreatedTreePath::File(destination_path));
         copy_bytes_exact(reader, &mut file, file_length)?;
     }
 
     Ok(())
+}
+
+fn reject_existing_destination_paths(
+    staging_directory: &Path,
+    validated_entries: &[ValidatedFileTransferTreeEntry],
+) -> Result<(), FileTransferError> {
+    for validated_entry in validated_entries {
+        if staging_directory
+            .join(&validated_entry.relative_path)
+            .try_exists()?
+        {
+            return Err(FileTransferError::InvalidField("destination_path"));
+        }
+    }
+
+    Ok(())
+}
+
+fn create_new_tree_file(path: &Path) -> Result<File, FileTransferError> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == ErrorKind::AlreadyExists {
+                FileTransferError::InvalidField("destination_path")
+            } else {
+                FileTransferError::Io(error)
+            }
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -699,6 +731,13 @@ fn source_path_metadata(path: &Path) -> Result<std::fs::Metadata, FileTransferEr
     if metadata.file_type().is_symlink() {
         return Err(FileTransferError::InvalidField("source_path"));
     }
+    #[cfg(windows)]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(FileTransferError::InvalidField("source_path"));
+        }
+    }
 
     Ok(metadata)
 }
@@ -791,6 +830,17 @@ fn summarize_tree_manifest(
         byte_count,
         top_level_paths: top_level_paths.into_iter().collect(),
     })
+}
+
+fn serialize_tree_manifest(
+    manifest: &[FileTransferTreeEntry],
+) -> Result<Vec<u8>, FileTransferError> {
+    let manifest_json = serde_json::to_vec(manifest)?;
+    if manifest_json.len() as u64 > FileTransferTree::MAX_MANIFEST_BYTES {
+        return Err(FileTransferError::InvalidField("manifest_size"));
+    }
+
+    Ok(manifest_json)
 }
 
 fn normalize_safe_tree_relative_path(value: &str) -> Result<String, FileTransferError> {
@@ -910,4 +960,25 @@ fn relative_zip_path(base_path: &Path, file_path: &Path) -> Result<String, FileT
     }
 
     Ok(entry_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_tree_manifest_rejects_reader_incompatible_manifest_size() {
+        let manifest = vec![FileTransferTreeEntry {
+            relative_path: "a".repeat(FileTransferTree::MAX_MANIFEST_BYTES as usize + 1),
+            byte_size: 0,
+            is_directory: true,
+        }];
+
+        let result = serialize_tree_manifest(&manifest);
+
+        assert!(matches!(
+            result,
+            Err(FileTransferError::InvalidField("manifest_size"))
+        ));
+    }
 }
