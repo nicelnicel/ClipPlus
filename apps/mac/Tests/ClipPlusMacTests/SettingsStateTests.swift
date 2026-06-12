@@ -1,4 +1,5 @@
 import Darwin
+import AppKit
 import Network
 import XCTest
 @testable import ClipPlusMac
@@ -1081,7 +1082,7 @@ final class SettingsStateTests: XCTestCase {
         let servedExpectation = expectation(description: "file server served archive")
         var served: UInt64 = 0
         DispatchQueue.global().async {
-            served = server.serveNext(tempDirectory: temporaryDirectory.path)
+            served = server.serveNextArchive(tempDirectory: temporaryDirectory.path)
             servedExpectation.fulfill()
         }
 
@@ -1118,6 +1119,110 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: extractedDirectory.appendingPathComponent("registered.txt"), encoding: .utf8),
             "served from mac ffi file server"
+        )
+    }
+
+    func testCoreBridgeDownloadsFileTreeWhenFfiLibraryIsAvailable() throws {
+        let queue = DispatchQueue(label: "clipplus.test.file-tree-download")
+        let listener = try NWListener(using: .tcp, on: .any)
+        let ready = expectation(description: "tree listener ready")
+        let served = expectation(description: "tree served")
+        let payload = Data("ffi tree".utf8)
+        let manifest = Data(
+            #"[{"relativePath":"ffi.txt","byteSize":8,"isDirectory":false}]"#.utf8
+        )
+        var listenerPort: UInt16 = 0
+        var requestedTransferId: String?
+        listener.stateUpdateHandler = { state in
+            if case .ready = state, let port = listener.port {
+                listenerPort = port.rawValue
+                ready.fulfill()
+            }
+        }
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
+                requestedTransferId = data.flatMap { String(data: $0, encoding: .utf8) }?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                var manifestLength = UInt64(manifest.count).bigEndian
+                var payloadLength = UInt64(payload.count).bigEndian
+                let manifestLengthData = Swift.withUnsafeBytes(of: &manifestLength) { Data($0) }
+                let payloadLengthData = Swift.withUnsafeBytes(of: &payloadLength) { Data($0) }
+                connection.send(
+                    content: manifestLengthData + manifest + payloadLengthData + payload,
+                    completion: .contentProcessed { _ in
+                        served.fulfill()
+                        connection.cancel()
+                    }
+                )
+            }
+        }
+        listener.start(queue: queue)
+        wait(for: [ready], timeout: 2)
+
+        let stagingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            listener.cancel()
+            try? FileManager.default.removeItem(at: stagingURL)
+        }
+
+        let result = try XCTUnwrap(CoreBridge().downloadFileTree(
+            host: "127.0.0.1",
+            port: Int(listenerPort),
+            transferId: "transfer-a",
+            destinationDirectory: stagingURL.path
+        ))
+        wait(for: [served], timeout: 2)
+
+        XCTAssertEqual(requestedTransferId, "transfer-a")
+        XCTAssertEqual(result.fileCount, 1)
+        XCTAssertEqual(result.byteCount, 8)
+        XCTAssertEqual(result.topLevelPaths, [stagingURL.appendingPathComponent("ffi.txt").path])
+        XCTAssertEqual(
+            try String(contentsOf: stagingURL.appendingPathComponent("ffi.txt"), encoding: .utf8),
+            "ffi tree"
+        )
+    }
+
+    func testCoreBridgeFileServerServesRegisteredFileTreeWhenFfiLibraryIsAvailable() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let sourceURL = temporaryDirectory.appendingPathComponent("registered.txt")
+        try "served from mac ffi direct tree".write(to: sourceURL, atomically: true, encoding: .utf8)
+        let stagingURL = temporaryDirectory.appendingPathComponent("staging", isDirectory: true)
+        guard let server = CoreBridge().openFileServer(bindPort: 0) else {
+            return XCTFail("file server ffi handle should open")
+        }
+        defer { server.close() }
+        XCTAssertGreaterThan(server.localPort, 0)
+        XCTAssertTrue(server.registerTransfer(transferId: "transfer-a", sourcePaths: [sourceURL.path]))
+        let servedExpectation = expectation(description: "file server served direct tree")
+        var served: FileTreeDownloadResult?
+        DispatchQueue.global().async {
+            served = server.serveNextTree()
+            servedExpectation.fulfill()
+        }
+
+        let downloaded = try XCTUnwrap(CoreBridge().downloadFileTree(
+            host: "127.0.0.1",
+            port: server.localPort,
+            transferId: "transfer-a",
+            destinationDirectory: stagingURL.path
+        ))
+        wait(for: [servedExpectation], timeout: 6)
+
+        XCTAssertEqual(served?.fileCount, 1)
+        XCTAssertEqual(served?.byteCount, UInt64("served from mac ffi direct tree".utf8.count))
+        XCTAssertEqual(served?.topLevelPaths, ["registered.txt"])
+        XCTAssertEqual(downloaded.fileCount, 1)
+        XCTAssertEqual(downloaded.byteCount, UInt64("served from mac ffi direct tree".utf8.count))
+        XCTAssertEqual(downloaded.topLevelPaths, [stagingURL.appendingPathComponent("registered.txt").path])
+        XCTAssertEqual(
+            try String(contentsOf: stagingURL.appendingPathComponent("registered.txt"), encoding: .utf8),
+            "served from mac ffi direct tree"
         )
     }
 
@@ -1159,7 +1264,7 @@ final class SettingsStateTests: XCTestCase {
             withIntermediateDirectories: true
         )
 
-        XCTAssertTrue(CoreBridge().downloadFileArchive(
+        XCTAssertTrue(CoreBridge().downloadArchiveFile(
             host: "127.0.0.1",
             port: Int(listenerPort),
             transferId: "transfer-a",
@@ -1170,6 +1275,46 @@ final class SettingsStateTests: XCTestCase {
 
         XCTAssertEqual(requestedTransferId, "transfer-a")
         XCTAssertEqual(try Data(contentsOf: destinationURL), payload)
+    }
+
+    func testNativeClipboardWritesFileURLsForFinderPaste() throws {
+        let originalFileURLs = NativeClipboard().readFileURLs()
+        let originalText = NSPasteboard.general.string(forType: .string)
+        defer {
+            if !originalFileURLs.isEmpty {
+                NativeClipboard().writeFileURLs(originalFileURLs)
+            } else if let originalText {
+                NativeClipboard().writeText(originalText)
+            } else {
+                NSPasteboard.general.clearContents()
+            }
+        }
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let sourceURL = temporaryDirectory.appendingPathComponent("finder-paste.txt")
+        try "paste from finder".write(to: sourceURL, atomically: true, encoding: .utf8)
+
+        NativeClipboard().writeFileURLs([sourceURL])
+
+        XCTAssertEqual(NativeClipboard().readFileURLs().map(\.standardizedFileURL.path), [sourceURL.path])
+    }
+
+    func testMacFileRuntimeNoLongerUsesDownloadsZip() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertFalse(syncServiceSource.contains("ClipPlus-Received"))
+        XCTAssertFalse(syncServiceSource.contains(".downloadsDirectory"))
+        XCTAssertFalse(syncServiceSource.contains("downloadFileArchive("))
+        XCTAssertFalse(syncServiceSource.contains("serveNext(tempDirectory:"))
     }
 
     func testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable() throws {

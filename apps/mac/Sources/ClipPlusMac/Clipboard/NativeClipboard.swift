@@ -19,6 +19,16 @@ struct NativeClipboard {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    func writeFileURLs(_ urls: [URL]) {
+        let fileURLs = urls.filter(\.isFileURL)
+        guard !fileURLs.isEmpty else {
+            return
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects(fileURLs as [NSURL])
+    }
+
     func readPngImageData() -> Data? {
         if let pngData = NSPasteboard.general.data(forType: .png) {
             return pngData

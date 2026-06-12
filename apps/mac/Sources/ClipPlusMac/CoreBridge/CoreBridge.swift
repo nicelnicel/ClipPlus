@@ -1,6 +1,12 @@
 import Darwin
 import Foundation
 
+struct FileTreeDownloadResult: Decodable, Equatable {
+    let fileCount: Int
+    let byteCount: UInt64
+    let topLevelPaths: [String]
+}
+
 struct CoreBridge {
     func statusJSON() -> String {
         #"{"core_version":"0.1.0"}"#
@@ -80,13 +86,27 @@ struct CoreBridge {
         ) ?? 0
     }
 
-    func downloadFileArchive(host: String, port: Int, transferId: String, destinationPath: String) -> Bool {
-        Self.ffiBridge?.downloadFileArchive(
+    func downloadArchiveFile(host: String, port: Int, transferId: String, destinationPath: String) -> Bool {
+        Self.ffiBridge?.downloadArchiveFile(
             host: host,
             port: port,
             transferId: transferId,
             destinationPath: destinationPath
         ) ?? false
+    }
+
+    func downloadFileTree(
+        host: String,
+        port: Int,
+        transferId: String,
+        destinationDirectory: String
+    ) -> FileTreeDownloadResult? {
+        Self.ffiBridge?.downloadFileTree(
+            host: host,
+            port: port,
+            transferId: transferId,
+            destinationDirectory: destinationDirectory
+        )
     }
 
     func openUdpSocket(bindPort: Int) -> RustUdpSocket? {
@@ -206,13 +226,22 @@ final class RustFileServer {
         return bridge.fileServerRegisterTransfer(handle, transferId: transferId, sourcePaths: sourcePaths)
     }
 
-    func serveNext(tempDirectory: String) -> UInt64 {
+    func serveNextArchive(tempDirectory: String) -> UInt64 {
         guard let handle = beginOperation() else {
             return 0
         }
         defer { endOperation() }
 
         return bridge.fileServerServeNext(handle, tempDirectory: tempDirectory)
+    }
+
+    func serveNextTree() -> FileTreeDownloadResult? {
+        guard let handle = beginOperation() else {
+            return nil
+        }
+        defer { endOperation() }
+
+        return bridge.fileServerServeNextTree(handle)
     }
 
     func close() {
@@ -298,6 +327,12 @@ private final class ClipPlusFFIBridge {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> Bool
+    private typealias DownloadFileTreeFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UInt16,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>?
     private typealias UdpSocketBindFunction = @convention(c) (UInt16) -> UnsafeMutableRawPointer?
     private typealias UdpSocketFreeFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     private typealias UdpSocketLocalPortFunction = @convention(c) (UnsafeMutableRawPointer?) -> UInt16
@@ -328,6 +363,9 @@ private final class ClipPlusFFIBridge {
         UnsafeMutableRawPointer?,
         UnsafePointer<CChar>?
     ) -> UInt64
+    private typealias FileServerServeNextTreeFunction = @convention(c) (
+        UnsafeMutableRawPointer?
+    ) -> UnsafeMutablePointer<CChar>?
     private typealias FreeStringFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let handle: UnsafeMutableRawPointer
@@ -339,6 +377,7 @@ private final class ClipPlusFFIBridge {
     private let writeFileArchiveZipFunction: WriteFileArchiveZipFunction
     private let serveFileArchiveToSocketFunction: ServeFileArchiveToSocketFunction
     private let downloadFileArchiveFunction: DownloadFileArchiveFunction
+    private let downloadFileTreeFunction: DownloadFileTreeFunction
     private let udpSocketBindFunction: UdpSocketBindFunction
     private let udpSocketFreeFunction: UdpSocketFreeFunction
     private let udpSocketLocalPortFunction: UdpSocketLocalPortFunction
@@ -349,6 +388,7 @@ private final class ClipPlusFFIBridge {
     private let fileServerLocalPortFunction: FileServerLocalPortFunction
     private let fileServerRegisterTransferFunction: FileServerRegisterTransferFunction
     private let fileServerServeNextFunction: FileServerServeNextFunction
+    private let fileServerServeNextTreeFunction: FileServerServeNextTreeFunction
     private let createTrustMessageJSONFunction: CreateTextMessageJSONFunction
     private let freeStringFunction: FreeStringFunction
 
@@ -362,6 +402,7 @@ private final class ClipPlusFFIBridge {
         writeFileArchiveZipFunction: @escaping WriteFileArchiveZipFunction,
         serveFileArchiveToSocketFunction: @escaping ServeFileArchiveToSocketFunction,
         downloadFileArchiveFunction: @escaping DownloadFileArchiveFunction,
+        downloadFileTreeFunction: @escaping DownloadFileTreeFunction,
         udpSocketBindFunction: @escaping UdpSocketBindFunction,
         udpSocketFreeFunction: @escaping UdpSocketFreeFunction,
         udpSocketLocalPortFunction: @escaping UdpSocketLocalPortFunction,
@@ -372,6 +413,7 @@ private final class ClipPlusFFIBridge {
         fileServerLocalPortFunction: @escaping FileServerLocalPortFunction,
         fileServerRegisterTransferFunction: @escaping FileServerRegisterTransferFunction,
         fileServerServeNextFunction: @escaping FileServerServeNextFunction,
+        fileServerServeNextTreeFunction: @escaping FileServerServeNextTreeFunction,
         createTrustMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         freeStringFunction: @escaping FreeStringFunction
     ) {
@@ -384,6 +426,7 @@ private final class ClipPlusFFIBridge {
         self.writeFileArchiveZipFunction = writeFileArchiveZipFunction
         self.serveFileArchiveToSocketFunction = serveFileArchiveToSocketFunction
         self.downloadFileArchiveFunction = downloadFileArchiveFunction
+        self.downloadFileTreeFunction = downloadFileTreeFunction
         self.udpSocketBindFunction = udpSocketBindFunction
         self.udpSocketFreeFunction = udpSocketFreeFunction
         self.udpSocketLocalPortFunction = udpSocketLocalPortFunction
@@ -394,6 +437,7 @@ private final class ClipPlusFFIBridge {
         self.fileServerLocalPortFunction = fileServerLocalPortFunction
         self.fileServerRegisterTransferFunction = fileServerRegisterTransferFunction
         self.fileServerServeNextFunction = fileServerServeNextFunction
+        self.fileServerServeNextTreeFunction = fileServerServeNextTreeFunction
         self.createTrustMessageJSONFunction = createTrustMessageJSONFunction
         self.freeStringFunction = freeStringFunction
     }
@@ -417,6 +461,7 @@ private final class ClipPlusFFIBridge {
                   let writeFileArchiveZipSymbol = dlsym(handle, "clipplus_write_file_archive_zip"),
                   let serveFileArchiveToSocketSymbol = dlsym(handle, "clipplus_serve_file_archive_to_socket"),
                   let downloadFileArchiveSymbol = dlsym(handle, "clipplus_download_file_archive"),
+                  let downloadFileTreeSymbol = dlsym(handle, "clipplus_download_file_tree"),
                   let udpSocketBindSymbol = dlsym(handle, "clipplus_udp_socket_bind"),
                   let udpSocketFreeSymbol = dlsym(handle, "clipplus_udp_socket_free"),
                   let udpSocketLocalPortSymbol = dlsym(handle, "clipplus_udp_socket_local_port"),
@@ -427,6 +472,7 @@ private final class ClipPlusFFIBridge {
                   let fileServerLocalPortSymbol = dlsym(handle, "clipplus_file_server_local_port"),
                   let fileServerRegisterTransferSymbol = dlsym(handle, "clipplus_file_server_register_transfer"),
                   let fileServerServeNextSymbol = dlsym(handle, "clipplus_file_server_serve_next"),
+                  let fileServerServeNextTreeSymbol = dlsym(handle, "clipplus_file_server_serve_next_tree"),
                   let createTrustMessageJSONSymbol = dlsym(handle, "clipplus_create_trust_message_json"),
                   let freeSymbol = dlsym(handle, "clipplus_free_string") else {
                 dlclose(handle)
@@ -462,6 +508,10 @@ private final class ClipPlusFFIBridge {
                 downloadFileArchiveSymbol,
                 to: DownloadFileArchiveFunction.self
             )
+            let downloadFileTreeFunction = unsafeBitCast(
+                downloadFileTreeSymbol,
+                to: DownloadFileTreeFunction.self
+            )
             let udpSocketBindFunction = unsafeBitCast(udpSocketBindSymbol, to: UdpSocketBindFunction.self)
             let udpSocketFreeFunction = unsafeBitCast(udpSocketFreeSymbol, to: UdpSocketFreeFunction.self)
             let udpSocketLocalPortFunction = unsafeBitCast(
@@ -490,6 +540,10 @@ private final class ClipPlusFFIBridge {
                 fileServerServeNextSymbol,
                 to: FileServerServeNextFunction.self
             )
+            let fileServerServeNextTreeFunction = unsafeBitCast(
+                fileServerServeNextTreeSymbol,
+                to: FileServerServeNextTreeFunction.self
+            )
             let createTrustMessageJSONFunction = unsafeBitCast(
                 createTrustMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
@@ -505,6 +559,7 @@ private final class ClipPlusFFIBridge {
                 writeFileArchiveZipFunction: writeFileArchiveZipFunction,
                 serveFileArchiveToSocketFunction: serveFileArchiveToSocketFunction,
                 downloadFileArchiveFunction: downloadFileArchiveFunction,
+                downloadFileTreeFunction: downloadFileTreeFunction,
                 udpSocketBindFunction: udpSocketBindFunction,
                 udpSocketFreeFunction: udpSocketFreeFunction,
                 udpSocketLocalPortFunction: udpSocketLocalPortFunction,
@@ -515,6 +570,7 @@ private final class ClipPlusFFIBridge {
                 fileServerLocalPortFunction: fileServerLocalPortFunction,
                 fileServerRegisterTransferFunction: fileServerRegisterTransferFunction,
                 fileServerServeNextFunction: fileServerServeNextFunction,
+                fileServerServeNextTreeFunction: fileServerServeNextTreeFunction,
                 createTrustMessageJSONFunction: createTrustMessageJSONFunction,
                 freeStringFunction: freeStringFunction
             )
@@ -701,7 +757,7 @@ private final class ClipPlusFFIBridge {
         }
     }
 
-    func downloadFileArchive(
+    func downloadArchiveFile(
         host: String,
         port: Int,
         transferId: String,
@@ -724,6 +780,36 @@ private final class ClipPlusFFIBridge {
                 }
             }
         }
+    }
+
+    func downloadFileTree(
+        host: String,
+        port: Int,
+        transferId: String,
+        destinationDirectory: String
+    ) -> FileTreeDownloadResult? {
+        guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              port > 0,
+              port <= Int(UInt16.max),
+              !transferId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !destinationDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let resultPointer = host.withCString { hostPointer in
+            transferId.withCString { transferIdPointer in
+                destinationDirectory.withCString { destinationDirectoryPointer in
+                    downloadFileTreeFunction(
+                        hostPointer,
+                        UInt16(port),
+                        transferIdPointer,
+                        destinationDirectoryPointer
+                    )
+                }
+            }
+        }
+
+        return decodeFileTreeResult(resultPointer)
     }
 
     func openUdpSocket(bindPort: Int) -> RustUdpSocket? {
@@ -842,8 +928,26 @@ private final class ClipPlusFFIBridge {
         }
     }
 
+    fileprivate func fileServerServeNextTree(_ handle: UnsafeMutableRawPointer) -> FileTreeDownloadResult? {
+        decodeFileTreeResult(fileServerServeNextTreeFunction(handle))
+    }
+
     fileprivate func fileServerFree(_ handle: UnsafeMutableRawPointer) {
         fileServerFreeFunction(handle)
+    }
+
+    private func decodeFileTreeResult(_ pointer: UnsafeMutablePointer<CChar>?) -> FileTreeDownloadResult? {
+        guard let pointer else {
+            return nil
+        }
+        defer { freeStringFunction(pointer) }
+
+        let json = String(cString: pointer)
+        guard let data = json.data(using: .utf8) else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(FileTreeDownloadResult.self, from: data)
     }
 
     func createTrustMessageJSON(
@@ -878,10 +982,35 @@ private final class ClipPlusFFIBridge {
     private static func libraryCandidatePaths() -> [String] {
         let environmentPath = ProcessInfo.processInfo.environment["CLIPPLUS_FFI_LIBRARY_PATH"]
         let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent()
-        return [
+        let bundleCandidates = [
             environmentPath,
             executableDirectory?.appendingPathComponent("libclipplus_ffi.dylib").path,
+            executableDirectory?.appendingPathComponent("../../../libclipplus_ffi.dylib").standardizedFileURL.path,
             executableDirectory?.appendingPathComponent("../Frameworks/libclipplus_ffi.dylib").standardizedFileURL.path
         ].compactMap { $0 }
+
+        return bundleCandidates + swiftPMBuildLibraryCandidatePaths()
+    }
+
+    private static func swiftPMBuildLibraryCandidatePaths() -> [String] {
+        let buildDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: buildDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return enumerator.compactMap { item -> String? in
+            guard let url = item as? URL,
+                  url.lastPathComponent == "libclipplus_ffi.dylib",
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                return nil
+            }
+
+            return url.path
+        }
     }
 }

@@ -23,6 +23,7 @@ final class UdpTextSyncService {
     private var lastLocalImageHash: String?
     private var lastRemoteImageHash: String?
     private var lastLocalFileSignature: String?
+    private var lastRemoteFileSignature: String?
     private var tickCount = 0
 
     init(state: SettingsState, logger: ClipPlusLogger) {
@@ -157,11 +158,14 @@ final class UdpTextSyncService {
 
         let fileURLs = clipboard.readFileURLs()
         if !fileURLs.isEmpty {
-            let signature = fileURLs.map(\.path).sorted().joined(separator: "|")
-            if signature != lastLocalFileSignature {
-                lastLocalFileSignature = signature
-                publishFileOffer(fileURLs: fileURLs, groupId: snapshot.sharedGroupId)
+            let signature = fileSignature(fileURLs.map(\.path))
+            guard signature != lastLocalFileSignature,
+                  signature != lastRemoteFileSignature else {
+                return
             }
+
+            lastLocalFileSignature = signature
+            publishFileOffer(fileURLs: fileURLs, groupId: snapshot.sharedGroupId)
             return
         }
 
@@ -370,15 +374,15 @@ final class UdpTextSyncService {
                 return
             }
 
-            let byteCount = fileServer.serveNext(tempDirectory: FileManager.default.temporaryDirectory.path)
+            let result = fileServer.serveNextTree()
             guard running else {
                 return
             }
-            guard byteCount > 0 else {
+            guard let result else {
                 continue
             }
 
-            logger.info("served file archive byte_count=\(byteCount)")
+            logger.info("served file tree file_count=\(result.fileCount) byte_count=\(result.byteCount)")
         }
     }
 
@@ -394,44 +398,90 @@ final class UdpTextSyncService {
     }
 
     private func downloadRemoteFileOffer(_ offer: RemoteFileOfferSummary) {
-        let destinationURL = uniqueDownloadURL(for: offer.transferId)
-        let downloaded = CoreBridge().downloadFileArchive(
-            host: offer.sourceHost,
-            port: Int(archivePort),
-            transferId: offer.transferId,
-            destinationPath: destinationURL.path
-        )
-        guard downloaded else {
+        guard let stagingURL = stagingDirectoryURL(for: offer.transferId) else {
             DispatchQueue.main.async { [weak self] in
                 self?.state.lastStatusMessage = "文件接收失败"
             }
-            logger.error("file transfer download failed")
+            logger.error("file tree staging failed: invalid transfer id")
             return
         }
 
         do {
-            let byteCount = try FileManager.default
-                .attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber
-            DispatchQueue.main.async { [weak self] in
-                self?.state.clearRemoteFileOffer(transferId: offer.transferId)
-                self?.state.lastStatusMessage = "文件已接收到 \(destinationURL.lastPathComponent)"
+            if FileManager.default.fileExists(atPath: stagingURL.path) {
+                try FileManager.default.removeItem(at: stagingURL)
             }
-            logger.info("downloaded file archive byte_count=\(byteCount?.intValue ?? 0)")
+            try FileManager.default.createDirectory(
+                at: stagingURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
         } catch {
-            logger.error("file transfer download failed: \(error.localizedDescription)")
+            DispatchQueue.main.async { [weak self] in
+                self?.state.lastStatusMessage = "文件接收失败"
+            }
+            logger.error("file tree staging failed: \(error.localizedDescription)")
+            return
         }
+
+        guard let result = CoreBridge().downloadFileTree(
+            host: offer.sourceHost,
+            port: Int(archivePort),
+            transferId: offer.transferId,
+            destinationDirectory: stagingURL.path
+        ) else {
+            DispatchQueue.main.async { [weak self] in
+                self?.state.lastStatusMessage = "文件接收失败"
+            }
+            logger.error("file tree download failed")
+            return
+        }
+
+        let urls = result.topLevelPaths.map { URL(fileURLWithPath: $0) }
+        let remoteSignature = fileSignature(urls.map(\.path))
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            lastRemoteFileSignature = remoteSignature
+            lastLocalFileSignature = remoteSignature
+            clipboard.writeFileURLs(urls)
+
+            let pasteboardSignature = fileSignature(clipboard.readFileURLs().map(\.path))
+            if !pasteboardSignature.isEmpty {
+                lastRemoteFileSignature = pasteboardSignature
+                lastLocalFileSignature = pasteboardSignature
+            }
+
+            state.clearRemoteFileOffer(transferId: offer.transferId)
+            state.lastStatusMessage = "文件已放入剪贴板，可在目标文件夹粘贴"
+        }
+
+        logger.info("downloaded file tree file_count=\(result.fileCount) byte_count=\(result.byteCount)")
     }
 
-    private func uniqueDownloadURL(for transferId: String) -> URL {
-        let directory = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        var candidate = directory.appendingPathComponent("ClipPlus-Received-\(transferId).zip")
-        var index = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = directory.appendingPathComponent("ClipPlus-Received-\(transferId)-\(index).zip")
-            index += 1
+    private func stagingDirectoryURL(for transferId: String) -> URL? {
+        guard !transferId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              transferId != ".",
+              transferId != "..",
+              transferId.rangeOfCharacter(from: CharacterSet(charactersIn: "/:")) == nil else {
+            return nil
         }
-        return candidate
+
+        let applicationSupportURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+
+        return applicationSupportURL
+            .appendingPathComponent("ClipPlus", isDirectory: true)
+            .appendingPathComponent("Staging", isDirectory: true)
+            .appendingPathComponent(transferId, isDirectory: true)
+    }
+
+    private func fileSignature(_ paths: [String]) -> String {
+        paths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+            .sorted()
+            .joined(separator: "|")
     }
 
     private func sendHello() {
