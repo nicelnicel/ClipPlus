@@ -9,7 +9,7 @@ struct FileTreeDownloadResult: Decodable, Equatable {
 
 struct CoreBridge {
     func statusJSON() -> String {
-        #"{"core_version":"0.1.1"}"#
+        #"{"core_version":"0.1.2"}"#
     }
 
     func deriveGroupId(for rawKey: String) -> String? {
