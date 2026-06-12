@@ -30,6 +30,19 @@ ClipPlus 目前面向可信局域网使用，不考虑公网穿透。共享 Key 
 ### macOS App
 
 ```bash
+./scripts/dev/package-mac-app.sh
+./scripts/dev/package-mac-dmg.sh
+```
+
+输出位置：
+
+```text
+target/macos/ClipPlus-macOS.dmg
+```
+
+本机开发安装并启动：
+
+```bash
 ./scripts/dev/package-mac-app.sh --install --open
 ```
 

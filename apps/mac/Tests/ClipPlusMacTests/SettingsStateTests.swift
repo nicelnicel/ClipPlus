@@ -462,12 +462,16 @@ final class SettingsStateTests: XCTestCase {
         let macMenuBarIconURL = repositoryRoot.appendingPathComponent("apps/mac/Resources/ClipPlusMenuBar.png")
         let windowsIconURL = repositoryRoot.appendingPathComponent("apps/windows/ClipPlus.Windows/Resources/ClipPlus.ico")
         let packageScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-app.sh")
+        let dmgScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-dmg.sh")
         let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
+        let workflowURL = repositoryRoot.appendingPathComponent(".github/workflows/ci.yml")
+        let readmeURL = repositoryRoot.appendingPathComponent("README.md")
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: mainPngURL.path), "缺少同源主图 PNG")
         XCTAssertTrue(FileManager.default.fileExists(atPath: macIconURL.path), "缺少 macOS icns 图标")
         XCTAssertTrue(FileManager.default.fileExists(atPath: macMenuBarIconURL.path), "缺少 macOS 菜单栏图标")
         XCTAssertTrue(FileManager.default.fileExists(atPath: windowsIconURL.path), "缺少 Windows ico 图标")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dmgScriptURL.path), "macOS 发布产物应该提供 DMG 打包脚本")
 
         let packageScript = try String(contentsOf: packageScriptURL, encoding: .utf8)
         XCTAssertTrue(packageScript.contains("CFBundleIconFile"))
@@ -479,6 +483,19 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(packageScript.contains("-u \"$candidate\""))
         XCTAssertTrue(packageScript.contains("clipplus.shared-key"))
         XCTAssertTrue(packageScript.contains("preserved_shared_key"))
+
+        let dmgScript = try String(contentsOf: dmgScriptURL, encoding: .utf8)
+        XCTAssertTrue(dmgScript.contains("ClipPlus-macOS.dmg"))
+        XCTAssertTrue(dmgScript.contains("hdiutil create"))
+        XCTAssertTrue(dmgScript.contains("-format UDZO"))
+        XCTAssertTrue(dmgScript.contains("-srcfolder \"$app_dir\""))
+
+        let workflowSource = try String(contentsOf: workflowURL, encoding: .utf8)
+        XCTAssertTrue(workflowSource.contains("./scripts/dev/package-mac-dmg.sh"))
+        XCTAssertTrue(workflowSource.contains("path: target/macos/ClipPlus-macOS.dmg"))
+
+        let readmeSource = try String(contentsOf: readmeURL, encoding: .utf8)
+        XCTAssertTrue(readmeSource.contains("ClipPlus-macOS.dmg"))
 
         let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
         XCTAssertTrue(appSource.contains("ClipPlusMenuBar"))

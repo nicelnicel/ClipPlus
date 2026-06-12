@@ -56,11 +56,14 @@ jobs:
       - name: Package macOS app
         run: ./scripts/dev/package-mac-app.sh
 
-      - name: Upload macOS app artifact
+      - name: Package macOS DMG
+        run: ./scripts/dev/package-mac-dmg.sh
+
+      - name: Upload macOS DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClipPlus-macOS
-          path: target/macos/ClipPlus.app
+          name: ClipPlus-macOS-dmg
+          path: target/macos/ClipPlus-macOS.dmg
 
   windows:
     name: Windows App
