@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zip::write::SimpleFileOptions;
 
@@ -24,6 +25,8 @@ pub enum FileTransferError {
     InvalidField(&'static str),
     #[error("file transfer io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("file transfer json error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("file transfer zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
 }
@@ -140,6 +143,151 @@ impl FileTransferArchive {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferTreeEntry {
+    pub relative_path: String,
+    pub byte_size: u64,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTransferTreeSummary {
+    pub file_count: usize,
+    pub byte_count: u64,
+    pub top_level_paths: Vec<PathBuf>,
+}
+
+pub struct FileTransferTree;
+
+impl FileTransferTree {
+    const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+
+    pub fn build_manifest(
+        source_paths: &[PathBuf],
+    ) -> Result<Vec<FileTransferTreeEntry>, FileTransferError> {
+        Ok(Self::build_source_entries(source_paths)?
+            .into_iter()
+            .map(|source_entry| source_entry.entry)
+            .collect())
+    }
+
+    pub fn write_length_prefixed_tree<W: Write>(
+        source_paths: &[PathBuf],
+        writer: &mut W,
+    ) -> Result<FileTransferTreeSummary, FileTransferError> {
+        let source_entries = Self::build_source_entries(source_paths)?;
+        let manifest = source_entries
+            .iter()
+            .map(|source_entry| source_entry.entry.clone())
+            .collect::<Vec<_>>();
+        let manifest_json = serde_json::to_vec(&manifest)?;
+        writer.write_all(&(manifest_json.len() as u64).to_be_bytes())?;
+        writer.write_all(&manifest_json)?;
+
+        for source_entry in source_entries
+            .iter()
+            .filter(|source_entry| !source_entry.entry.is_directory)
+        {
+            let source_path = source_entry
+                .source_path
+                .as_deref()
+                .ok_or(FileTransferError::InvalidField("source_path"))?;
+            writer.write_all(&source_entry.entry.byte_size.to_be_bytes())?;
+            write_file_bytes_exact(source_path, source_entry.entry.byte_size, writer)?;
+        }
+
+        summarize_tree_manifest(&manifest, None)
+    }
+
+    pub fn read_length_prefixed_tree<R: Read>(
+        reader: &mut R,
+        staging_directory: &Path,
+    ) -> Result<FileTransferTreeSummary, FileTransferError> {
+        if staging_directory.exists() && !staging_directory.is_dir() {
+            return Err(FileTransferError::InvalidField("staging_directory"));
+        }
+
+        let mut manifest_length_bytes = [0_u8; 8];
+        reader.read_exact(&mut manifest_length_bytes)?;
+        let manifest_length = u64::from_be_bytes(manifest_length_bytes);
+        if manifest_length > Self::MAX_MANIFEST_BYTES {
+            return Err(FileTransferError::InvalidField("manifest_size"));
+        }
+
+        let mut manifest_json = vec![0_u8; manifest_length as usize];
+        reader.read_exact(&mut manifest_json)?;
+        let manifest = serde_json::from_slice::<Vec<FileTransferTreeEntry>>(&manifest_json)?;
+        let validated_entries = validate_tree_manifest(&manifest)?;
+
+        std::fs::create_dir_all(staging_directory)?;
+
+        for validated_entry in &validated_entries {
+            let destination_path = staging_directory.join(&validated_entry.relative_path);
+            if validated_entry.entry.is_directory {
+                std::fs::create_dir_all(&destination_path)?;
+                continue;
+            }
+
+            if let Some(parent) = destination_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut file_length_bytes = [0_u8; 8];
+            reader.read_exact(&mut file_length_bytes)?;
+            let file_length = u64::from_be_bytes(file_length_bytes);
+            if file_length != validated_entry.entry.byte_size {
+                return Err(FileTransferError::InvalidField("file_size"));
+            }
+
+            let mut file = File::create(&destination_path)?;
+            copy_bytes_exact(reader, &mut file, file_length)?;
+        }
+
+        summarize_tree_manifest(&manifest, Some(staging_directory))
+    }
+
+    fn build_source_entries(
+        source_paths: &[PathBuf],
+    ) -> Result<Vec<FileTransferTreeSourceEntry>, FileTransferError> {
+        if source_paths.is_empty() {
+            return Err(FileTransferError::InvalidField("source_paths"));
+        }
+
+        let mut entries = Vec::new();
+        for source_path in source_paths {
+            if !source_path.exists() {
+                return Err(FileTransferError::InvalidField("source_path"));
+            }
+            let base_path = source_path
+                .parent()
+                .ok_or(FileTransferError::InvalidField("source_path"))?;
+            collect_tree_source_entries(source_path, base_path, &mut entries)?;
+        }
+
+        entries.sort_by(|left, right| left.entry.relative_path.cmp(&right.entry.relative_path));
+        reject_duplicate_tree_paths(
+            entries
+                .iter()
+                .map(|entry| entry.entry.relative_path.as_str()),
+        )?;
+
+        Ok(entries)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FileTransferTreeSourceEntry {
+    entry: FileTransferTreeEntry,
+    source_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedFileTransferTreeEntry {
+    entry: FileTransferTreeEntry,
+    relative_path: PathBuf,
+}
+
 pub struct FileTransferServer {
     listener: TcpListener,
     transfers: Mutex<HashMap<String, Vec<PathBuf>>>,
@@ -215,6 +363,23 @@ impl FileTransferServer {
         let _ = std::fs::remove_file(&archive_path);
 
         result
+    }
+
+    pub fn serve_next_tree(&self) -> Result<FileTransferTreeSummary, FileTransferError> {
+        let (mut stream, _) = self.accept_next_client()?;
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        let transfer_id = read_transfer_request_line(&mut stream)?;
+        let source_paths = self
+            .transfers
+            .lock()
+            .map_err(|_| FileTransferError::InvalidField("transfer_registry"))?
+            .get(&transfer_id)
+            .cloned()
+            .ok_or(FileTransferError::InvalidField("transfer_id"))?;
+
+        FileTransferTree::write_length_prefixed_tree(&source_paths, &mut stream)
     }
 
     fn accept_next_client(&self) -> Result<(TcpStream, SocketAddr), FileTransferError> {
@@ -297,6 +462,40 @@ impl FileTransferDownload {
 
         Ok(FileTransferDownloadSummary { byte_count })
     }
+
+    pub fn download_tree_to_directory(
+        host: &str,
+        port: u16,
+        transfer_id: &str,
+        destination_directory: &Path,
+    ) -> Result<FileTransferTreeSummary, FileTransferError> {
+        let host = host.trim();
+        let transfer_id = transfer_id.trim();
+        if host.is_empty() {
+            return Err(FileTransferError::InvalidField("host"));
+        }
+        if port == 0 {
+            return Err(FileTransferError::InvalidField("port"));
+        }
+        if transfer_id.is_empty() {
+            return Err(FileTransferError::InvalidField("transfer_id"));
+        }
+        if destination_directory.exists() && !destination_directory.is_dir() {
+            return Err(FileTransferError::InvalidField("destination_directory"));
+        }
+
+        let target = (host, port)
+            .to_socket_addrs()?
+            .next()
+            .ok_or(FileTransferError::InvalidField("host"))?;
+        let mut stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        stream.write_all(transfer_id.as_bytes())?;
+        stream.write_all(b"\n")?;
+
+        FileTransferTree::read_length_prefixed_tree(&mut stream, destination_directory)
+    }
 }
 
 fn read_transfer_request_line(stream: &mut TcpStream) -> Result<String, FileTransferError> {
@@ -369,6 +568,185 @@ fn write_file_entry(
     }
 
     summary.file_count += 1;
+    Ok(())
+}
+
+fn collect_tree_source_entries(
+    path: &Path,
+    base_path: &Path,
+    entries: &mut Vec<FileTransferTreeSourceEntry>,
+) -> Result<(), FileTransferError> {
+    let metadata = std::fs::metadata(path)?;
+    let relative_path = relative_tree_path(base_path, path)?;
+
+    if metadata.is_dir() {
+        entries.push(FileTransferTreeSourceEntry {
+            entry: FileTransferTreeEntry {
+                relative_path,
+                byte_size: 0,
+                is_directory: true,
+            },
+            source_path: None,
+        });
+
+        let mut children = std::fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+        children.sort_by_key(|entry| entry.path());
+        for child in children {
+            collect_tree_source_entries(&child.path(), base_path, entries)?;
+        }
+
+        return Ok(());
+    }
+
+    if metadata.is_file() {
+        entries.push(FileTransferTreeSourceEntry {
+            entry: FileTransferTreeEntry {
+                relative_path,
+                byte_size: metadata.len(),
+                is_directory: false,
+            },
+            source_path: Some(path.to_path_buf()),
+        });
+        return Ok(());
+    }
+
+    Err(FileTransferError::InvalidField("source_path"))
+}
+
+fn relative_tree_path(base_path: &Path, file_path: &Path) -> Result<String, FileTransferError> {
+    let relative_path = file_path
+        .strip_prefix(base_path)
+        .map_err(|_| FileTransferError::InvalidField("source_path"))?;
+    let entry_name = relative_path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    normalize_safe_tree_relative_path(&entry_name)
+}
+
+fn validate_tree_manifest(
+    manifest: &[FileTransferTreeEntry],
+) -> Result<Vec<ValidatedFileTransferTreeEntry>, FileTransferError> {
+    reject_duplicate_tree_paths(manifest.iter().map(|entry| entry.relative_path.as_str()))?;
+
+    manifest
+        .iter()
+        .map(|entry| {
+            let relative_path = normalize_safe_tree_relative_path(&entry.relative_path)?;
+            if entry.is_directory && entry.byte_size != 0 {
+                return Err(FileTransferError::InvalidField("byte_size"));
+            }
+
+            Ok(ValidatedFileTransferTreeEntry {
+                entry: FileTransferTreeEntry {
+                    relative_path: relative_path.clone(),
+                    byte_size: entry.byte_size,
+                    is_directory: entry.is_directory,
+                },
+                relative_path: normalized_tree_path_buf(&relative_path),
+            })
+        })
+        .collect()
+}
+
+fn reject_duplicate_tree_paths<'a>(
+    paths: impl Iterator<Item = &'a str>,
+) -> Result<(), FileTransferError> {
+    let mut seen = BTreeSet::new();
+    for path in paths {
+        let normalized_path = normalize_safe_tree_relative_path(path)?;
+        if !seen.insert(normalized_path) {
+            return Err(FileTransferError::InvalidField("relative_path"));
+        }
+    }
+
+    Ok(())
+}
+
+fn summarize_tree_manifest(
+    manifest: &[FileTransferTreeEntry],
+    top_level_base: Option<&Path>,
+) -> Result<FileTransferTreeSummary, FileTransferError> {
+    let validated_entries = validate_tree_manifest(manifest)?;
+    let mut top_level_paths = BTreeSet::new();
+    let mut file_count = 0;
+    let mut byte_count = 0;
+
+    for validated_entry in validated_entries {
+        if !validated_entry.entry.is_directory {
+            file_count += 1;
+            byte_count += validated_entry.entry.byte_size;
+        }
+
+        let top_level_name = validated_entry
+            .entry
+            .relative_path
+            .split('/')
+            .next()
+            .ok_or(FileTransferError::InvalidField("relative_path"))?;
+        let top_level_path = normalized_tree_path_buf(top_level_name);
+        top_level_paths.insert(match top_level_base {
+            Some(base) => base.join(top_level_path),
+            None => top_level_path,
+        });
+    }
+
+    Ok(FileTransferTreeSummary {
+        file_count,
+        byte_count,
+        top_level_paths: top_level_paths.into_iter().collect(),
+    })
+}
+
+fn normalize_safe_tree_relative_path(value: &str) -> Result<String, FileTransferError> {
+    let normalized = value.replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains(':')
+        || normalized.contains('\0')
+    {
+        return Err(FileTransferError::InvalidField("relative_path"));
+    }
+
+    if !normalized
+        .split('/')
+        .all(|component| !component.is_empty() && component != "." && component != "..")
+    {
+        return Err(FileTransferError::InvalidField("relative_path"));
+    }
+
+    Ok(normalized)
+}
+
+fn normalized_tree_path_buf(value: &str) -> PathBuf {
+    value.split('/').collect()
+}
+
+fn write_file_bytes_exact<W: Write>(
+    file_path: &Path,
+    byte_count: u64,
+    writer: &mut W,
+) -> Result<(), FileTransferError> {
+    let mut file = File::open(file_path)?;
+    copy_bytes_exact(&mut file, writer, byte_count)
+}
+
+fn copy_bytes_exact<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    byte_count: u64,
+) -> Result<(), FileTransferError> {
+    let mut remaining = byte_count;
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining > 0 {
+        let read_len = remaining.min(buffer.len() as u64) as usize;
+        reader.read_exact(&mut buffer[..read_len])?;
+        writer.write_all(&buffer[..read_len])?;
+        remaining -= read_len as u64;
+    }
+
     Ok(())
 }
 

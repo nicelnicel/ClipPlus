@@ -1,6 +1,6 @@
 use clipplus_transport::file_transfer::{
     FileTransferArchive, FileTransferDownload, FileTransferError, FileTransferRequest,
-    FileTransferServer, TransferState,
+    FileTransferServer, FileTransferTree, FileTransferTreeEntry, TransferState,
 };
 use clipplus_transport::message::{
     NativeClipboardMessage, NativeClipboardMessageError, NativeClipboardMessageKind,
@@ -583,6 +583,216 @@ fn file_transfer_archive_rejects_empty_sources_and_missing_parent() {
         missing_parent,
         Err(FileTransferError::InvalidField("archive_parent"))
     ));
+}
+
+#[test]
+fn file_transfer_tree_builds_manifest_without_absolute_paths() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let nested_directory = source_directory.join("Folder");
+    std::fs::create_dir_all(&nested_directory).unwrap();
+    std::fs::write(source_directory.join("a.txt"), "alpha").unwrap();
+    std::fs::write(nested_directory.join("b.txt"), "beta").unwrap();
+
+    let manifest = FileTransferTree::build_manifest(&[
+        source_directory.join("a.txt"),
+        nested_directory.clone(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        manifest,
+        vec![
+            FileTransferTreeEntry {
+                relative_path: "Folder".to_string(),
+                byte_size: 0,
+                is_directory: true,
+            },
+            FileTransferTreeEntry {
+                relative_path: "Folder/b.txt".to_string(),
+                byte_size: 4,
+                is_directory: false,
+            },
+            FileTransferTreeEntry {
+                relative_path: "a.txt".to_string(),
+                byte_size: 5,
+                is_directory: false,
+            },
+        ]
+    );
+    assert!(manifest
+        .iter()
+        .all(|entry| !entry.relative_path.starts_with('/')));
+    assert!(manifest
+        .iter()
+        .all(|entry| !entry.relative_path.contains("..")));
+}
+
+#[test]
+fn file_transfer_tree_streams_files_to_staging_without_zip() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("source");
+    let nested_directory = source_directory.join("Folder");
+    std::fs::create_dir_all(&nested_directory).unwrap();
+    std::fs::write(source_directory.join("a.txt"), "alpha").unwrap();
+    std::fs::write(nested_directory.join("b.txt"), "beta").unwrap();
+    let mut payload = Vec::new();
+
+    let served = FileTransferTree::write_length_prefixed_tree(
+        &[source_directory.join("a.txt"), nested_directory],
+        &mut payload,
+    )
+    .unwrap();
+
+    let staging_directory = temporary_directory.join("staging");
+    let received = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    )
+    .unwrap();
+
+    assert_eq!(served.file_count, 2);
+    assert_eq!(received.file_count, 2);
+    assert_eq!(served.byte_count, 9);
+    assert_eq!(received.byte_count, 9);
+    assert_eq!(
+        received.top_level_paths,
+        vec![
+            staging_directory.join("Folder"),
+            staging_directory.join("a.txt")
+        ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("a.txt")).unwrap(),
+        "alpha"
+    );
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("Folder").join("b.txt")).unwrap(),
+        "beta"
+    );
+    assert!(!staging_directory.join("ClipPlus-Received.zip").exists());
+}
+
+#[test]
+fn file_transfer_tree_rejects_unsafe_manifest_path_without_writing_outside_staging() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    let outside_path = temporary_directory.join("evil.txt");
+    let manifest = serde_json::to_vec(&json!([
+        {
+            "relativePath": "../evil.txt",
+            "byteSize": 4,
+            "isDirectory": false
+        }
+    ]))
+    .unwrap();
+    let mut payload = Vec::new();
+    payload
+        .write_all(&(manifest.len() as u64).to_be_bytes())
+        .unwrap();
+    payload.write_all(&manifest).unwrap();
+    payload.write_all(&4_u64.to_be_bytes()).unwrap();
+    payload.write_all(b"evil").unwrap();
+
+    let result = FileTransferTree::read_length_prefixed_tree(
+        &mut std::io::Cursor::new(payload),
+        &staging_directory,
+    );
+
+    assert!(matches!(
+        result,
+        Err(FileTransferError::InvalidField("relative_path"))
+    ));
+    assert!(!outside_path.exists());
+}
+
+#[test]
+fn file_transfer_download_writes_tree_from_tcp_server() {
+    let temporary_directory = unique_temp_dir();
+    let staging_directory = temporary_directory.join("staging");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut transfer_id = String::new();
+        reader.read_line(&mut transfer_id).unwrap();
+        assert_eq!(transfer_id.trim(), "transfer-a");
+
+        let manifest = serde_json::to_vec(&vec![FileTransferTreeEntry {
+            relative_path: "received.txt".to_string(),
+            byte_size: 11,
+            is_directory: false,
+        }])
+        .unwrap();
+        stream
+            .write_all(&(manifest.len() as u64).to_be_bytes())
+            .unwrap();
+        stream.write_all(&manifest).unwrap();
+        stream.write_all(&11_u64.to_be_bytes()).unwrap();
+        stream.write_all(b"hello world").unwrap();
+    });
+
+    let summary = FileTransferDownload::download_tree_to_directory(
+        "127.0.0.1",
+        port,
+        "transfer-a",
+        &staging_directory,
+    )
+    .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(summary.file_count, 1);
+    assert_eq!(summary.byte_count, 11);
+    assert_eq!(
+        summary.top_level_paths,
+        vec![staging_directory.join("received.txt")]
+    );
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("received.txt")).unwrap(),
+        "hello world"
+    );
+}
+
+#[test]
+fn file_transfer_server_serves_registered_tree_over_tcp() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("registered.txt");
+    std::fs::write(&source_file, "registered direct").unwrap();
+    let server = FileTransferServer::bind(0).unwrap();
+    let port = server.local_port().unwrap();
+    server
+        .register_transfer("transfer-a", vec![source_file])
+        .unwrap();
+    let (result_sender, result_receiver) = mpsc::channel();
+    thread::spawn(move || {
+        result_sender.send(server.serve_next_tree()).unwrap();
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client.write_all(b"transfer-a\n").unwrap();
+    let staging_directory = temporary_directory.join("received");
+    let received =
+        FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
+    let served = result_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(served.file_count, 1);
+    assert_eq!(served.byte_count, 17);
+    assert_eq!(received.file_count, 1);
+    assert_eq!(received.byte_count, 17);
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("registered.txt")).unwrap(),
+        "registered direct"
+    );
 }
 
 #[test]
