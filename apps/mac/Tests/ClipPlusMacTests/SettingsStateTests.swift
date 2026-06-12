@@ -1170,9 +1170,9 @@ final class SettingsStateTests: XCTestCase {
         }
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
-                requestedTransferId = data.flatMap { String(data: $0, encoding: .utf8) }?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            var requestData = Data()
+
+            func sendTreePayload() {
                 var manifestLength = UInt64(manifest.count).bigEndian
                 var payloadLength = UInt64(payload.count).bigEndian
                 let manifestLengthData = Swift.withUnsafeBytes(of: &manifestLength) { Data($0) }
@@ -1185,6 +1185,26 @@ final class SettingsStateTests: XCTestCase {
                     }
                 )
             }
+
+            func receiveRequest() {
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, isComplete, error in
+                    if let data {
+                        requestData.append(data)
+                    }
+
+                    let hasRequestTerminator = requestData.contains(0x0A)
+                    if hasRequestTerminator || isComplete || error != nil {
+                        requestedTransferId = String(data: requestData, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        sendTreePayload()
+                        return
+                    }
+
+                    receiveRequest()
+                }
+            }
+
+            receiveRequest()
         }
         listener.start(queue: queue)
         wait(for: [ready], timeout: 2)

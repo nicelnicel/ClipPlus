@@ -6,8 +6,18 @@ on:
       - main
       - "feat/**"
       - "codex/**"
+    tags:
+      - "v*"
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to upload artifacts to, for example v0.1.0. Empty means build artifacts only."
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   rust:
@@ -141,3 +151,46 @@ jobs:
         with:
           name: ClipPlus-Windows-x64-runtime-dependent
           path: target/windows-release/ClipPlus-Windows-x64-runtime-dependent.exe
+
+  release:
+    name: Upload Release Assets
+    runs-on: ubuntu-latest
+    needs:
+      - macos
+      - windows
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: target/github-release
+
+      - name: Upload artifacts to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-}"
+          if [[ -z "$tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "Release tag is required for release upload." >&2
+            exit 2
+          fi
+
+          mapfile -t assets < <(find target/github-release -type f \( -name 'ClipPlus-macOS.dmg' -o -name 'ClipPlus-Windows-*.exe' \) | sort)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "No release assets found." >&2
+            exit 1
+          fi
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "ClipPlus ${tag}" \
+              --notes "Automated ClipPlus release for ${GITHUB_SHA}."
+          fi
+
+          gh release upload "$tag" "${assets[@]}" --clobber
