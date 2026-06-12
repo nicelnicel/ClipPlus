@@ -5,6 +5,7 @@ enum ClipPlusMessageKind: String, Codable {
     case trust
     case text
     case image
+    case imageOffer
     case fileOffer
 }
 
@@ -137,6 +138,28 @@ struct ClipPlusMessage: Codable, Equatable {
             archivePort: archivePort
         ) else {
             preconditionFailure("Rust 核心库不可用，无法创建文件剪贴板消息")
+        }
+
+        return decodeCoreMessageJSON(json)
+    }
+
+    static func imageOffer(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        transferId: String,
+        pngData: Data,
+        archivePort: Int
+    ) -> Self {
+        guard let json = CoreBridge().createImageOfferMessageJSON(
+            groupId: groupId,
+            senderDeviceId: senderDeviceId,
+            senderDeviceName: senderDeviceName,
+            transferId: transferId,
+            pngData: pngData,
+            archivePort: archivePort
+        ) else {
+            preconditionFailure("Rust 核心库不可用，无法创建图片直传消息")
         }
 
         return decodeCoreMessageJSON(json)

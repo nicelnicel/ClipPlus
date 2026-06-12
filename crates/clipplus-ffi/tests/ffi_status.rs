@@ -12,19 +12,21 @@ use std::os::windows::io::AsRawSocket;
 
 use clipplus_ffi::api::{
     clipplus_create_file_offer_message_json, clipplus_create_hello_message_json,
-    clipplus_create_image_message_json, clipplus_create_text_message_json,
-    clipplus_create_trust_message_json, clipplus_derive_group_id, clipplus_download_file_archive,
-    clipplus_download_file_tree, clipplus_file_server_bind, clipplus_file_server_free,
-    clipplus_file_server_local_port, clipplus_file_server_register_transfer,
-    clipplus_file_server_serve_next, clipplus_file_server_serve_next_tree, clipplus_free_string,
-    clipplus_get_status_json, clipplus_serve_file_archive_to_socket, clipplus_udp_socket_bind,
-    clipplus_udp_socket_free, clipplus_udp_socket_local_port, clipplus_udp_socket_recv,
-    clipplus_udp_socket_send_to, clipplus_write_file_archive_zip,
+    clipplus_create_image_message_json, clipplus_create_image_offer_message_json,
+    clipplus_create_text_message_json, clipplus_create_trust_message_json,
+    clipplus_derive_group_id, clipplus_download_file_archive, clipplus_download_file_tree,
+    clipplus_file_server_bind, clipplus_file_server_free, clipplus_file_server_local_port,
+    clipplus_file_server_register_transfer, clipplus_file_server_serve_next,
+    clipplus_file_server_serve_next_tree, clipplus_free_string, clipplus_get_status_json,
+    clipplus_serve_file_archive_to_socket, clipplus_udp_socket_bind, clipplus_udp_socket_free,
+    clipplus_udp_socket_local_port, clipplus_udp_socket_recv, clipplus_udp_socket_send_to,
+    clipplus_write_file_archive_zip,
 };
 use clipplus_ffi::{
     clipplus_create_file_offer_message_json as reexported_create_file_offer_message_json,
     clipplus_create_hello_message_json as reexported_create_hello_message_json,
     clipplus_create_image_message_json as reexported_create_image_message_json,
+    clipplus_create_image_offer_message_json as reexported_create_image_offer_message_json,
     clipplus_create_text_message_json as reexported_create_text_message_json,
     clipplus_create_trust_message_json as reexported_create_trust_message_json,
     clipplus_derive_group_id as reexported_derive_group_id,
@@ -355,6 +357,101 @@ fn ffi_create_image_message_json_rejects_null_empty_and_oversized_values() {
             sender_device_name.as_ptr(),
             oversized.as_ptr(),
             oversized.len(),
+        )
+    }
+    .is_null());
+}
+
+#[test]
+fn ffi_creates_image_offer_message_json_for_native_shells() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let transfer_id = CString::new("image-transfer-1").unwrap();
+    let png_bytes = vec![0xAB; 32 * 1024 + 16];
+
+    let ptr = unsafe {
+        clipplus_create_image_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            png_bytes.as_ptr(),
+            png_bytes.len(),
+            47_632,
+        )
+    };
+    let json = unsafe { take_ffi_string(ptr) };
+    let value: Value = serde_json::from_str(&json).expect("message json should parse");
+
+    assert_eq!(value["kind"], "imageOffer");
+    assert_eq!(value["protocolVersion"], 1);
+    assert_eq!(value["groupId"], "group-1");
+    assert_eq!(value["senderDeviceId"], "mac-device");
+    assert_eq!(value["transferId"], "image-transfer-1");
+    assert_eq!(value["transferFormat"], "directTree");
+    assert_eq!(value["archivePort"], 47_632);
+    assert_eq!(value["imageByteSize"], 32_784);
+    assert_eq!(
+        value["imageContentHash"],
+        "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d"
+    );
+    assert!(value.get("imageBase64").is_none());
+}
+
+#[test]
+fn ffi_create_image_offer_message_json_rejects_invalid_values() {
+    let group_id = CString::new("group-1").unwrap();
+    let sender_device_id = CString::new("mac-device").unwrap();
+    let sender_device_name = CString::new("Mac").unwrap();
+    let transfer_id = CString::new("image-transfer-1").unwrap();
+    let png_bytes = vec![0xAB; 32 * 1024 + 16];
+
+    assert!(unsafe {
+        reexported_create_image_offer_message_json(
+            ptr::null(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            png_bytes.as_ptr(),
+            png_bytes.len(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_image_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            ptr::null(),
+            png_bytes.len(),
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_image_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            png_bytes.as_ptr(),
+            0,
+            47_632,
+        )
+    }
+    .is_null());
+    assert!(unsafe {
+        reexported_create_image_offer_message_json(
+            group_id.as_ptr(),
+            sender_device_id.as_ptr(),
+            sender_device_name.as_ptr(),
+            transfer_id.as_ptr(),
+            png_bytes.as_ptr(),
+            png_bytes.len(),
+            0,
         )
     }
     .is_null());

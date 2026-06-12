@@ -198,6 +198,91 @@ fn native_clipboard_image_message_uses_current_shell_wire_format() {
 }
 
 #[test]
+fn native_clipboard_image_offer_message_uses_direct_tree_metadata_without_inline_payload() {
+    let png_bytes = vec![0xAB; NativeClipboardMessage::MAX_INLINE_IMAGE_BYTES + 16];
+    let message = NativeClipboardMessage::image_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "image-transfer-1",
+        &png_bytes,
+        47_632,
+    )
+    .unwrap();
+    let json = message.to_json().unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(encoded["kind"], json!("imageOffer"));
+    assert_eq!(encoded["protocolVersion"], json!(1));
+    assert_eq!(encoded["groupId"], json!("group-1"));
+    assert_eq!(encoded["senderDeviceId"], json!("mac-device"));
+    assert_eq!(encoded["transferId"], json!("image-transfer-1"));
+    assert_eq!(encoded["transferFormat"], json!("directTree"));
+    assert_eq!(encoded["archivePort"], json!(47_632));
+    assert_eq!(encoded["imageByteSize"], json!(32_784));
+    assert_eq!(
+        encoded["imageContentHash"],
+        json!("e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d")
+    );
+    assert!(encoded.get("imageBase64").is_none());
+    assert!(encoded.get("files").is_none());
+
+    let decoded = NativeClipboardMessage::from_json(&json).unwrap();
+    assert_eq!(decoded.kind, NativeClipboardMessageKind::ImageOffer);
+    assert_eq!(decoded.image_byte_size, Some(png_bytes.len()));
+    assert_eq!(
+        decoded.image_content_hash.as_deref(),
+        Some("e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d")
+    );
+}
+
+#[test]
+fn native_clipboard_image_offer_message_rejects_invalid_transfer_metadata() {
+    let png_bytes = vec![0xAB; NativeClipboardMessage::MAX_INLINE_IMAGE_BYTES + 1];
+
+    let blank_transfer = NativeClipboardMessage::image_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        " ",
+        &png_bytes,
+        47_632,
+    )
+    .unwrap_err();
+    let empty_image = NativeClipboardMessage::image_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "image-transfer-1",
+        &[],
+        47_632,
+    )
+    .unwrap_err();
+    let zero_port = NativeClipboardMessage::image_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "image-transfer-1",
+        &png_bytes,
+        0,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        blank_transfer,
+        NativeClipboardMessageError::InvalidField("transfer_id")
+    ));
+    assert!(matches!(
+        empty_image,
+        NativeClipboardMessageError::InvalidField("image_bytes")
+    ));
+    assert!(matches!(
+        zero_port,
+        NativeClipboardMessageError::InvalidField("archive_port")
+    ));
+}
+
+#[test]
 fn native_clipboard_file_offer_message_uses_current_shell_wire_format() {
     let files = vec![
         NativeFileTransferItem {

@@ -726,6 +726,39 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void ClipPlusMessageRoundTripsDirectImageOfferPayloadWithoutInlineData()
+    {
+        var pngData = Enumerable.Repeat((byte)0xAB, ClipPlus.Windows.Sync.ClipPlusMessage.MaxInlineImageBytes + 16)
+            .ToArray();
+        var message = ClipPlus.Windows.Sync.ClipPlusMessage.CreateImageOffer(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            transferId: "image-transfer-1",
+            pngData: pngData,
+            archivePort: 47_632
+        );
+
+        var json = message.ToJson();
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.ImageOffer, decoded.Kind);
+        Assert.Equal(1, decoded.ProtocolVersion);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("image-transfer-1", decoded.TransferId);
+        Assert.Equal(ClipPlus.Windows.Sync.FileTransferFormat.DirectTree, decoded.TransferFormat);
+        Assert.Equal(47_632, decoded.ArchivePort);
+        Assert.Equal(pngData.Length, decoded.ImageByteSize);
+        Assert.Null(decoded.ImageBase64);
+        Assert.Null(decoded.DecodedImageData);
+        Assert.Equal(
+            "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d",
+            decoded.ImageContentHash
+        );
+    }
+
+    [Fact]
     public void CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable()
     {
         var pngData = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
@@ -746,6 +779,48 @@ public sealed class SettingsStateTests
         Assert.Equal(
             "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6",
             decoded.ImageContentHash
+        );
+    }
+
+    [Fact]
+    public void CoreBridgeCreatesImageOfferMessageJsonWhenFfiLibraryIsAvailable()
+    {
+        var pngData = Enumerable.Repeat((byte)0xAB, ClipPlus.Windows.Sync.ClipPlusMessage.MaxInlineImageBytes + 16)
+            .ToArray();
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateImageOfferMessageJson(
+            groupId: "group-1",
+            senderDeviceId: "windows-device",
+            senderDeviceName: "Windows",
+            transferId: "image-transfer-1",
+            pngData: pngData,
+            archivePort: 47_632
+        );
+
+        Assert.NotNull(json);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.ImageOffer, decoded.Kind);
+        Assert.Equal("group-1", decoded.GroupId);
+        Assert.Equal("windows-device", decoded.SenderDeviceId);
+        Assert.Equal("image-transfer-1", decoded.TransferId);
+        Assert.Equal(ClipPlus.Windows.Sync.FileTransferFormat.DirectTree, decoded.TransferFormat);
+        Assert.Equal(47_632, decoded.ArchivePort);
+        Assert.Equal(pngData.Length, decoded.ImageByteSize);
+        Assert.Null(decoded.ImageBase64);
+        Assert.Equal(
+            "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d",
+            decoded.ImageContentHash
+        );
+    }
+
+    [Fact]
+    public void ImageContentHasherMatchesRustImageHash()
+    {
+        var pngData = Enumerable.Repeat((byte)0xAB, ClipPlus.Windows.Sync.ClipPlusMessage.MaxInlineImageBytes + 16)
+            .ToArray();
+
+        Assert.Equal(
+            "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d",
+            ClipPlus.Windows.Sync.ImageContentHasher.Sha256Hex(pngData)
         );
     }
 
@@ -1154,6 +1229,29 @@ public sealed class SettingsStateTests
         Assert.Contains("Staging", source, StringComparison.Ordinal);
         Assert.Contains("served file tree", source, StringComparison.Ordinal);
         Assert.DoesNotContain("file transfer download failed: {error.Message}", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UdpTextSyncServiceUsesDirectImageTransferForOversizedImages()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+
+        Assert.Contains("PublishImageOffer", source, StringComparison.Ordinal);
+        Assert.Contains("DownloadRemoteImageOfferAsync", source, StringComparison.Ordinal);
+        Assert.Contains("case ClipPlusMessageKind.ImageOffer", source, StringComparison.Ordinal);
+        Assert.Contains("ImageContentHasher.Sha256Hex", source, StringComparison.Ordinal);
+        Assert.Contains("RegisterTemporaryImageTransferSource", source, StringComparison.Ordinal);
+        Assert.Contains("DownloadFileTreeWithRetry", source, StringComparison.Ordinal);
+        Assert.Contains("Task.Delay(TimeSpan.FromMilliseconds(250))", source, StringComparison.Ordinal);
     }
 
     [Fact]

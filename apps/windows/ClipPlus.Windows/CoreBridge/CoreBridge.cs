@@ -44,6 +44,23 @@ public sealed class CoreBridge
         return Ffi.Value?.CreateImageMessageJson(groupId, senderDeviceId, senderDeviceName, pngData);
     }
 
+    public string? CreateImageOfferMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string transferId,
+        byte[] pngData,
+        int archivePort)
+    {
+        return Ffi.Value?.CreateImageOfferMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            transferId,
+            pngData,
+            archivePort);
+    }
+
     public string? CreateFileOfferMessageJson(
         string groupId,
         string senderDeviceId,
@@ -279,6 +296,16 @@ internal sealed class ClipPlusFfiBridge
         UIntPtr imageLen);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr CreateImageOfferMessageJsonDelegate(
+        IntPtr groupId,
+        IntPtr senderDeviceId,
+        IntPtr senderDeviceName,
+        IntPtr transferId,
+        IntPtr imageBytes,
+        UIntPtr imageLen,
+        ushort archivePort);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate IntPtr CreateFileOfferMessageJsonDelegate(
         IntPtr groupId,
         IntPtr senderDeviceId,
@@ -377,6 +404,7 @@ internal sealed class ClipPlusFfiBridge
     private readonly CreateHelloMessageJsonDelegate createHelloMessageJson;
     private readonly CreateTextMessageJsonDelegate createTextMessageJson;
     private readonly CreateImageMessageJsonDelegate createImageMessageJson;
+    private readonly CreateImageOfferMessageJsonDelegate createImageOfferMessageJson;
     private readonly CreateFileOfferMessageJsonDelegate createFileOfferMessageJson;
     private readonly WriteFileArchiveZipDelegate writeFileArchiveZip;
     private readonly ServeFileArchiveToSocketDelegate serveFileArchiveToSocket;
@@ -406,6 +434,7 @@ internal sealed class ClipPlusFfiBridge
         CreateHelloMessageJsonDelegate createHelloMessageJson,
         CreateTextMessageJsonDelegate createTextMessageJson,
         CreateImageMessageJsonDelegate createImageMessageJson,
+        CreateImageOfferMessageJsonDelegate createImageOfferMessageJson,
         CreateFileOfferMessageJsonDelegate createFileOfferMessageJson,
         WriteFileArchiveZipDelegate writeFileArchiveZip,
         ServeFileArchiveToSocketDelegate serveFileArchiveToSocket,
@@ -429,6 +458,7 @@ internal sealed class ClipPlusFfiBridge
         this.createHelloMessageJson = createHelloMessageJson;
         this.createTextMessageJson = createTextMessageJson;
         this.createImageMessageJson = createImageMessageJson;
+        this.createImageOfferMessageJson = createImageOfferMessageJson;
         this.createFileOfferMessageJson = createFileOfferMessageJson;
         this.writeFileArchiveZip = writeFileArchiveZip;
         this.serveFileArchiveToSocket = serveFileArchiveToSocket;
@@ -467,6 +497,7 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_hello_message_json", out var createHelloMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_text_message_json", out var createTextMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_message_json", out var createImageMessageJsonSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_create_image_offer_message_json", out var createImageOfferMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_file_offer_message_json", out var createFileOfferMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_write_file_archive_zip", out var writeFileArchiveZipSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_serve_file_archive_to_socket", out var serveFileArchiveToSocketSymbol)
@@ -495,6 +526,7 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<CreateHelloMessageJsonDelegate>(createHelloMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTextMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateImageMessageJsonDelegate>(createImageMessageJsonSymbol),
+                Marshal.GetDelegateForFunctionPointer<CreateImageOfferMessageJsonDelegate>(createImageOfferMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateFileOfferMessageJsonDelegate>(createFileOfferMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<WriteFileArchiveZipDelegate>(writeFileArchiveZipSymbol),
                 Marshal.GetDelegateForFunctionPointer<ServeFileArchiveToSocketDelegate>(serveFileArchiveToSocketSymbol),
@@ -554,6 +586,7 @@ internal sealed class ClipPlusFfiBridge
             try
             {
                 lines.Add($"export_clipplus_derive_group_id={NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out _)}");
+                lines.Add($"export_clipplus_create_image_offer_message_json={NativeLibrary.TryGetExport(handle, "clipplus_create_image_offer_message_json", out _)}");
                 lines.Add($"export_clipplus_download_file_archive={NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out _)}");
                 lines.Add($"export_clipplus_download_file_tree={NativeLibrary.TryGetExport(handle, "clipplus_download_file_tree", out _)}");
                 lines.Add($"export_clipplus_udp_socket_bind={NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out _)}");
@@ -660,6 +693,45 @@ internal sealed class ClipPlusFfiBridge
             Marshal.FreeCoTaskMem(groupIdPointer);
             Marshal.FreeCoTaskMem(senderDeviceIdPointer);
             Marshal.FreeCoTaskMem(senderDeviceNamePointer);
+        }
+    }
+
+    public string? CreateImageOfferMessageJson(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string transferId,
+        byte[] pngData,
+        int archivePort)
+    {
+        if (pngData.Length == 0 || archivePort <= 0 || archivePort > ushort.MaxValue)
+        {
+            return null;
+        }
+
+        var groupIdPointer = Marshal.StringToCoTaskMemUTF8(groupId);
+        var senderDeviceIdPointer = Marshal.StringToCoTaskMemUTF8(senderDeviceId);
+        var senderDeviceNamePointer = Marshal.StringToCoTaskMemUTF8(senderDeviceName);
+        var transferIdPointer = Marshal.StringToCoTaskMemUTF8(transferId);
+        var imageHandle = GCHandle.Alloc(pngData, GCHandleType.Pinned);
+        try
+        {
+            return TakeOwnedString(createImageOfferMessageJson(
+                groupIdPointer,
+                senderDeviceIdPointer,
+                senderDeviceNamePointer,
+                transferIdPointer,
+                imageHandle.AddrOfPinnedObject(),
+                new UIntPtr((ulong)pngData.LongLength),
+                (ushort)archivePort));
+        }
+        finally
+        {
+            imageHandle.Free();
+            Marshal.FreeCoTaskMem(groupIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceIdPointer);
+            Marshal.FreeCoTaskMem(senderDeviceNamePointer);
+            Marshal.FreeCoTaskMem(transferIdPointer);
         }
     }
 

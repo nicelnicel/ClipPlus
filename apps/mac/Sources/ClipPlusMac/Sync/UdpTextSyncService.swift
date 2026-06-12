@@ -59,6 +59,7 @@ final class RemoteFileTransferGate {
 final class UdpTextSyncService {
     private let port: UInt16 = 47_631
     private let archivePort: UInt16 = 47_632
+    private static let imageOfferDownloadRetryDelay: DispatchTimeInterval = .milliseconds(250)
     private let state: SettingsState
     private let clipboard = NativeClipboard()
     private let logger: ClipPlusLogger
@@ -239,37 +240,40 @@ final class UdpTextSyncService {
             logger.info("published text clipboard byte_count=\(text.utf8.count)")
         }
 
-        guard let pngData = clipboard.readPngImageData(),
-              let message = ClipPlusMessage.image(
-            groupId: snapshot.sharedGroupId,
-            senderDeviceId: deviceId,
-            senderDeviceName: deviceName,
-            pngData: pngData
-        ),
-              let imageHash = message.imageContentHash,
-              imageHash != lastLocalImageHash,
+        guard let pngData = clipboard.readPngImageData() else {
+            return
+        }
+
+        let imageHash = ImageContentHasher.sha256Hex(pngData)
+        guard imageHash != lastLocalImageHash,
               imageHash != lastRemoteImageHash else {
             return
         }
 
         lastLocalImageHash = imageHash
-        send(message)
-        updateStatus("已广播图片剪贴板")
-        logger.info("published image clipboard byte_count=\(pngData.count)")
+        if let message = ClipPlusMessage.image(
+            groupId: snapshot.sharedGroupId,
+            senderDeviceId: deviceId,
+            senderDeviceName: deviceName,
+            pngData: pngData
+        ) {
+            send(message)
+            updateStatus("已广播图片剪贴板")
+            logger.info("published image clipboard byte_count=\(pngData.count)")
+        } else if publishImageOffer(pngData: pngData, groupId: snapshot.sharedGroupId, imageHash: imageHash) {
+            updateStatus("已广播图片剪贴板")
+            logger.info("published image clipboard byte_count=\(pngData.count)")
+        } else {
+            lastLocalImageHash = nil
+        }
     }
 
     private func localImageHashAfterClipboardWrite() -> String? {
-        guard let writtenPngData = clipboard.readPngImageData(),
-              let message = ClipPlusMessage.image(
-                groupId: state.sharedGroupId,
-                senderDeviceId: deviceId,
-                senderDeviceName: deviceName,
-                pngData: writtenPngData
-              ) else {
+        guard let writtenPngData = clipboard.readPngImageData() else {
             return nil
         }
 
-        return message.imageContentHash
+        return ImageContentHasher.sha256Hex(writtenPngData)
     }
 
     private func syncSnapshot() -> SyncSnapshot {
@@ -357,6 +361,29 @@ final class UdpTextSyncService {
             }
             state.lastStatusMessage = "已接收远端图片剪贴板"
             logger.info("received image clipboard byte_count=\(imageData.count)")
+        case .imageOffer:
+            guard state.sharingEnabled,
+                  let transferId = message.transferId,
+                  message.transferFormat == .directTree,
+                  let expectedByteSize = message.imageByteSize,
+                  expectedByteSize > 0,
+                  let expectedHash = message.imageContentHash,
+                  let imagePort = message.archivePort,
+                  imagePort > 0,
+                  remoteFileTransfers.begin(transferId) else {
+                return
+            }
+
+            fileQueue.async { [weak self] in
+                self?.downloadRemoteImageOffer(
+                    sourceHost: sourceHost,
+                    transferId: transferId,
+                    expectedByteSize: expectedByteSize,
+                    expectedHash: expectedHash,
+                    port: imagePort
+                )
+            }
+            logger.info("received image offer byte_count=\(expectedByteSize) source_host=\(sourceHost) port=\(imagePort)")
         case .fileOffer:
             guard state.sharingEnabled,
                   let transferId = message.transferId,
@@ -400,6 +427,64 @@ final class UdpTextSyncService {
         ))
         updateStatus("已广播文件剪贴板")
         logger.info("published file offer file_count=\(items.count)")
+    }
+
+    @discardableResult
+    private func publishImageOffer(pngData: Data, groupId: String, imageHash: String) -> Bool {
+        let transferId = UUID().uuidString
+        guard let sourceURL = imageTransferSourceURL(for: transferId) else {
+            updateStatus("图片广播失败")
+            logger.error("image transfer registration failed stage=source")
+            return false
+        }
+
+        let transferDirectoryURL = sourceURL.deletingLastPathComponent()
+        do {
+            if FileManager.default.fileExists(atPath: transferDirectoryURL.path) {
+                try FileManager.default.removeItem(at: transferDirectoryURL)
+            }
+            try FileManager.default.createDirectory(at: transferDirectoryURL, withIntermediateDirectories: true)
+            try pngData.write(to: sourceURL, options: .atomic)
+        } catch {
+            updateStatus("图片广播失败")
+            logger.error("image transfer source write failed")
+            return false
+        }
+
+        guard registerTemporaryImageTransferSource(transferId: transferId, sourceURL: sourceURL) else {
+            try? FileManager.default.removeItem(at: transferDirectoryURL)
+            updateStatus("图片广播失败")
+            logger.error("image transfer registration failed stage=server")
+            return false
+        }
+
+        let message = ClipPlusMessage.imageOffer(
+            groupId: groupId,
+            senderDeviceId: deviceId,
+            senderDeviceName: deviceName,
+            transferId: transferId,
+            pngData: pngData,
+            archivePort: Int(archivePort)
+        )
+        guard message.imageContentHash == imageHash else {
+            try? FileManager.default.removeItem(at: transferDirectoryURL)
+            updateStatus("图片广播失败")
+            logger.error("image transfer registration failed stage=hash")
+            return false
+        }
+
+        send(message)
+        scheduleTemporaryImageTransferCleanup(transferDirectoryURL)
+        logger.info("published image offer byte_count=\(pngData.count)")
+        return true
+    }
+
+    private func registerTemporaryImageTransferSource(transferId: String, sourceURL: URL) -> Bool {
+        guard let fileServer else {
+            return false
+        }
+
+        return fileServer.registerTransfer(transferId: transferId, sourcePaths: [sourceURL.path])
     }
 
     private func fileTransferItem(for url: URL) -> FileTransferItem {
@@ -527,6 +612,128 @@ final class UdpTextSyncService {
         logger.info("downloaded file tree file_count=\(result.fileCount) byte_count=\(result.byteCount)")
     }
 
+    private func downloadRemoteImageOffer(
+        sourceHost: String,
+        transferId: String,
+        expectedByteSize: Int,
+        expectedHash: String,
+        port: Int
+    ) {
+        guard let stagingURL = stagingDirectoryURL(for: transferId) else {
+            DispatchQueue.main.async { [weak self] in
+                self?.state.lastStatusMessage = "图片接收失败"
+            }
+            remoteFileTransfers.fail(transferId)
+            logger.error("image transfer download failed stage=staging")
+            return
+        }
+
+        do {
+            if FileManager.default.fileExists(atPath: stagingURL.path) {
+                try FileManager.default.removeItem(at: stagingURL)
+            }
+            try FileManager.default.createDirectory(
+                at: stagingURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            DispatchQueue.main.async { [weak self] in
+                self?.state.lastStatusMessage = "图片接收失败"
+            }
+            remoteFileTransfers.fail(transferId)
+            logger.error("image transfer download failed stage=prepare")
+            return
+        }
+
+        guard let result = downloadFileTreeWithRetry(
+            host: sourceHost,
+            port: port,
+            transferId: transferId,
+            destinationDirectory: stagingURL.path
+        ) else {
+            DispatchQueue.main.async { [weak self] in
+                self?.state.lastStatusMessage = "图片接收失败"
+            }
+            remoteFileTransfers.fail(transferId)
+            logger.error("image transfer download failed stage=download source_host=\(sourceHost) port=\(port)")
+            return
+        }
+
+        guard result.fileCount == 1,
+              result.topLevelPaths.count == 1,
+              result.byteCount == UInt64(expectedByteSize),
+              let imagePath = result.topLevelPaths.first,
+              let imageData = try? Data(contentsOf: URL(fileURLWithPath: imagePath)),
+              imageData.count == expectedByteSize,
+              ImageContentHasher.sha256Hex(imageData) == expectedHash else {
+            DispatchQueue.main.async { [weak self] in
+                self?.state.lastStatusMessage = "图片接收失败"
+            }
+            remoteFileTransfers.fail(transferId)
+            logger.error("image transfer download failed stage=verify")
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            lastRemoteImageHash = expectedHash
+            lastLocalImageHash = expectedHash
+            clipboard.writePngImageData(imageData)
+            if let writtenImageHash = localImageHashAfterClipboardWrite() {
+                lastLocalImageHash = writtenImageHash
+            }
+            state.lastStatusMessage = "已接收远端图片剪贴板"
+            remoteFileTransfers.complete(transferId)
+        }
+
+        logger.info("downloaded image clipboard byte_count=\(imageData.count)")
+    }
+
+    private func downloadFileTreeWithRetry(
+        host: String,
+        port: Int,
+        transferId: String,
+        destinationDirectory: String
+    ) -> FileTreeDownloadResult? {
+        let bridge = CoreBridge()
+        if let result = bridge.downloadFileTree(
+            host: host,
+            port: port,
+            transferId: transferId,
+            destinationDirectory: destinationDirectory
+        ) {
+            return result
+        }
+
+        sleep(for: Self.imageOfferDownloadRetryDelay)
+        return bridge.downloadFileTree(
+            host: host,
+            port: port,
+            transferId: transferId,
+            destinationDirectory: destinationDirectory
+        )
+    }
+
+    private func sleep(for delay: DispatchTimeInterval) {
+        switch delay {
+        case .seconds(let value):
+            Thread.sleep(forTimeInterval: TimeInterval(value))
+        case .milliseconds(let value):
+            Thread.sleep(forTimeInterval: TimeInterval(value) / 1_000)
+        case .microseconds(let value):
+            Thread.sleep(forTimeInterval: TimeInterval(value) / 1_000_000)
+        case .nanoseconds(let value):
+            Thread.sleep(forTimeInterval: TimeInterval(value) / 1_000_000_000)
+        case .never:
+            return
+        @unknown default:
+            return
+        }
+    }
+
     private func stagingDirectoryURL(for transferId: String) -> URL? {
         guard transferId.range(
             of: #"^[A-Za-z0-9-]{1,128}$"#,
@@ -544,6 +751,32 @@ final class UdpTextSyncService {
             .appendingPathComponent("ClipPlus", isDirectory: true)
             .appendingPathComponent("Staging", isDirectory: true)
             .appendingPathComponent(transferId, isDirectory: true)
+    }
+
+    private func imageTransferSourceURL(for transferId: String) -> URL? {
+        guard transferId.range(
+            of: #"^[A-Za-z0-9-]{1,128}$"#,
+            options: .regularExpression
+        ) == transferId.startIndex..<transferId.endIndex else {
+            return nil
+        }
+
+        let applicationSupportURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+
+        return applicationSupportURL
+            .appendingPathComponent("ClipPlus", isDirectory: true)
+            .appendingPathComponent("ImageTransfer", isDirectory: true)
+            .appendingPathComponent(transferId, isDirectory: true)
+            .appendingPathComponent("clipboard.png", isDirectory: false)
+    }
+
+    private func scheduleTemporaryImageTransferCleanup(_ directoryURL: URL) {
+        fileQueue.asyncAfter(deadline: .now() + 600) {
+            try? FileManager.default.removeItem(at: directoryURL)
+        }
     }
 
     private func fileSignature(_ paths: [String]) -> String {

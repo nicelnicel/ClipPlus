@@ -11,6 +11,7 @@ pub enum NativeClipboardMessageKind {
     Trust,
     Text,
     Image,
+    ImageOffer,
     FileOffer,
 }
 
@@ -151,6 +152,40 @@ impl NativeClipboardMessage {
         Ok(message)
     }
 
+    pub fn image_offer(
+        group_id: impl Into<String>,
+        sender_device_id: impl Into<String>,
+        sender_device_name: impl Into<String>,
+        transfer_id: impl Into<String>,
+        image_bytes: &[u8],
+        archive_port: u16,
+    ) -> Result<Self, NativeClipboardMessageError> {
+        if image_bytes.is_empty() {
+            return Err(NativeClipboardMessageError::InvalidField("image_bytes"));
+        }
+
+        let message = Self {
+            kind: NativeClipboardMessageKind::ImageOffer,
+            protocol_version: 1,
+            group_id: group_id.into(),
+            sender_device_id: sender_device_id.into(),
+            sender_device_name: sender_device_name.into(),
+            event_id: Uuid::new_v4(),
+            text: None,
+            image_base64: None,
+            image_byte_size: Some(image_bytes.len()),
+            image_content_hash: Some(sha256_hex(image_bytes)),
+            approved_device_id: None,
+            transfer_id: Some(transfer_id.into()),
+            transfer_format: Some(NativeFileTransferFormat::DirectTree),
+            files: None,
+            archive_port: Some(archive_port),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        };
+        message.validate()?;
+        Ok(message)
+    }
+
     pub fn file_offer(
         group_id: impl Into<String>,
         sender_device_id: impl Into<String>,
@@ -279,6 +314,40 @@ impl NativeClipboardMessage {
                 ));
             }
         }
+        if matches!(self.kind, NativeClipboardMessageKind::ImageOffer) {
+            if self.image_base64.is_some() {
+                return Err(NativeClipboardMessageError::InvalidField("image_base64"));
+            }
+            let Some(image_byte_size) = self.image_byte_size else {
+                return Err(NativeClipboardMessageError::InvalidField("image_byte_size"));
+            };
+            if image_byte_size == 0 {
+                return Err(NativeClipboardMessageError::InvalidField("image_byte_size"));
+            }
+            let Some(image_content_hash) = self.image_content_hash.as_deref() else {
+                return Err(NativeClipboardMessageError::InvalidField(
+                    "image_content_hash",
+                ));
+            };
+            if !is_sha256_hex(image_content_hash) {
+                return Err(NativeClipboardMessageError::InvalidField(
+                    "image_content_hash",
+                ));
+            }
+            if self
+                .transfer_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(NativeClipboardMessageError::InvalidField("transfer_id"));
+            }
+            if self.transfer_format != Some(NativeFileTransferFormat::DirectTree) {
+                return Err(NativeClipboardMessageError::InvalidField("transfer_format"));
+            }
+            if self.archive_port.is_none_or(|value| value == 0) {
+                return Err(NativeClipboardMessageError::InvalidField("archive_port"));
+            }
+        }
         if matches!(self.kind, NativeClipboardMessageKind::FileOffer) {
             if self
                 .transfer_id
@@ -314,6 +383,10 @@ impl NativeClipboardMessage {
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn is_safe_relative_file_offer_path(value: &str) -> bool {

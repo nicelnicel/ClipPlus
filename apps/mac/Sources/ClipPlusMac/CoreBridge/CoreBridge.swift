@@ -56,6 +56,24 @@ struct CoreBridge {
         )
     }
 
+    func createImageOfferMessageJSON(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        transferId: String,
+        pngData: Data,
+        archivePort: Int
+    ) -> String? {
+        Self.ffiBridge?.createImageOfferMessageJSON(
+            groupId: groupId,
+            senderDeviceId: senderDeviceId,
+            senderDeviceName: senderDeviceName,
+            transferId: transferId,
+            pngData: pngData,
+            archivePort: archivePort
+        )
+    }
+
     func createFileOfferMessageJSON(
         groupId: String,
         senderDeviceId: String,
@@ -304,6 +322,15 @@ private final class ClipPlusFFIBridge {
         UnsafeRawPointer?,
         Int
     ) -> UnsafeMutablePointer<CChar>?
+    private typealias CreateImageOfferMessageJSONFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafeRawPointer?,
+        Int,
+        UInt16
+    ) -> UnsafeMutablePointer<CChar>?
     private typealias CreateFileOfferMessageJSONFunction = @convention(c) (
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?,
@@ -373,6 +400,7 @@ private final class ClipPlusFFIBridge {
     private let createHelloMessageJSONFunction: CreateHelloMessageJSONFunction
     private let createTextMessageJSONFunction: CreateTextMessageJSONFunction
     private let createImageMessageJSONFunction: CreateImageMessageJSONFunction
+    private let createImageOfferMessageJSONFunction: CreateImageOfferMessageJSONFunction
     private let createFileOfferMessageJSONFunction: CreateFileOfferMessageJSONFunction
     private let writeFileArchiveZipFunction: WriteFileArchiveZipFunction
     private let serveFileArchiveToSocketFunction: ServeFileArchiveToSocketFunction
@@ -398,6 +426,7 @@ private final class ClipPlusFFIBridge {
         createHelloMessageJSONFunction: @escaping CreateHelloMessageJSONFunction,
         createTextMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         createImageMessageJSONFunction: @escaping CreateImageMessageJSONFunction,
+        createImageOfferMessageJSONFunction: @escaping CreateImageOfferMessageJSONFunction,
         createFileOfferMessageJSONFunction: @escaping CreateFileOfferMessageJSONFunction,
         writeFileArchiveZipFunction: @escaping WriteFileArchiveZipFunction,
         serveFileArchiveToSocketFunction: @escaping ServeFileArchiveToSocketFunction,
@@ -422,6 +451,7 @@ private final class ClipPlusFFIBridge {
         self.createHelloMessageJSONFunction = createHelloMessageJSONFunction
         self.createTextMessageJSONFunction = createTextMessageJSONFunction
         self.createImageMessageJSONFunction = createImageMessageJSONFunction
+        self.createImageOfferMessageJSONFunction = createImageOfferMessageJSONFunction
         self.createFileOfferMessageJSONFunction = createFileOfferMessageJSONFunction
         self.writeFileArchiveZipFunction = writeFileArchiveZipFunction
         self.serveFileArchiveToSocketFunction = serveFileArchiveToSocketFunction
@@ -457,6 +487,7 @@ private final class ClipPlusFFIBridge {
                   let createHelloMessageJSONSymbol = dlsym(handle, "clipplus_create_hello_message_json"),
                   let createTextMessageJSONSymbol = dlsym(handle, "clipplus_create_text_message_json"),
                   let createImageMessageJSONSymbol = dlsym(handle, "clipplus_create_image_message_json"),
+                  let createImageOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_image_offer_message_json"),
                   let createFileOfferMessageJSONSymbol = dlsym(handle, "clipplus_create_file_offer_message_json"),
                   let writeFileArchiveZipSymbol = dlsym(handle, "clipplus_write_file_archive_zip"),
                   let serveFileArchiveToSocketSymbol = dlsym(handle, "clipplus_serve_file_archive_to_socket"),
@@ -491,6 +522,10 @@ private final class ClipPlusFFIBridge {
             let createImageMessageJSONFunction = unsafeBitCast(
                 createImageMessageJSONSymbol,
                 to: CreateImageMessageJSONFunction.self
+            )
+            let createImageOfferMessageJSONFunction = unsafeBitCast(
+                createImageOfferMessageJSONSymbol,
+                to: CreateImageOfferMessageJSONFunction.self
             )
             let createFileOfferMessageJSONFunction = unsafeBitCast(
                 createFileOfferMessageJSONSymbol,
@@ -555,6 +590,7 @@ private final class ClipPlusFFIBridge {
                 createHelloMessageJSONFunction: createHelloMessageJSONFunction,
                 createTextMessageJSONFunction: createTextMessageJSONFunction,
                 createImageMessageJSONFunction: createImageMessageJSONFunction,
+                createImageOfferMessageJSONFunction: createImageOfferMessageJSONFunction,
                 createFileOfferMessageJSONFunction: createFileOfferMessageJSONFunction,
                 writeFileArchiveZipFunction: writeFileArchiveZipFunction,
                 serveFileArchiveToSocketFunction: serveFileArchiveToSocketFunction,
@@ -667,6 +703,48 @@ private final class ClipPlusFFIBridge {
                             rawBuffer.baseAddress,
                             pngData.count
                         )
+                    }
+                }
+            }
+        }
+
+        guard let resultPointer else {
+            return nil
+        }
+        defer { freeStringFunction(resultPointer) }
+
+        return String(cString: resultPointer)
+    }
+
+    func createImageOfferMessageJSON(
+        groupId: String,
+        senderDeviceId: String,
+        senderDeviceName: String,
+        transferId: String,
+        pngData: Data,
+        archivePort: Int
+    ) -> String? {
+        guard !pngData.isEmpty,
+              archivePort > 0,
+              archivePort <= Int(UInt16.max) else {
+            return nil
+        }
+
+        let resultPointer = groupId.withCString { groupIdPointer in
+            senderDeviceId.withCString { senderDeviceIdPointer in
+                senderDeviceName.withCString { senderDeviceNamePointer in
+                    transferId.withCString { transferIdPointer in
+                        pngData.withUnsafeBytes { rawBuffer in
+                            createImageOfferMessageJSONFunction(
+                                groupIdPointer,
+                                senderDeviceIdPointer,
+                                senderDeviceNamePointer,
+                                transferIdPointer,
+                                rawBuffer.baseAddress,
+                                pngData.count,
+                                UInt16(archivePort)
+                            )
+                        }
                     }
                 }
             }

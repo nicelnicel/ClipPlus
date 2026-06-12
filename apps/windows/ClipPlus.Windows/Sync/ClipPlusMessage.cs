@@ -9,6 +9,7 @@ public enum ClipPlusMessageKind
     Trust,
     Text,
     Image,
+    ImageOffer,
     FileOffer
 }
 
@@ -95,6 +96,26 @@ public sealed class ClipPlusMessage
             files,
             archivePort
         ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create file offer message.");
+
+        return FromJson(json);
+    }
+
+    public static ClipPlusMessage CreateImageOffer(
+        string groupId,
+        string senderDeviceId,
+        string senderDeviceName,
+        string transferId,
+        byte[] pngData,
+        int archivePort)
+    {
+        var json = new ClipPlus.Windows.CoreBridge.CoreBridge().CreateImageOfferMessageJson(
+            groupId,
+            senderDeviceId,
+            senderDeviceName,
+            transferId,
+            pngData,
+            archivePort
+        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create image offer message.");
 
         return FromJson(json);
     }

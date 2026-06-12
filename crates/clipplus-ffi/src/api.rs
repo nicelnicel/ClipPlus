@@ -201,6 +201,57 @@ pub unsafe extern "C" fn clipplus_create_image_message_json(
 }
 
 #[no_mangle]
+/// Creates a direct image-offer clipboard message JSON string using the native shell wire format.
+///
+/// # Safety
+///
+/// String pointer arguments must be non-null valid NUL-terminated UTF-8 C strings.
+/// `image_bytes` must be non-null and valid for `image_len` bytes. Invalid,
+/// empty, zero-port, or serialization-failing values return null. The returned
+/// non-null pointer follows the same ownership rules as [`clipplus_get_status_json`]
+/// and must be released with [`clipplus_free_string`].
+pub unsafe extern "C" fn clipplus_create_image_offer_message_json(
+    group_id: *const c_char,
+    sender_device_id: *const c_char,
+    sender_device_name: *const c_char,
+    transfer_id: *const c_char,
+    image_bytes: *const u8,
+    image_len: usize,
+    archive_port: u16,
+) -> *mut c_char {
+    panic::catch_unwind(|| {
+        let Some(group_id) = ffi_string(group_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_id) = ffi_string(sender_device_id) else {
+            return ptr::null_mut();
+        };
+        let Some(sender_device_name) = ffi_string(sender_device_name) else {
+            return ptr::null_mut();
+        };
+        let Some(transfer_id) = ffi_string(transfer_id) else {
+            return ptr::null_mut();
+        };
+        if image_bytes.is_null() || image_len == 0 || archive_port == 0 {
+            return ptr::null_mut();
+        }
+        let image_bytes = unsafe { std::slice::from_raw_parts(image_bytes, image_len) };
+
+        NativeClipboardMessage::image_offer(
+            group_id,
+            sender_device_id,
+            sender_device_name,
+            transfer_id,
+            image_bytes,
+            archive_port,
+        )
+        .and_then(|message| message.to_json())
+        .map_or(ptr::null_mut(), string_to_c_ptr)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
 /// Creates a file offer clipboard message JSON string using the native shell wire format.
 ///
 /// # Safety

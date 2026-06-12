@@ -243,25 +243,42 @@ public sealed class UdpTextSyncService : IDisposable
         }
 
         var pngData = clipboard.ReadPngImageData();
-        var imageMessage = pngData is null
-            ? null
-            : ClipPlusMessage.CreateImage(
-                state.SharedGroupId,
-                deviceId,
-                deviceName,
-                pngData
-            );
-        if (imageMessage?.ImageContentHash is null
-            || string.Equals(imageMessage.ImageContentHash, lastLocalImageHash, StringComparison.Ordinal)
-            || string.Equals(imageMessage.ImageContentHash, lastRemoteImageHash, StringComparison.Ordinal))
+        if (pngData is null)
         {
             return;
         }
 
-        lastLocalImageHash = imageMessage.ImageContentHash;
-        Send(imageMessage);
-        state.LastStatusMessage = "已广播图片剪贴板";
-        logger.Info($"published image clipboard byte_count={pngData!.Length}");
+        var imageHash = ImageContentHasher.Sha256Hex(pngData);
+        if (string.Equals(imageHash, lastLocalImageHash, StringComparison.Ordinal)
+            || string.Equals(imageHash, lastRemoteImageHash, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lastLocalImageHash = imageHash;
+        var imageMessage = ClipPlusMessage.CreateImage(
+            state.SharedGroupId,
+            deviceId,
+            deviceName,
+            pngData
+        );
+        if (imageMessage is not null)
+        {
+            Send(imageMessage);
+            state.LastStatusMessage = "已广播图片剪贴板";
+            logger.Info($"published image clipboard byte_count={pngData.Length}");
+            return;
+        }
+
+        if (PublishImageOffer(pngData, imageHash))
+        {
+            state.LastStatusMessage = "已广播图片剪贴板";
+            logger.Info($"published image clipboard byte_count={pngData.Length}");
+        }
+        else
+        {
+            lastLocalImageHash = null;
+        }
     }
 
     private string? LocalImageHashAfterClipboardWrite()
@@ -272,12 +289,7 @@ public sealed class UdpTextSyncService : IDisposable
             return null;
         }
 
-        return ClipPlusMessage.CreateImage(
-            state.SharedGroupId,
-            deviceId,
-            deviceName,
-            writtenPngData
-        )?.ImageContentHash;
+        return ImageContentHasher.Sha256Hex(writtenPngData);
     }
 
     private void Handle(ClipPlusMessage message, string sourceHost)
@@ -346,6 +358,28 @@ public sealed class UdpTextSyncService : IDisposable
                 state.LastStatusMessage = "已接收远端图片剪贴板";
                 logger.Info($"received image clipboard byte_count={imageData.Length}");
                 break;
+            case ClipPlusMessageKind.ImageOffer:
+                if (!state.SharingEnabled
+                    || string.IsNullOrEmpty(message.TransferId)
+                    || message.TransferFormat != ClipPlus.Windows.Sync.FileTransferFormat.DirectTree
+                    || message.ImageByteSize is null
+                    || message.ImageByteSize <= 0
+                    || string.IsNullOrEmpty(message.ImageContentHash)
+                    || message.ArchivePort is null
+                    || message.ArchivePort <= 0
+                    || !remoteFileTransfers.Begin(message.TransferId))
+                {
+                    return;
+                }
+
+                _ = Task.Run(async () => await DownloadRemoteImageOfferAsync(
+                    sourceHost,
+                    message.TransferId,
+                    message.ImageByteSize.Value,
+                    message.ImageContentHash,
+                    message.ArchivePort.Value));
+                logger.Info($"received image offer byte_count={message.ImageByteSize.Value}");
+                break;
             case ClipPlusMessageKind.FileOffer:
                 if (!state.SharingEnabled
                     || string.IsNullOrEmpty(message.TransferId)
@@ -392,6 +426,64 @@ public sealed class UdpTextSyncService : IDisposable
         ));
         state.LastStatusMessage = "已广播文件剪贴板";
         logger.Info($"published file offer file_count={items.Length}");
+    }
+
+    private bool PublishImageOffer(byte[] pngData, string imageHash)
+    {
+        var transferId = Guid.NewGuid().ToString();
+        string sourcePath;
+        try
+        {
+            sourcePath = ImageTransferSourcePath(transferId);
+            var transferDirectory = Path.GetDirectoryName(sourcePath)
+                ?? throw new InvalidOperationException("invalid image transfer directory");
+            if (Directory.Exists(transferDirectory))
+            {
+                Directory.Delete(transferDirectory, recursive: true);
+            }
+
+            Directory.CreateDirectory(transferDirectory);
+            File.WriteAllBytes(sourcePath, pngData);
+        }
+        catch (Exception error)
+        {
+            state.LastStatusMessage = "图片广播失败";
+            logger.Error($"image transfer source write failed error_type={error.GetType().Name}");
+            return false;
+        }
+
+        if (!RegisterTemporaryImageTransferSource(transferId, sourcePath))
+        {
+            TryDeleteDirectory(Path.GetDirectoryName(sourcePath));
+            state.LastStatusMessage = "图片广播失败";
+            logger.Error("image transfer registration failed stage=server");
+            return false;
+        }
+
+        var message = ClipPlusMessage.CreateImageOffer(
+            state.SharedGroupId,
+            deviceId,
+            deviceName,
+            transferId,
+            pngData,
+            ArchivePort);
+        if (!string.Equals(message.ImageContentHash, imageHash, StringComparison.Ordinal))
+        {
+            TryDeleteDirectory(Path.GetDirectoryName(sourcePath));
+            state.LastStatusMessage = "图片广播失败";
+            logger.Error("image transfer registration failed stage=hash");
+            return false;
+        }
+
+        Send(message);
+        ScheduleTemporaryImageTransferCleanup(Path.GetDirectoryName(sourcePath));
+        logger.Info($"published image offer byte_count={pngData.Length}");
+        return true;
+    }
+
+    private bool RegisterTemporaryImageTransferSource(string transferId, string sourcePath)
+    {
+        return fileServer?.RegisterTransfer(transferId, new[] { sourcePath }) == true;
     }
 
     private static FileTransferItem CreateFileTransferItem(string path)
@@ -463,6 +555,83 @@ public sealed class UdpTextSyncService : IDisposable
         }
 
         _ = Task.Run(async () => await DownloadRemoteFileOfferAsync(offer));
+    }
+
+    private async Task DownloadRemoteImageOfferAsync(
+        string sourceHost,
+        string transferId,
+        int expectedByteSize,
+        string expectedHash,
+        int port)
+    {
+        try
+        {
+            var safeTransferId = SafeTransferIdOrThrow(transferId);
+            var destinationDirectory = StagingDirectoryForTransfer(safeTransferId);
+            if (Directory.Exists(destinationDirectory))
+            {
+                Directory.Delete(destinationDirectory, recursive: true);
+            }
+
+            var result = await DownloadFileTreeWithRetry(
+                sourceHost,
+                port,
+                transferId,
+                destinationDirectory);
+            if (result is null)
+            {
+                throw new InvalidOperationException("image transfer download failed");
+            }
+
+            var topLevelPaths = result.TopLevelPaths.ToArray();
+            if (result.FileCount != 1
+                || topLevelPaths.Length != 1
+                || result.ByteCount != (ulong)expectedByteSize)
+            {
+                throw new InvalidOperationException("image transfer summary mismatch");
+            }
+
+            var imageData = File.ReadAllBytes(topLevelPaths[0]);
+            if (imageData.Length != expectedByteSize
+                || !string.Equals(ImageContentHasher.Sha256Hex(imageData), expectedHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("image transfer hash mismatch");
+            }
+
+            await dispatcher.InvokeAsync(() =>
+            {
+                lastRemoteImageHash = expectedHash;
+                lastLocalImageHash = expectedHash;
+                clipboard.WritePngImageData(imageData);
+                lastLocalImageHash = LocalImageHashAfterClipboardWrite() ?? lastLocalImageHash;
+                state.LastStatusMessage = "已接收远端图片剪贴板";
+                remoteFileTransfers.Complete(transferId);
+            });
+            logger.Info($"downloaded image clipboard byte_count={imageData.Length}");
+        }
+        catch (Exception error)
+        {
+            remoteFileTransfers.Fail(transferId);
+            await dispatcher.InvokeAsync(() => state.LastStatusMessage = "图片接收失败");
+            logger.Error($"image transfer download failed stage=receive error_type={error.GetType().Name}");
+        }
+    }
+
+    private static async Task<FileTreeDownloadResult?> DownloadFileTreeWithRetry(
+        string sourceHost,
+        int port,
+        string transferId,
+        string destinationDirectory)
+    {
+        var bridge = new ClipPlus.Windows.CoreBridge.CoreBridge();
+        var result = bridge.DownloadFileTree(sourceHost, port, transferId, destinationDirectory);
+        if (result is not null)
+        {
+            return result;
+        }
+
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+        return bridge.DownloadFileTree(sourceHost, port, transferId, destinationDirectory);
     }
 
     private async Task DownloadRemoteFileOfferAsync(RemoteFileOfferSummary offer)
@@ -549,6 +718,59 @@ public sealed class UdpTextSyncService : IDisposable
         }
 
         return destinationFullPath;
+    }
+
+    private static string ImageTransferSourcePath(string transferId)
+    {
+        var safeTransferId = SafeTransferIdOrThrow(transferId);
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClipPlus",
+            "ImageTransfer");
+        Directory.CreateDirectory(root);
+        var sourcePath = Path.Combine(root, safeTransferId, "clipboard.png");
+        var rootFullPath = Path.GetFullPath(root);
+        var sourceFullPath = Path.GetFullPath(sourcePath);
+        if (!IsSameOrChildPath(rootFullPath, sourceFullPath))
+        {
+            throw new InvalidOperationException("invalid image transfer source");
+        }
+
+        return sourceFullPath;
+    }
+
+    private static void ScheduleTemporaryImageTransferCleanup(string? directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath))
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMinutes(10));
+            TryDeleteDirectory(directoryPath);
+        });
+    }
+
+    private static void TryDeleteDirectory(string? directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temporary transfer sources.
+        }
     }
 
     private static bool IsPathUnderStagingRoot(string path)

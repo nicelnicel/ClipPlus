@@ -816,6 +816,36 @@ final class SettingsStateTests: XCTestCase {
         )
     }
 
+    func testClipPlusMessageRoundTripsDirectImageOfferPayloadWithoutInlineData() throws {
+        let pngData = Data(repeating: 0xAB, count: ClipPlusMessage.maxInlineImageBytes + 16)
+        let message = ClipPlusMessage.imageOffer(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            transferId: "image-transfer-1",
+            pngData: pngData,
+            archivePort: 47_632
+        )
+
+        let data = try JSONEncoder().encode(message)
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .imageOffer)
+        XCTAssertEqual(decoded.protocolVersion, 1)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.transferId, "image-transfer-1")
+        XCTAssertEqual(decoded.transferFormat, .directTree)
+        XCTAssertEqual(decoded.archivePort, 47_632)
+        XCTAssertEqual(decoded.imageByteSize, pngData.count)
+        XCTAssertEqual(decoded.imageBase64, nil)
+        XCTAssertEqual(decoded.decodedImageData, nil)
+        XCTAssertEqual(
+            decoded.imageContentHash,
+            "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d"
+        )
+    }
+
     func testCoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable() throws {
         let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
         let json = try XCTUnwrap(CoreBridge().createImageMessageJSON(
@@ -835,6 +865,42 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(
             decoded.imageContentHash,
             "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"
+        )
+    }
+
+    func testCoreBridgeCreatesImageOfferMessageJsonWhenFfiLibraryIsAvailable() throws {
+        let pngData = Data(repeating: 0xAB, count: ClipPlusMessage.maxInlineImageBytes + 16)
+        let json = try XCTUnwrap(CoreBridge().createImageOfferMessageJSON(
+            groupId: "group-1",
+            senderDeviceId: "mac-device",
+            senderDeviceName: "Mac",
+            transferId: "image-transfer-1",
+            pngData: pngData,
+            archivePort: 47_632
+        ))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
+
+        XCTAssertEqual(decoded.kind, .imageOffer)
+        XCTAssertEqual(decoded.groupId, "group-1")
+        XCTAssertEqual(decoded.senderDeviceId, "mac-device")
+        XCTAssertEqual(decoded.transferId, "image-transfer-1")
+        XCTAssertEqual(decoded.transferFormat, .directTree)
+        XCTAssertEqual(decoded.archivePort, 47_632)
+        XCTAssertEqual(decoded.imageByteSize, pngData.count)
+        XCTAssertEqual(decoded.imageBase64, nil)
+        XCTAssertEqual(
+            decoded.imageContentHash,
+            "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d"
+        )
+    }
+
+    func testImageContentHasherMatchesRustImageHash() {
+        let pngData = Data(repeating: 0xAB, count: ClipPlusMessage.maxInlineImageBytes + 16)
+
+        XCTAssertEqual(
+            ImageContentHasher.sha256Hex(pngData),
+            "e5a22cfa04e9800c1b7c805736d6ba84b8f76fe9c5aabc203896966aab53009d"
         )
     }
 
@@ -1408,6 +1474,24 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(syncServiceSource.contains("downloadFileArchive("))
         XCTAssertFalse(syncServiceSource.contains("serveNext(tempDirectory:"))
         XCTAssertFalse(syncServiceSource.contains("logger.error(\"file tree staging failed: \\(error.localizedDescription)\""))
+    }
+
+    func testMacImageRuntimeUsesDirectTransferForOversizedImages() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(syncServiceSource.contains("publishImageOffer"))
+        XCTAssertTrue(syncServiceSource.contains("downloadRemoteImageOffer"))
+        XCTAssertTrue(syncServiceSource.contains("case .imageOffer"))
+        XCTAssertTrue(syncServiceSource.contains("ImageContentHasher.sha256Hex"))
+        XCTAssertTrue(syncServiceSource.contains("registerTemporaryImageTransferSource"))
+        XCTAssertTrue(syncServiceSource.contains("downloadFileTreeWithRetry"))
+        XCTAssertTrue(syncServiceSource.contains(".milliseconds(250)"))
     }
 
     func testMacFileRuntimeSynchronizesFileSignaturesThroughLock() throws {
