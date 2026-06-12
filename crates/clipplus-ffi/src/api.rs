@@ -539,23 +539,27 @@ pub unsafe extern "C" fn clipplus_file_server_serve_next(
 ///
 /// `handle` must be a valid pointer returned by [`clipplus_file_server_bind`].
 /// This call blocks until one client connects or the listener errors. It returns
-/// the streamed file byte count, or `0` on null handle, unknown transfer id,
-/// invalid paths, or IO failure.
+/// an owned JSON summary pointer, or null on null handle, unknown transfer id,
+/// invalid paths, or IO failure. The returned non-null pointer follows the same
+/// ownership rules as [`clipplus_get_status_json`] and must be released with
+/// [`clipplus_free_string`].
 pub unsafe extern "C" fn clipplus_file_server_serve_next_tree(
     handle: *mut ClipPlusFileServerHandle,
-) -> u64 {
+) -> *mut c_char {
     panic::catch_unwind(|| {
         if handle.is_null() {
-            return 0;
+            return ptr::null_mut();
         }
 
         let handle = unsafe { &*handle };
         handle
             .server
             .serve_next_tree()
-            .map_or(0, |summary| summary.byte_count)
+            .ok()
+            .map(|summary| file_transfer_tree_summary_to_json(&summary))
+            .map_or(ptr::null_mut(), string_to_c_ptr)
     })
-    .unwrap_or(0)
+    .unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]

@@ -58,6 +58,20 @@ unsafe fn take_ffi_string(ptr: *mut std::ffi::c_char) -> String {
     value
 }
 
+unsafe fn take_tree_summary_value(ptr: *mut std::ffi::c_char) -> Value {
+    let json = unsafe { take_ffi_string(ptr) };
+    let value: Value = serde_json::from_str(&json).expect("tree summary json should parse");
+    let mut keys = value
+        .as_object()
+        .expect("tree summary json should be an object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(keys, ["byteCount", "fileCount", "topLevelPaths"]);
+    value
+}
+
 #[cfg(unix)]
 fn raw_socket_value(stream: &std::net::TcpStream) -> usize {
     stream.as_raw_fd() as usize
@@ -624,7 +638,7 @@ fn ffi_file_server_serves_registered_file_tree_for_native_shells() {
     let handle_value = handle as usize;
     let server = thread::spawn(move || unsafe {
         let handle = handle_value as *mut clipplus_ffi::api::ClipPlusFileServerHandle;
-        clipplus_file_server_serve_next_tree(handle)
+        clipplus_file_server_serve_next_tree(handle) as usize
     });
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -632,14 +646,112 @@ fn ffi_file_server_serves_registered_file_tree_for_native_shells() {
     let staging_directory = temporary_directory.join("received");
     let summary =
         FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
-    let served_byte_count = server.join().unwrap();
+    let result_pointer = server.join().unwrap() as *mut std::ffi::c_char;
 
-    assert_eq!(served_byte_count, summary.byte_count);
+    assert!(!result_pointer.is_null());
+    let value = unsafe { take_tree_summary_value(result_pointer) };
     assert_eq!(summary.file_count, 1);
+    assert_eq!(value["fileCount"], 1);
+    assert_eq!(value["byteCount"], summary.byte_count);
+    assert_eq!(
+        value["topLevelPaths"],
+        serde_json::json!(["registered.txt"])
+    );
     assert_eq!(
         std::fs::read_to_string(staging_directory.join("registered.txt")).unwrap(),
         "ffi direct server"
     );
+
+    unsafe { clipplus_file_server_free(handle) };
+}
+
+#[test]
+fn ffi_file_server_serves_zero_byte_file_tree_for_native_shells() {
+    let temporary_directory = unique_temp_dir();
+    let source_file = temporary_directory.join("empty.txt");
+    std::fs::write(&source_file, "").unwrap();
+    let source_paths_json =
+        CString::new(format!(r#"["{}"]"#, json_escape_path(&source_file))).unwrap();
+    let transfer_id = CString::new("transfer-a").unwrap();
+    let handle = unsafe { clipplus_file_server_bind(0) };
+    assert!(!handle.is_null());
+    let port = unsafe { clipplus_file_server_local_port(handle) };
+    assert_ne!(port, 0);
+    assert!(unsafe {
+        clipplus_file_server_register_transfer(
+            handle,
+            transfer_id.as_ptr(),
+            source_paths_json.as_ptr(),
+        )
+    });
+    let handle_value = handle as usize;
+    let server = thread::spawn(move || unsafe {
+        let handle = handle_value as *mut clipplus_ffi::api::ClipPlusFileServerHandle;
+        clipplus_file_server_serve_next_tree(handle) as usize
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client.write_all(b"transfer-a\n").unwrap();
+    let staging_directory = temporary_directory.join("received");
+    let summary =
+        FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
+    let result_pointer = server.join().unwrap() as *mut std::ffi::c_char;
+
+    assert!(!result_pointer.is_null());
+    let value = unsafe { take_tree_summary_value(result_pointer) };
+    assert_eq!(summary.file_count, 1);
+    assert_eq!(summary.byte_count, 0);
+    assert_eq!(value["fileCount"], 1);
+    assert_eq!(value["byteCount"], 0);
+    assert_eq!(value["topLevelPaths"], serde_json::json!(["empty.txt"]));
+    assert_eq!(
+        std::fs::read_to_string(staging_directory.join("empty.txt")).unwrap(),
+        ""
+    );
+
+    unsafe { clipplus_file_server_free(handle) };
+}
+
+#[test]
+fn ffi_file_server_serves_empty_directory_tree_for_native_shells() {
+    let temporary_directory = unique_temp_dir();
+    let source_directory = temporary_directory.join("EmptyFolder");
+    std::fs::create_dir_all(&source_directory).unwrap();
+    let source_paths_json =
+        CString::new(format!(r#"["{}"]"#, json_escape_path(&source_directory))).unwrap();
+    let transfer_id = CString::new("transfer-a").unwrap();
+    let handle = unsafe { clipplus_file_server_bind(0) };
+    assert!(!handle.is_null());
+    let port = unsafe { clipplus_file_server_local_port(handle) };
+    assert_ne!(port, 0);
+    assert!(unsafe {
+        clipplus_file_server_register_transfer(
+            handle,
+            transfer_id.as_ptr(),
+            source_paths_json.as_ptr(),
+        )
+    });
+    let handle_value = handle as usize;
+    let server = thread::spawn(move || unsafe {
+        let handle = handle_value as *mut clipplus_ffi::api::ClipPlusFileServerHandle;
+        clipplus_file_server_serve_next_tree(handle) as usize
+    });
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client.write_all(b"transfer-a\n").unwrap();
+    let staging_directory = temporary_directory.join("received");
+    let summary =
+        FileTransferTree::read_length_prefixed_tree(&mut client, &staging_directory).unwrap();
+    let result_pointer = server.join().unwrap() as *mut std::ffi::c_char;
+
+    assert!(!result_pointer.is_null());
+    let value = unsafe { take_tree_summary_value(result_pointer) };
+    assert_eq!(summary.file_count, 0);
+    assert_eq!(summary.byte_count, 0);
+    assert_eq!(value["fileCount"], 0);
+    assert_eq!(value["byteCount"], 0);
+    assert_eq!(value["topLevelPaths"], serde_json::json!(["EmptyFolder"]));
+    assert!(staging_directory.join("EmptyFolder").is_dir());
 
     unsafe { clipplus_file_server_free(handle) };
 }
@@ -674,14 +786,8 @@ fn ffi_file_server_rejects_invalid_values() {
         unsafe { clipplus_file_server_serve_next(ptr::null_mut(), ptr::null()) },
         0
     );
-    assert_eq!(
-        unsafe { clipplus_file_server_serve_next_tree(ptr::null_mut()) },
-        0
-    );
-    assert_eq!(
-        unsafe { reexported_file_server_serve_next_tree(ptr::null_mut()) },
-        0
-    );
+    assert!(unsafe { clipplus_file_server_serve_next_tree(ptr::null_mut()) }.is_null());
+    assert!(unsafe { reexported_file_server_serve_next_tree(ptr::null_mut()) }.is_null());
 
     let handle = unsafe { clipplus_file_server_bind(0) };
     assert!(!handle.is_null());
@@ -908,6 +1014,11 @@ fn ffi_download_file_tree_rejects_invalid_values() {
     let host = CString::new("127.0.0.1").unwrap();
     let empty = CString::new(" ").unwrap();
     let transfer_id = CString::new("transfer-a").unwrap();
+    let blank_transfer_id = CString::new(" ").unwrap();
+    let existing_destination_file = temporary_directory.join("existing-file");
+    std::fs::write(&existing_destination_file, "not a directory").unwrap();
+    let existing_destination_file =
+        CString::new(existing_destination_file.to_string_lossy().to_string()).unwrap();
 
     assert!(unsafe {
         clipplus_download_file_tree(
@@ -946,7 +1057,25 @@ fn ffi_download_file_tree_rejects_invalid_values() {
     }
     .is_null());
     assert!(unsafe {
+        clipplus_download_file_tree(
+            host.as_ptr(),
+            47_632,
+            blank_transfer_id.as_ptr(),
+            destination_directory.as_ptr(),
+        )
+    }
+    .is_null());
+    assert!(unsafe {
         clipplus_download_file_tree(host.as_ptr(), 47_632, transfer_id.as_ptr(), ptr::null())
+    }
+    .is_null());
+    assert!(unsafe {
+        clipplus_download_file_tree(
+            host.as_ptr(),
+            47_632,
+            transfer_id.as_ptr(),
+            existing_destination_file.as_ptr(),
+        )
     }
     .is_null());
 }
