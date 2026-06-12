@@ -2,7 +2,7 @@
 
 ## 测试目标
 
-验证 macOS 宿主机和 Parallels Windows 虚拟机能运行 ClipPlus，并在关闭 Parallels 自带剪贴板共享后，通过 ClipPlus 完成共享 Key 设置、设备确认、文字/图片同步、文件按需传输、日志和诊断检查。
+验证 macOS 宿主机和 Parallels Windows 虚拟机能运行 ClipPlus，并在关闭 Parallels 自带剪贴板共享后，通过 ClipPlus 完成共享 Key 设置、同 Key 自动加入、文字/图片同步、文件剪贴板传输、日志和诊断检查。
 
 ## 测试前置条件
 
@@ -34,13 +34,13 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
 10. mac 复制 `hello from mac`，Windows 粘贴应得到相同文字。
 11. Windows 复制 `hello from windows`，mac 粘贴应得到相同文字。
 12. 图片同步至少复验一个真实跨系统方向；若仍使用 inline UDP MVP，图片应小于 32 KiB。
-13. 文件按需传输至少复验一个真实跨系统方向：
+13. 文件剪贴板传输至少复验一个真实跨系统方向，涉及文件传输实现时需覆盖 macOS -> Windows 和 Windows -> macOS：
     - 发送端把真实文件复制到系统剪贴板。
     - 接收端日志出现 `received file offer`。
-    - 接收端自动下载，不需要点击接收按钮，也不需要设置隐藏自动接收环境变量。
-    - 接收端 `Downloads` 生成 `ClipPlus-Received-<transferId>.zip`。
-    - 解压 zip，确认文件名和内容与发送端源文件一致。
-    - 两端日志分别出现 `served file archive` 和 `downloaded file archive`。
+    - 接收端自动下载到 ClipPlus staging 目录，不需要点击接收按钮，也不需要设置隐藏自动接收环境变量。
+    - 接收端系统文件剪贴板出现 staging 下的文件或目录路径。
+    - 在接收端读取文件剪贴板路径，确认文件名和内容与发送端源文件一致。
+    - 两端日志分别出现 `served file tree` 和 `downloaded file tree`。
 14. 开机启动改动要做系统读回验证；Windows 可用显式环境变量触发 HKCU Run 真实写入/读回/清理测试：
 
 macOS 可用调试 smoke test 验证 `SMAppService.mainApp` 注册/读回/注销/读回，并恢复原始状态：
@@ -68,13 +68,10 @@ Windows -> macOS 方向可以用下面命令在 Windows 侧设置 FileDropList�
 prlctl exec "Windows 11" --current-user powershell -NoProfile -Command "\$dir=Join-Path \$env:TEMP 'ClipPlusE2E'; New-Item -ItemType Directory -Force -Path \$dir | Out-Null; \$path=Join-Path \$dir 'windows-source.txt'; Set-Content -Path \$path -Value ([string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()); Set-Clipboard -Path \$path; Start-Sleep -Milliseconds 500; \$files=Get-Clipboard -Format FileDropList; Write-Output \$path; Write-Output ('ClipboardFiles=' + \$files.Count); foreach (\$file in \$files) { Write-Output \$file.FullName }"
 ```
 
-macOS 收到远端文件 offer 后会自动下载。完成后解压最新下载包并比对 Windows 源文件：
+macOS 收到远端文件 offer 后会自动下载到 staging，并把 staging 文件路径写入系统文件剪贴板。完成后读取 macOS 文件剪贴板并比对 Windows 源文件：
 
 ```bash
-tmpdir=$(mktemp -d /tmp/clipplus-received.XXXXXX)
-unzip -q ~/Downloads/ClipPlus-Received-<transferId>.zip -d "$tmpdir"
-find "$tmpdir" -type f -maxdepth 3 -print
-cat "$tmpdir/windows-source.txt"
+swift -e 'import AppKit; let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []; for url in urls { print(url.path); if let content = try? String(contentsOf: url, encoding: .utf8) { print(content) } }'
 ```
 
 ## 失败定位
