@@ -952,8 +952,16 @@ internal sealed class ClipPlusFfiBridge
 
         var extractionDirectory = Path.Combine(Path.GetTempPath(), "ClipPlus", assembly.GetName().Version?.ToString() ?? "dev");
         Directory.CreateDirectory(extractionDirectory);
-        var extractionPath = Path.Combine(extractionDirectory, resourceName);
-        using (var output = File.Create(extractionPath))
+        var resourceLength = resourceStream.CanSeek ? resourceStream.Length : 0;
+        var extractionPath = Path.Combine(
+            extractionDirectory,
+            $"clipplus_ffi-{Environment.ProcessId}-{resourceLength}.dll");
+        if (File.Exists(extractionPath) && new FileInfo(extractionPath).Length > 0)
+        {
+            return extractionPath;
+        }
+
+        using (var output = new FileStream(extractionPath, FileMode.Create, FileAccess.Write, FileShare.Read))
         {
             resourceStream.CopyTo(output);
         }

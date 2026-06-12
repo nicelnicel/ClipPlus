@@ -453,6 +453,25 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void CoreBridgeExtractsEmbeddedFfiToProcessScopedTempPath()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var coreBridgeSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "CoreBridge",
+            "CoreBridge.cs"
+        ));
+
+        Assert.Contains("Environment.ProcessId", coreBridgeSource);
+        Assert.Contains("FileMode.Create", coreBridgeSource);
+        Assert.Contains("FileShare.Read", coreBridgeSource);
+        Assert.DoesNotContain("File.Create(extractionPath)", coreBridgeSource);
+    }
+
+    [Fact]
     public void MismatchedSharedKeyConfirmationFails()
     {
         var state = new SettingsState(
@@ -1192,8 +1211,9 @@ public sealed class SettingsStateTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md"))
-                && Directory.Exists(Path.Combine(directory.FullName, "apps")))
+            if (File.Exists(Path.Combine(directory.FullName, "Cargo.toml"))
+                && Directory.Exists(Path.Combine(directory.FullName, "apps"))
+                && Directory.Exists(Path.Combine(directory.FullName, "crates")))
             {
                 return directory.FullName;
             }

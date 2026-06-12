@@ -464,6 +464,8 @@ final class SettingsStateTests: XCTestCase {
         let windowsIconURL = repositoryRoot.appendingPathComponent("apps/windows/ClipPlus.Windows/Resources/ClipPlus.ico")
         let packageScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-app.sh")
         let dmgScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-dmg.sh")
+        let windowsRuntimeDependentScriptURL = repositoryRoot
+            .appendingPathComponent("scripts/dev/publish-windows-runtime-dependent.ps1")
         let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
         let workflowURL = repositoryRoot.appendingPathComponent(".github/workflows/ci.yml")
         let readmeURL = repositoryRoot.appendingPathComponent("README.md")
@@ -473,6 +475,10 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: macMenuBarIconURL.path), "缺少 macOS 菜单栏图标")
         XCTAssertTrue(FileManager.default.fileExists(atPath: windowsIconURL.path), "缺少 Windows ico 图标")
         XCTAssertTrue(FileManager.default.fileExists(atPath: dmgScriptURL.path), "macOS 发布产物应该提供 DMG 打包脚本")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: windowsRuntimeDependentScriptURL.path),
+            "Windows 应该提供依赖系统运行环境的小体积发布脚本"
+        )
 
         let packageScript = try String(contentsOf: packageScriptURL, encoding: .utf8)
         XCTAssertTrue(packageScript.contains("CFBundleIconFile"))
@@ -491,12 +497,25 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(dmgScript.contains("-format UDZO"))
         XCTAssertTrue(dmgScript.contains("-srcfolder \"$app_dir\""))
 
+        let windowsRuntimeDependentScript = try String(contentsOf: windowsRuntimeDependentScriptURL, encoding: .utf8)
+        XCTAssertTrue(windowsRuntimeDependentScript.contains("--self-contained false"))
+        XCTAssertTrue(windowsRuntimeDependentScript.contains("/p:PublishSingleFile=true"))
+        XCTAssertFalse(windowsRuntimeDependentScript.contains("EnableCompressionInSingleFile"))
+        XCTAssertTrue(windowsRuntimeDependentScript.contains("target\\windows-runtime-dependent"))
+
         let workflowSource = try String(contentsOf: workflowURL, encoding: .utf8)
         XCTAssertTrue(workflowSource.contains("./scripts/dev/package-mac-dmg.sh"))
         XCTAssertTrue(workflowSource.contains("path: target/macos/ClipPlus-macOS.dmg"))
+        XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-full.exe"))
+        XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
+        XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 full exe"))
+        XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 runtime-dependent exe"))
 
         let readmeSource = try String(contentsOf: readmeURL, encoding: .utf8)
         XCTAssertTrue(readmeSource.contains("ClipPlus-macOS.dmg"))
+        XCTAssertTrue(readmeSource.contains("ClipPlus-Windows-x64-full.exe"))
+        XCTAssertTrue(readmeSource.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
+        XCTAssertTrue(readmeSource.contains(".NET 8 Desktop Runtime"))
 
         let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
         XCTAssertTrue(appSource.contains("ClipPlusMenuBar"))
