@@ -22,6 +22,7 @@ final class UdpTextSyncService {
     private var lastRemoteText: String?
     private var lastLocalImageHash: String?
     private var lastRemoteImageHash: String?
+    private let fileSignatureLock = NSLock()
     private var lastLocalFileSignature: String?
     private var lastRemoteFileSignature: String?
     private var tickCount = 0
@@ -159,12 +160,10 @@ final class UdpTextSyncService {
         let fileURLs = clipboard.readFileURLs()
         if !fileURLs.isEmpty {
             let signature = fileSignature(fileURLs.map(\.path))
-            guard signature != lastLocalFileSignature,
-                  signature != lastRemoteFileSignature else {
+            guard shouldPublishLocalFileSignature(signature) else {
                 return
             }
 
-            lastLocalFileSignature = signature
             publishFileOffer(fileURLs: fileURLs, groupId: snapshot.sharedGroupId)
             return
         }
@@ -442,14 +441,17 @@ final class UdpTextSyncService {
                 return
             }
 
-            lastRemoteFileSignature = remoteSignature
-            lastLocalFileSignature = remoteSignature
-            clipboard.writeFileURLs(urls)
+            recordRemoteFileSignature(remoteSignature)
+            guard clipboard.writeFileURLs(urls) else {
+                clearRemoteFileSignature(ifMatching: remoteSignature)
+                state.lastStatusMessage = "文件接收失败"
+                logger.error("file clipboard write failed")
+                return
+            }
 
             let pasteboardSignature = fileSignature(clipboard.readFileURLs().map(\.path))
             if !pasteboardSignature.isEmpty {
-                lastRemoteFileSignature = pasteboardSignature
-                lastLocalFileSignature = pasteboardSignature
+                recordRemoteFileSignature(pasteboardSignature)
             }
 
             state.clearRemoteFileOffer(transferId: offer.transferId)
@@ -460,10 +462,10 @@ final class UdpTextSyncService {
     }
 
     private func stagingDirectoryURL(for transferId: String) -> URL? {
-        guard !transferId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              transferId != ".",
-              transferId != "..",
-              transferId.rangeOfCharacter(from: CharacterSet(charactersIn: "/:")) == nil else {
+        guard transferId.range(
+            of: #"^[A-Za-z0-9-]{1,128}$"#,
+            options: .regularExpression
+        ) == transferId.startIndex..<transferId.endIndex else {
             return nil
         }
 
@@ -479,9 +481,51 @@ final class UdpTextSyncService {
     }
 
     private func fileSignature(_ paths: [String]) -> String {
-        paths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        let fileSignatureComponents = paths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
             .sorted()
-            .joined(separator: "|")
+            .map { "\($0.utf8.count):\($0)" }
+
+        return fileSignatureComponents.joined()
+    }
+
+    private func shouldPublishLocalFileSignature(_ signature: String) -> Bool {
+        guard !signature.isEmpty else {
+            return false
+        }
+
+        fileSignatureLock.lock()
+        defer { fileSignatureLock.unlock() }
+
+        guard signature != lastLocalFileSignature,
+              signature != lastRemoteFileSignature else {
+            return false
+        }
+
+        lastLocalFileSignature = signature
+        return true
+    }
+
+    private func recordRemoteFileSignature(_ signature: String) {
+        guard !signature.isEmpty else {
+            return
+        }
+
+        fileSignatureLock.lock()
+        defer { fileSignatureLock.unlock() }
+        lastRemoteFileSignature = signature
+        lastLocalFileSignature = signature
+    }
+
+    private func clearRemoteFileSignature(ifMatching signature: String) {
+        fileSignatureLock.lock()
+        defer { fileSignatureLock.unlock() }
+
+        if lastRemoteFileSignature == signature {
+            lastRemoteFileSignature = nil
+        }
+        if lastLocalFileSignature == signature {
+            lastLocalFileSignature = nil
+        }
     }
 
     private func sendHello() {

@@ -1278,16 +1278,9 @@ final class SettingsStateTests: XCTestCase {
     }
 
     func testNativeClipboardWritesFileURLsForFinderPaste() throws {
-        let originalFileURLs = NativeClipboard().readFileURLs()
-        let originalText = NSPasteboard.general.string(forType: .string)
+        let originalPasteboard = PasteboardSnapshot.capture()
         defer {
-            if !originalFileURLs.isEmpty {
-                NativeClipboard().writeFileURLs(originalFileURLs)
-            } else if let originalText {
-                NativeClipboard().writeText(originalText)
-            } else {
-                NSPasteboard.general.clearContents()
-            }
+            originalPasteboard.restore()
         }
 
         let temporaryDirectory = FileManager.default.temporaryDirectory
@@ -1297,7 +1290,25 @@ final class SettingsStateTests: XCTestCase {
         let sourceURL = temporaryDirectory.appendingPathComponent("finder-paste.txt")
         try "paste from finder".write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        NativeClipboard().writeFileURLs([sourceURL])
+        let backgroundWrite = expectation(description: "background pasteboard write rejected")
+        var backgroundWriteResult: Bool?
+        DispatchQueue.global().async {
+            backgroundWriteResult = NativeClipboard().writeFileURLs([sourceURL])
+            backgroundWrite.fulfill()
+        }
+        wait(for: [backgroundWrite], timeout: 2)
+        XCTAssertEqual(backgroundWriteResult, false)
+
+        let writeSucceeded: Bool
+        if Thread.isMainThread {
+            writeSucceeded = NativeClipboard().writeFileURLs([sourceURL])
+        } else {
+            writeSucceeded = DispatchQueue.main.sync {
+                NativeClipboard().writeFileURLs([sourceURL])
+            }
+        }
+
+        XCTAssertTrue(writeSucceeded)
 
         XCTAssertEqual(NativeClipboard().readFileURLs().map(\.standardizedFileURL.path), [sourceURL.path])
     }
@@ -1311,10 +1322,51 @@ final class SettingsStateTests: XCTestCase {
             .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
         let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
 
+        XCTAssertTrue(syncServiceSource.contains("downloadFileTree("))
+        XCTAssertTrue(syncServiceSource.contains("writeFileURLs"))
         XCTAssertFalse(syncServiceSource.contains("ClipPlus-Received"))
         XCTAssertFalse(syncServiceSource.contains(".downloadsDirectory"))
         XCTAssertFalse(syncServiceSource.contains("downloadFileArchive("))
         XCTAssertFalse(syncServiceSource.contains("serveNext(tempDirectory:"))
+    }
+
+    func testMacFileRuntimeSynchronizesFileSignaturesThroughLock() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(syncServiceSource.contains("private let fileSignatureLock = NSLock()"))
+        XCTAssertTrue(syncServiceSource.contains("shouldPublishLocalFileSignature("))
+        XCTAssertTrue(syncServiceSource.contains("recordRemoteFileSignature("))
+        let pollStart = try XCTUnwrap(syncServiceSource.range(of: "private func pollClipboardAndBroadcast()")?.lowerBound)
+        let localImageStart = try XCTUnwrap(syncServiceSource.range(of: "private func localImageHashAfterClipboardWrite()")?.lowerBound)
+        let pollSource = String(syncServiceSource[pollStart..<localImageStart])
+        XCTAssertFalse(pollSource.contains("lastLocalFileSignature"))
+        XCTAssertFalse(pollSource.contains("lastRemoteFileSignature"))
+        XCTAssertFalse(syncServiceSource.contains("lastLocalFileSignature = remoteSignature"))
+        XCTAssertFalse(syncServiceSource.contains("lastRemoteFileSignature = remoteSignature"))
+        XCTAssertFalse(syncServiceSource.contains("lastLocalFileSignature = pasteboardSignature"))
+        XCTAssertFalse(syncServiceSource.contains("lastRemoteFileSignature = pasteboardSignature"))
+    }
+
+    func testMacFileRuntimeUsesCollisionFreeFileSignaturesAndSafeTransferIds() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertFalse(syncServiceSource.contains(".joined(separator: \"|\")"))
+        XCTAssertTrue(syncServiceSource.contains("fileSignatureComponents"))
+        XCTAssertTrue(syncServiceSource.contains("\\($0.utf8.count):\\($0)"))
+        XCTAssertTrue(syncServiceSource.contains("[A-Za-z0-9-]{1,128}"))
+        XCTAssertTrue(syncServiceSource.contains("options: .regularExpression"))
     }
 
     func testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable() throws {
@@ -1479,6 +1531,43 @@ private func XCTAssertContainsVisibleControl(
     line: UInt = #line
 ) {
     XCTAssertTrue(source.contains(label), "设置界面缺少必要控件：\(label)", file: file, line: line)
+}
+
+private struct PasteboardSnapshot {
+    let items: [PasteboardItemSnapshot]
+
+    static func capture() -> PasteboardSnapshot {
+        let items = NSPasteboard.general.pasteboardItems?.map { item in
+            PasteboardItemSnapshot(typeData: item.types.compactMap { type in
+                guard let data = item.data(forType: type) else {
+                    return nil
+                }
+
+                return (type, data)
+            })
+        } ?? []
+
+        return PasteboardSnapshot(items: items)
+    }
+
+    func restore() {
+        NSPasteboard.general.clearContents()
+        let pasteboardItems = items.map { itemSnapshot in
+            let item = NSPasteboardItem()
+            for (type, data) in itemSnapshot.typeData {
+                item.setData(data, forType: type)
+            }
+            return item
+        }
+
+        if !pasteboardItems.isEmpty {
+            NSPasteboard.general.writeObjects(pasteboardItems)
+        }
+    }
+}
+
+private struct PasteboardItemSnapshot {
+    let typeData: [(NSPasteboard.PasteboardType, Data)]
 }
 
 private final class FakeLoginItemService: LoginItemService {
