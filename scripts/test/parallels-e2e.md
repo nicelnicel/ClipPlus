@@ -29,15 +29,15 @@ C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo
 
 6. 启动 mac App，确认菜单栏出现 ClipPlus。默认 FFI 路径验收时，把 `libclipplus_ffi.dylib` 放在 `/private/tmp/ClipPlusMac.app/Contents/Frameworks/`，不要设置 `CLIPPLUS_FFI_LIBRARY_PATH`。
 7. 启动 Windows App，确认托盘出现 ClipPlus。当前 Windows VM 的 .NET 安装在 `C:\dotnet`，自动化测试启动调试输出目录时应进入输出目录后用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`；不要直接运行该目录里的 framework-dependent apphost `ClipPlus.Windows.exe`，除非已确认全局 .NET runtime 注册完成。默认 FFI 路径验收时，不要设置 `CLIPPLUS_FFI_LIBRARY_PATH`，由输出目录里的 `clipplus_ffi.dll` 加载。发布验收使用 `scripts/dev/publish-windows-single-exe.ps1` 生成 `target\windows-single-exe\ClipPlus.Windows.exe`，该 self-contained single-file exe 必须直接运行。
-8. 两端输入同一个共享 Key：`clipplus-test-key`。
-9. 在 mac 端允许 Windows 设备加入。
+8. 两端输入同一个共享 Key：`clipplus-test-key`，并开启功能。
+9. 同 Key 设备应自动加入，不需要允许设备或待确认设备 UI。
 10. mac 复制 `hello from mac`，Windows 粘贴应得到相同文字。
 11. Windows 复制 `hello from windows`，mac 粘贴应得到相同文字。
 12. 图片同步至少复验一个真实跨系统方向；若仍使用 inline UDP MVP，图片应小于 32 KiB。
 13. 文件按需传输至少复验一个真实跨系统方向：
     - 发送端把真实文件复制到系统剪贴板。
     - 接收端日志出现 `received file offer`。
-    - 通过真实 UI 点击接收按钮，不能直接调用内部函数代替。
+    - 接收端自动下载，不需要点击接收按钮，也不需要设置隐藏自动接收环境变量。
     - 接收端 `Downloads` 生成 `ClipPlus-Received-<transferId>.zip`。
     - 解压 zip，确认文件名和内容与发送端源文件一致。
     - 两端日志分别出现 `served file archive` 和 `downloaded file archive`。
@@ -68,7 +68,7 @@ Windows -> macOS 方向可以用下面命令在 Windows 侧设置 FileDropList�
 prlctl exec "Windows 11" --current-user powershell -NoProfile -Command "\$dir=Join-Path \$env:TEMP 'ClipPlusE2E'; New-Item -ItemType Directory -Force -Path \$dir | Out-Null; \$path=Join-Path \$dir 'windows-source.txt'; Set-Content -Path \$path -Value ([string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()); Set-Clipboard -Path \$path; Start-Sleep -Milliseconds 500; \$files=Get-Clipboard -Format FileDropList; Write-Output \$path; Write-Output ('ClipboardFiles=' + \$files.Count); foreach (\$file in \$files) { Write-Output \$file.FullName }"
 ```
 
-macOS 菜单栏出现远端文件 offer 后，用 Accessibility 点击菜单栏面板里的接收按钮。完成后解压最新下载包并比对 Windows 源文件：
+macOS 收到远端文件 offer 后会自动下载。完成后解压最新下载包并比对 Windows 源文件：
 
 ```bash
 tmpdir=$(mktemp -d /tmp/clipplus-received.XXXXXX)

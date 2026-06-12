@@ -81,6 +81,11 @@ public sealed class CoreBridge
         return Ffi.Value?.OpenUdpSocket(bindPort);
     }
 
+    public RustFileServer? OpenFileServer(int bindPort)
+    {
+        return Ffi.Value?.OpenFileServer(bindPort);
+    }
+
     public string? CreateTrustMessageJson(
         string groupId,
         string senderDeviceId,
@@ -135,6 +140,93 @@ public sealed class RustUdpSocket : IDisposable
     }
 
     ~RustUdpSocket()
+    {
+        Dispose();
+    }
+}
+
+public sealed class RustFileServer : IDisposable
+{
+    private readonly ClipPlusFfiBridge bridge;
+    private readonly ReaderWriterLockSlim handleLock = new();
+    private IntPtr handle;
+    private int disposed;
+
+    internal RustFileServer(ClipPlusFfiBridge bridge, IntPtr handle)
+    {
+        this.bridge = bridge;
+        this.handle = handle;
+    }
+
+    public int LocalPort
+    {
+        get
+        {
+            handleLock.EnterReadLock();
+            try
+            {
+                return handle == IntPtr.Zero ? 0 : bridge.FileServerLocalPort(handle);
+            }
+            finally
+            {
+                handleLock.ExitReadLock();
+            }
+        }
+    }
+
+    public bool RegisterTransfer(string transferId, IReadOnlyList<string> sourcePaths)
+    {
+        handleLock.EnterReadLock();
+        try
+        {
+            return handle != IntPtr.Zero && bridge.FileServerRegisterTransfer(handle, transferId, sourcePaths);
+        }
+        finally
+        {
+            handleLock.ExitReadLock();
+        }
+    }
+
+    public ulong ServeNext(string tempDirectory)
+    {
+        handleLock.EnterReadLock();
+        try
+        {
+            return handle == IntPtr.Zero ? 0 : bridge.FileServerServeNext(handle, tempDirectory);
+        }
+        finally
+        {
+            handleLock.ExitReadLock();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (System.Threading.Interlocked.Exchange(ref disposed, 1) == 1)
+        {
+            return;
+        }
+
+        handleLock.EnterWriteLock();
+        try
+        {
+            var currentHandle = handle;
+            handle = IntPtr.Zero;
+            if (currentHandle != IntPtr.Zero)
+            {
+                bridge.FileServerFree(currentHandle);
+            }
+        }
+        finally
+        {
+            handleLock.ExitWriteLock();
+            handleLock.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    ~RustFileServer()
     {
         Dispose();
     }
@@ -223,6 +315,27 @@ internal sealed class ClipPlusFfiBridge
         out ushort sourcePort);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr FileServerBindDelegate(ushort bindPort);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void FileServerFreeDelegate(IntPtr handle);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate ushort FileServerLocalPortDelegate(IntPtr handle);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool FileServerRegisterTransferDelegate(
+        IntPtr handle,
+        IntPtr transferId,
+        IntPtr sourcePathsJson);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate ulong FileServerServeNextDelegate(
+        IntPtr handle,
+        IntPtr tempDirectory);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeStringDelegate(IntPtr value);
 
     private static readonly JsonSerializerOptions FilesJsonOptions = new()
@@ -243,6 +356,11 @@ internal sealed class ClipPlusFfiBridge
     private readonly UdpSocketLocalPortDelegate udpSocketLocalPort;
     private readonly UdpSocketSendToDelegate udpSocketSendTo;
     private readonly UdpSocketRecvDelegate udpSocketRecv;
+    private readonly FileServerBindDelegate fileServerBind;
+    private readonly FileServerFreeDelegate fileServerFree;
+    private readonly FileServerLocalPortDelegate fileServerLocalPort;
+    private readonly FileServerRegisterTransferDelegate fileServerRegisterTransfer;
+    private readonly FileServerServeNextDelegate fileServerServeNext;
     private readonly CreateTextMessageJsonDelegate createTrustMessageJson;
     private readonly FreeStringDelegate freeString;
 
@@ -260,6 +378,11 @@ internal sealed class ClipPlusFfiBridge
         UdpSocketLocalPortDelegate udpSocketLocalPort,
         UdpSocketSendToDelegate udpSocketSendTo,
         UdpSocketRecvDelegate udpSocketRecv,
+        FileServerBindDelegate fileServerBind,
+        FileServerFreeDelegate fileServerFree,
+        FileServerLocalPortDelegate fileServerLocalPort,
+        FileServerRegisterTransferDelegate fileServerRegisterTransfer,
+        FileServerServeNextDelegate fileServerServeNext,
         CreateTextMessageJsonDelegate createTrustMessageJson,
         FreeStringDelegate freeString)
     {
@@ -276,6 +399,11 @@ internal sealed class ClipPlusFfiBridge
         this.udpSocketLocalPort = udpSocketLocalPort;
         this.udpSocketSendTo = udpSocketSendTo;
         this.udpSocketRecv = udpSocketRecv;
+        this.fileServerBind = fileServerBind;
+        this.fileServerFree = fileServerFree;
+        this.fileServerLocalPort = fileServerLocalPort;
+        this.fileServerRegisterTransfer = fileServerRegisterTransfer;
+        this.fileServerServeNext = fileServerServeNext;
         this.createTrustMessageJson = createTrustMessageJson;
         this.freeString = freeString;
     }
@@ -307,6 +435,11 @@ internal sealed class ClipPlusFfiBridge
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_local_port", out var udpSocketLocalPortSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_send_to", out var udpSocketSendToSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_recv", out var udpSocketRecvSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_bind", out var fileServerBindSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_free", out var fileServerFreeSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_local_port", out var fileServerLocalPortSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_register_transfer", out var fileServerRegisterTransferSymbol)
+                || !NativeLibrary.TryGetExport(handle, "clipplus_file_server_serve_next", out var fileServerServeNextSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_create_trust_message_json", out var createTrustMessageJsonSymbol)
                 || !NativeLibrary.TryGetExport(handle, "clipplus_free_string", out var freeSymbol))
             {
@@ -328,6 +461,11 @@ internal sealed class ClipPlusFfiBridge
                 Marshal.GetDelegateForFunctionPointer<UdpSocketLocalPortDelegate>(udpSocketLocalPortSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketSendToDelegate>(udpSocketSendToSymbol),
                 Marshal.GetDelegateForFunctionPointer<UdpSocketRecvDelegate>(udpSocketRecvSymbol),
+                Marshal.GetDelegateForFunctionPointer<FileServerBindDelegate>(fileServerBindSymbol),
+                Marshal.GetDelegateForFunctionPointer<FileServerFreeDelegate>(fileServerFreeSymbol),
+                Marshal.GetDelegateForFunctionPointer<FileServerLocalPortDelegate>(fileServerLocalPortSymbol),
+                Marshal.GetDelegateForFunctionPointer<FileServerRegisterTransferDelegate>(fileServerRegisterTransferSymbol),
+                Marshal.GetDelegateForFunctionPointer<FileServerServeNextDelegate>(fileServerServeNextSymbol),
                 Marshal.GetDelegateForFunctionPointer<CreateTextMessageJsonDelegate>(createTrustMessageJsonSymbol),
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeSymbol)
             );
@@ -373,6 +511,9 @@ internal sealed class ClipPlusFfiBridge
                 lines.Add($"export_clipplus_derive_group_id={NativeLibrary.TryGetExport(handle, "clipplus_derive_group_id", out _)}");
                 lines.Add($"export_clipplus_download_file_archive={NativeLibrary.TryGetExport(handle, "clipplus_download_file_archive", out _)}");
                 lines.Add($"export_clipplus_udp_socket_bind={NativeLibrary.TryGetExport(handle, "clipplus_udp_socket_bind", out _)}");
+                lines.Add($"export_clipplus_file_server_bind={NativeLibrary.TryGetExport(handle, "clipplus_file_server_bind", out _)}");
+                lines.Add($"export_clipplus_file_server_register_transfer={NativeLibrary.TryGetExport(handle, "clipplus_file_server_register_transfer", out _)}");
+                lines.Add($"export_clipplus_file_server_serve_next={NativeLibrary.TryGetExport(handle, "clipplus_file_server_serve_next", out _)}");
                 lines.Add($"export_clipplus_free_string={NativeLibrary.TryGetExport(handle, "clipplus_free_string", out _)}");
             }
             finally
@@ -674,6 +815,66 @@ internal sealed class ClipPlusFfiBridge
     internal void UdpSocketFree(IntPtr handle)
     {
         udpSocketFree(handle);
+    }
+
+    public RustFileServer? OpenFileServer(int bindPort)
+    {
+        if (bindPort < 0 || bindPort > ushort.MaxValue)
+        {
+            return null;
+        }
+
+        var handle = fileServerBind((ushort)bindPort);
+        return handle == IntPtr.Zero ? null : new RustFileServer(this, handle);
+    }
+
+    internal int FileServerLocalPort(IntPtr handle)
+    {
+        return fileServerLocalPort(handle);
+    }
+
+    internal bool FileServerRegisterTransfer(IntPtr handle, string transferId, IReadOnlyList<string> sourcePaths)
+    {
+        if (string.IsNullOrWhiteSpace(transferId) || sourcePaths.Count == 0)
+        {
+            return false;
+        }
+
+        var sourcePathsJson = JsonSerializer.Serialize(sourcePaths);
+        var transferIdPointer = Marshal.StringToCoTaskMemUTF8(transferId);
+        var sourcePathsJsonPointer = Marshal.StringToCoTaskMemUTF8(sourcePathsJson);
+        try
+        {
+            return fileServerRegisterTransfer(handle, transferIdPointer, sourcePathsJsonPointer);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(transferIdPointer);
+            Marshal.FreeCoTaskMem(sourcePathsJsonPointer);
+        }
+    }
+
+    internal ulong FileServerServeNext(IntPtr handle, string tempDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(tempDirectory))
+        {
+            return 0;
+        }
+
+        var tempDirectoryPointer = Marshal.StringToCoTaskMemUTF8(tempDirectory);
+        try
+        {
+            return fileServerServeNext(handle, tempDirectoryPointer);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(tempDirectoryPointer);
+        }
+    }
+
+    internal void FileServerFree(IntPtr handle)
+    {
+        fileServerFree(handle);
     }
 
     private string? CreateFourStringMessageJson(

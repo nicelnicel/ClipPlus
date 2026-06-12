@@ -9,6 +9,7 @@
 
 - 项目内的代码要分清楚层次。
 - 新增功能时优先保持模块边界清晰，避免把平台逻辑、网络传输、剪贴板监听、UI 设置混在同一个文件里。
+- 后续涉及用户可见功能、设置界面、托盘/菜单栏行为、同步状态或调试能力的修改，macOS 和 Windows 两端都需要同步设计、同步实现、同步验证；除非用户明确说明只改某一端。
 
 ## 工具与提效
 
@@ -39,7 +40,7 @@ prlctl list --all --info | rg -n "State:|IP Addresses:|Shared clipboard mode|EFI
 
 - 完整 macOS/Windows E2E 依赖 Windows VM 入站 UDP `47631` 和 TCP `47632` 可从 macOS 访问。若 Windows 能向 macOS 发 hello，但 Windows 日志收不到 macOS hello，先用临时 UDP listener 证明 Mac -> Windows UDP 是否可达，再检查 Windows Defender 防火墙中 `ClipPlus UDP 47631`、`ClipPlus TCP 47632` 规则。修改防火墙属于测试环境变更，必须在计划或执行记录里写清楚。
 - Parallels E2E 启动 Windows GUI app 时，优先使用 `prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand ...` 在当前登录用户桌面里 `Start-Process C:\dotnet\dotnet.exe ...ClipPlus.Windows.dll`。不要用普通 SSH 会话 `Start-Process` 后立即返回来代表真实运行状态；SSH 会话结束后 GUI 子进程可能随会话消失，导致 Windows 实际没有监听 UDP `47631`。
-- Windows 真实 UI E2E 如需让设置窗口稳定出现在桌面，可设置 `CLIPPLUS_SHOW_SETTINGS_ON_START=1`。该变量只能用于显示设置窗口，不能触发文件下载，也不能替代“接收文件”按钮点击。
+- Windows 真实 UI E2E 如需让设置窗口稳定出现在桌面，可设置 `CLIPPLUS_SHOW_SETTINGS_ON_START=1`。该变量只能用于显示设置窗口；文件 offer 在同 Key 可信设备之间默认自动下载。
 - 通过 `prlctl exec` 传 Windows PowerShell 脚本时优先使用 `-EncodedCommand`，避免 macOS shell 提前展开 `$env:CLIPPLUS_*` 造成环境变量没有传入。
 - 不要用 Windows PowerShell 自身的 `UdpClient`/`TcpListener` 入站探针直接判断 ClipPlus app 入站能力；Windows Defender 可能自动生成 `Windows PowerShell` 应用级 Block 规则，Block 优先于端口 Allow。验证 ClipPlus 入站时应以 `Get-NetUDPEndpoint -LocalPort 47631`、ClipPlus 日志中的 `peer hello`，或非 PowerShell 监听进程为准。
 
@@ -53,7 +54,6 @@ prlctl list --all --info | rg -n "State:|IP Addresses:|Shared clipboard mode|EFI
 
 ```bash
 CLIPPLUS_SHARED_KEY=clipplus-test-key \
-CLIPPLUS_AUTO_TRUST=1 \
 CLIPPLUS_PEER_HOSTS=10.211.55.3 \
 /private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac
 ```
@@ -62,19 +62,18 @@ Windows 端使用：
 
 ```cmd
 set CLIPPLUS_SHARED_KEY=clipplus-test-key
-set CLIPPLUS_AUTO_TRUST=1
 set CLIPPLUS_PEER_HOSTS=10.211.55.2
 cd /d C:\Mac\Home\proj\ClipPlus\apps\windows\ClipPlus.Windows\bin\Debug\net8.0-windows
 C:\dotnet\dotnet.exe ClipPlus.Windows.dll
 ```
 
 - Windows VM 内 `.NET` 目前安装在 `C:\dotnet`，没有注册为全局 runtime；自动化/E2E 启动调试输出目录的 framework-dependent App 时优先使用 `C:\dotnet\dotnet.exe ClipPlus.Windows.dll`，不要直接运行该目录里的 apphost `ClipPlus.Windows.exe`。直接运行调试 apphost exe 可能报 `hostfxr.dll not found`。`target\windows-single-exe\ClipPlus.Windows.exe` 是 self-contained single-file 发布产物，必须直接运行它做发布烟测。
-- 快速同步回归可以使用 `CLIPPLUS_AUTO_TRUST=1`；测试首次确认/设备信任时不要设置 `CLIPPLUS_AUTO_TRUST`。
-- 文件传输链路自动化隔离回归可以使用 `CLIPPLUS_AUTO_RECEIVE_FILES=1`，收到可信设备的 fileOffer 后会触发与“接收文件”按钮相同的下载事件。该变量只能用于证明跨系统 fileOffer、TCP 归档服务和下载路径；不能替代“真实 UI 点击接收按钮”的最终验收。
-- 无 `CLIPPLUS_AUTO_TRUST` 的手动确认验收至少验证：
-  - 双方日志只出现 `peer hello` 时，Mac 写入剪贴板不会覆盖 Windows 剪贴板基线值。
-  - macOS 菜单栏 ClipPlus 面板显示 `允许全部待确认设备（1）`，点击后 Windows 日志出现 `peer trust accepted`。
-  - 确认后再验证 macOS -> Windows、Windows -> macOS 两个方向文本同步。
+- 同 Key 设备采用 Key-only 自动加入；不要再依赖 `CLIPPLUS_AUTO_TRUST`、人工允许设备或待确认设备 UI。
+- 文件传输链路收到可信设备的 fileOffer 后默认自动下载；不要再依赖 `CLIPPLUS_AUTO_RECEIVE_FILES` 或“接收文件”按钮。
+- Key-only 自动加入验收至少验证：
+  - 双方日志出现 `peer hello trusted` 或 `peer trust accepted` 后，不需要点击允许设备即可同步。
+  - 使用不同共享 Key 的设备不得同步文本、图片或文件。
+  - 同 Key 后再验证 macOS -> Windows、Windows -> macOS 两个方向文本同步。
   - 复验前后保持 Parallels 自带剪贴板共享为 `off`。
 - 文本同步验收至少验证两个方向：
   - macOS `pbcopy` 写入后，Windows `Get-Clipboard -Raw` 返回相同字符串。
@@ -108,7 +107,7 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/
   - hello/text/trust/image/fileOffer 消息运行时迁入 Rust FFI 后，必须验证 `clipplus_create_hello_message_json`、`clipplus_create_text_message_json`、`clipplus_create_trust_message_json`、`clipplus_create_image_message_json`、`clipplus_create_file_offer_message_json` 真实调用；macOS 测试名包含 `testCoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable`、`testCoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable`、`CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable`。
   - 文件归档正文写入迁入 Rust FFI 后，必须验证 `clipplus_write_file_archive_zip` 真实调用；macOS 测试名包含 `testCoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable`。
   - 文件归档 server 端长度前缀 socket 发送迁入 Rust FFI 后，必须验证 `clipplus_serve_file_archive_to_socket` 真实调用；Rust FFI 测试名包含 `ffi_serves_length_prefixed_file_archive_to_socket_for_native_shells`，macOS 测试名包含 `testCoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable`。
-  - 文件归档 server 端 opaque handle 迁入 Rust FFI 后，必须验证 `clipplus_file_server_bind`、`clipplus_file_server_local_port`、`clipplus_file_server_register_transfer`、`clipplus_file_server_serve_next`、`clipplus_file_server_free` 真实调用；Rust FFI 测试名包含 `ffi_file_server_serves_registered_archive_for_native_shells` 和 `ffi_file_server_rejects_invalid_values`。该 handle 接入 macOS/Windows 原生壳后，必须再补对应 CoreBridge 真实符号测试，并在 Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 验证 bundled DLL。
+  - 文件归档 server 端 opaque handle 迁入 Rust FFI 后，必须验证 `clipplus_file_server_bind`、`clipplus_file_server_local_port`、`clipplus_file_server_register_transfer`、`clipplus_file_server_serve_next`、`clipplus_file_server_free` 真实调用；Rust FFI 测试名包含 `ffi_file_server_serves_registered_archive_for_native_shells` 和 `ffi_file_server_rejects_invalid_values`，macOS 测试名包含 `testCoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable`。Windows 测试必须在不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时验证 bundled DLL。
   - 文件归档下载迁入 Rust FFI 后，必须验证 `clipplus_download_file_archive` 真实调用；Rust FFI 测试名包含 `ffi_downloads_file_archive_for_native_shells`，macOS 测试名包含 `testCoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable`。Windows 测试必须在不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 时验证 bundled DLL。
   - UDP socket 迁入 Rust FFI 后，必须验证 `clipplus_udp_socket_bind`、`clipplus_udp_socket_local_port`、`clipplus_udp_socket_send_to`、`clipplus_udp_socket_recv`、`clipplus_udp_socket_free` 真实调用；Rust FFI 测试名包含 `ffi_udp_socket_sends_and_receives_datagrams_for_native_shells`，macOS 测试名包含 `testCoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable`，Windows 测试名包含 `CoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable`。
   - macOS Swift 测试必须使用真实 `libclipplus_ffi.dylib`；常规入口是 `./scripts/dev/check.sh`。
@@ -127,7 +126,7 @@ cd /Users/cc/proj/ClipPlus
 Windows FFI 验证命令：
 
 ```bash
-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter '\''CoreBridgeDerivesGroupIdFromBundledFfiLibrary|CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable|CoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable|CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable|CoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable'\''"'
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/clipplus_windows_known_hosts Administrator@10.211.55.3 'powershell -NoProfile -Command "Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue; Set-Location C:/Mac/Home/proj/ClipPlus/apps/windows; C:/dotnet/dotnet.exe test ClipPlus.Windows.sln --nologo --filter '\''CoreBridgeDerivesGroupIdFromBundledFfiLibrary|CoreBridgeCreatesHelloMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTextMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesTrustMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesImageMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeCreatesFileOfferMessageJsonWhenFfiLibraryIsAvailable|CoreBridgeWritesFileTransferArchiveWhenFfiLibraryIsAvailable|CoreBridgeServesFileArchiveToSocketWhenFfiLibraryIsAvailable|CoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable|CoreBridgeDownloadsFileArchiveWhenFfiLibraryIsAvailable|CoreBridgeUdpSocketSendsAndReceivesDatagramsWhenFfiLibraryIsAvailable'\''"'
 ```
 
 - Windows 发布验收必须确认单文件 exe 不依赖外部 `clipplus_ffi.dll` 或全局 .NET runtime。发布脚本默认根据 Windows 当前架构选择 RID：ARM64 VM 生成 `win-arm64`，Intel/AMD Windows 生成 `win-x64`；如需强制指定，可传 `-RuntimeIdentifier win-arm64` 或 `-RuntimeIdentifier win-x64`。脚本会把 RID 对应的 Rust target triple 传给 Cargo，避免 exe 和 `clipplus_ffi.dll` 架构不一致。
@@ -159,20 +158,19 @@ prlctl exec "Windows 11" --current-user powershell -NoProfile -EncodedCommand "$
 
 - 文件按需传输验收至少验证一个真实跨系统方向，并在计划或提交说明中写明方向：
   - 发送端复制真实文件到系统剪贴板后，接收端日志出现 `received file offer`。
-  - 在接收端通过真实 UI 点击接收，不用直接调用内部函数代替用户操作。
+  - 接收端自动触发下载，不用点击接收按钮，也不用设置隐藏自动接收环境变量。
   - 接收端 `Downloads` 下生成 `ClipPlus-Received-<transferId>.zip`。
   - 解压后文件名和内容与源文件一致。
   - 日志出现 `downloaded file archive`，且不包含源机器本地绝对路径。
   - 如果本次改动涉及文件正文归档/下载实现，必须确认 `served file archive` 和 `downloaded file archive` 来自新实现路径，并在计划中记录归档文件 byte_count。
-  - 如果本次改动涉及 macOS 下载端 Rust FFI，必须跑 Windows -> macOS 文件传输真实 UI 验收：Windows 端用 `Set-Clipboard -Path <真实文件>` 发布，macOS 端通过菜单栏 ClipPlus 面板点击接收按钮，最后解压 `~/Downloads/ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
-  - 如果本次改动涉及 Windows 下载端 Rust FFI，必须跑 macOS -> Windows 文件传输真实 UI 验收：macOS 端复制真实文件到系统剪贴板并发布，Windows 端通过托盘 ClipPlus 面板点击接收按钮，最后解压 Windows `Downloads\ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
-  - 如果 Windows/macOS 真实 UI 自动化暂时不可用，可以先用 `CLIPPLUS_AUTO_RECEIVE_FILES=1` 做“自动接收”隔离回归，但计划记录必须明确标注为自动化辅助验收，并继续保留真实 UI 点击验收缺口。
+  - 如果本次改动涉及 macOS 下载端 Rust FFI，必须跑 Windows -> macOS 文件传输验收：Windows 端用 `Set-Clipboard -Path <真实文件>` 发布，macOS 端自动下载后解压 `~/Downloads/ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
+  - 如果本次改动涉及 Windows 下载端 Rust FFI，必须跑 macOS -> Windows 文件传输验收：macOS 端复制真实文件到系统剪贴板并发布，Windows 端自动下载后解压 Windows `Downloads\ClipPlus-Received-<transferId>.zip` 检查文件名和内容。
   - `scripts/test/windows-file-offer-helper.ps1` 只能用于隔离调试 macOS 下载端：它从 Windows 发送 fileOffer 并提供 TCP 归档服务，但不能替代 Windows app 通过系统剪贴板自动发布文件 offer 的完整 E2E。使用该 helper 时，计划/执行记录必须标注为“部分验证”。
 - 图片同步验收至少验证真实跨系统方向；涉及防回环、图片 hash 或平台剪贴板写入逻辑时，必须覆盖 macOS -> Windows 和 Windows -> macOS 两个方向。
 - 当前图片 MVP 只支持 32 KiB 以内的 inline PNG；超过限制的图片后续应走文件传输或新的大对象通道。测试文档和计划必须明确这个限制。
 - 图片端到端日志至少检查 `published image clipboard`、`received image clipboard`，并确认日志不包含共享 Key、测试图片文件名或本地绝对路径。
 - 图片端到端复验必须检查接收端写入系统剪贴板后不会被下一轮轮询重新发布回发送端；如果平台会重编码 PNG，应以写入后的本地剪贴板图片 hash 作为防回环基线。
-- 首次确认/信任验收必须覆盖无 `CLIPPLUS_AUTO_TRUST` 的负向路径；确认前不得同步内容，确认后才允许同步。
+- Key-only 自动加入验收必须覆盖 Key 不同的负向路径；Key 不同不得同步，Key 相同且开启功能后不需要人工确认即可同步。
 - 开机启动相关改动必须做系统读回验证：
   - macOS 读回 Login Item 或对应系统状态，不能只检查内存开关值。
   - Windows 读回 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 或实际启动项状态，不能只检查 UI 绑定值。

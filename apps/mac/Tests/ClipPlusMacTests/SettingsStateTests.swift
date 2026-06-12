@@ -14,6 +14,91 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(state.requiresKeySetup)
     }
 
+    func testConfiguredSharedKeyUsesMaskedPlaceholderWithoutStoringRawKey() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false,
+            sharedGroupId: "stored-group"
+        )
+
+        XCTAssertEqual(state.sharedKeyFieldPrompt, "输入 Key")
+        XCTAssertEqual(state.sharedKeyInput, "")
+
+        state.sharedKeyInput = "clipplus-test-key"
+
+        XCTAssertEqual(state.sharedKeyFieldPrompt, "输入 Key")
+        XCTAssertFalse(state.sharedGroupId.contains("clipplus-test-key"))
+    }
+
+    func testConfiguredSharedKeyCanLoadStoredRawKeyForEyeReveal() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false,
+            sharedGroupId: "stored-group",
+            sharedKeyInput: "clipplus-test-key"
+        )
+
+        XCTAssertEqual(state.sharedKeyInput, "clipplus-test-key")
+        XCTAssertEqual(state.sharedKeyFieldPrompt, "输入 Key")
+        XCTAssertFalse(state.sharedGroupId.contains("clipplus-test-key"))
+    }
+
+    func testStoredGroupIdWithoutPlainTextKeyRequiresSetupAgain() throws {
+        let suiteName = "ClipPlusMacTests.\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+        let sharedKeyVault = InMemorySharedKeyVault()
+        let store = SettingsStore(userDefaults: userDefaults, sharedKeyVault: sharedKeyVault)
+
+        store.saveSharedGroupId("legacy-group-id")
+
+        XCTAssertEqual(
+            SettingsStore(userDefaults: userDefaults, sharedKeyVault: sharedKeyVault).load(),
+            StoredSettings(
+                sharedKeyConfigured: false,
+                sharingEnabled: true,
+                sharedGroupId: "legacy-group-id",
+                sharedKeyInput: ""
+            )
+        )
+    }
+
+    func testMissingSharedKeyUsesSetupPromptWithoutLaunchingFloatingWindow() throws {
+        let missingKeyState = SettingsState(
+            sharedKeyConfigured: false,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+        let configuredState = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+
+        XCTAssertEqual(missingKeyState.sharedKeyFieldPrompt, "输入 Key")
+        XCTAssertTrue(missingKeyState.shouldShowKeySetupPrompt)
+        XCTAssertFalse(configuredState.shouldShowKeySetupPrompt)
+
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(appSource.contains("SettingsWindowPresenter"))
+        XCTAssertFalse(appSource.contains("NSApp.activate"))
+        XCTAssertFalse(appSource.contains(".floating"))
+    }
+
     func testStartupToggleUpdatesState() {
         let state = SettingsState(
             sharedKeyConfigured: true,
@@ -24,6 +109,390 @@ final class SettingsStateTests: XCTestCase {
         state.startupEnabled = true
 
         XCTAssertTrue(state.startupEnabled)
+    }
+
+    func testSingleInstanceLockRejectsSecondRunningCopy() throws {
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+
+        let firstLock = try XCTUnwrap(SingleInstanceLock.acquire(lockURL: lockURL))
+        let secondLock = SingleInstanceLock.acquire(lockURL: lockURL)
+
+        XCTAssertNil(secondLock)
+        _ = firstLock
+    }
+
+    func testSettingsStorePersistsInstallSafeConfiguration() throws {
+        let suiteName = "ClipPlusMacTests.\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+        let sharedKeyVault = InMemorySharedKeyVault()
+        let store = SettingsStore(userDefaults: userDefaults, sharedKeyVault: sharedKeyVault)
+
+        XCTAssertEqual(
+            store.load(),
+            StoredSettings(
+                sharedKeyConfigured: false,
+                sharingEnabled: true,
+                sharedGroupId: "",
+                sharedKeyInput: ""
+            )
+        )
+
+        try store.saveSharedKey("clipplus-test-key", sharedGroupId: "group-id")
+        store.saveSharingEnabled(false)
+
+        XCTAssertEqual(
+            SettingsStore(userDefaults: userDefaults, sharedKeyVault: sharedKeyVault).load(),
+            StoredSettings(
+                sharedKeyConfigured: true,
+                sharingEnabled: false,
+                sharedGroupId: "group-id",
+                sharedKeyInput: "clipplus-test-key"
+            )
+        )
+        XCTAssertNil(userDefaults.string(forKey: "clipplus.shared_key"))
+    }
+
+    func testSharedKeyVaultPersistsPlainTextFileInProcessDirectory() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let sharedKeyFileURL = temporaryDirectory.appendingPathComponent("clipplus.shared-key")
+        let vault = FileSharedKeyVault(fileURL: sharedKeyFileURL)
+
+        try vault.saveSharedKey("clipplus-test-key")
+
+        XCTAssertEqual(
+            try String(contentsOf: sharedKeyFileURL, encoding: .utf8),
+            "clipplus-test-key"
+        )
+        XCTAssertEqual(
+            FileSharedKeyVault(fileURL: sharedKeyFileURL).loadSharedKey(),
+            "clipplus-test-key"
+        )
+    }
+
+    func testSettingsUIOnlyShowsKeySharingAndStartupControls() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsViewURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SettingsView.swift")
+        let sharedKeyInputFieldURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SharedKeyInputField.swift")
+        let menuBarURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/MenuBar/MenuBarController.swift")
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let settingsSource = try String(contentsOf: settingsViewURL, encoding: .utf8)
+        let sharedKeyInputFieldSource = try String(contentsOf: sharedKeyInputFieldURL, encoding: .utf8)
+        let settingsViewStart = try XCTUnwrap(settingsSource.range(of: "struct SettingsView: View")?.lowerBound)
+        let visibleSettingsSource = String(settingsSource[settingsViewStart...])
+        let menuBarSource = try String(contentsOf: menuBarURL, encoding: .utf8)
+        let syncSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertContainsVisibleControl("输入 Key", in: settingsSource)
+        XCTAssertContainsVisibleControl("开启局域网剪贴板", in: visibleSettingsSource)
+        XCTAssertTrue(visibleSettingsSource.contains("connectedPeerCount"))
+        XCTAssertTrue(visibleSettingsSource.contains("connectedPeersTooltip"))
+        XCTAssertTrue(settingsSource.contains("@Published private(set) var connectedPeerCount"))
+        XCTAssertTrue(settingsSource.contains("@Published private(set) var connectedPeersTooltip"))
+        XCTAssertFalse(
+            settingsSource.contains("var connectedPeersTooltip: String {"),
+            "悬浮提示必须读取后台维护的缓存字符串，不能在 hover 时临时计算"
+        )
+        XCTAssertTrue(syncSource.contains("DispatchQueue.global(qos: .utility).async"))
+        XCTAssertTrue(syncSource.contains("state.setLocalDevice"))
+        XCTAssertTrue(visibleSettingsSource.contains("Text(\"(\\(state.connectedPeerCount))\")"))
+        XCTAssertTrue(visibleSettingsSource.contains("@State private var isConnectedPeersInfoVisible"))
+        XCTAssertTrue(visibleSettingsSource.contains(".onHover { isHovering in"))
+        XCTAssertTrue(visibleSettingsSource.contains("mainSettingsColumn"))
+        XCTAssertTrue(visibleSettingsSource.contains(".popover("))
+        XCTAssertTrue(visibleSettingsSource.contains("connectedPeersInfoPopover"))
+        XCTAssertTrue(visibleSettingsSource.contains("Color(nsColor: .controlBackgroundColor)"))
+        XCTAssertTrue(visibleSettingsSource.contains("Color(nsColor: .separatorColor)"))
+        XCTAssertTrue(visibleSettingsSource.contains(".frame(width: 160, alignment: .leading)"))
+        XCTAssertTrue(visibleSettingsSource.contains(".foregroundStyle(Color.accentColor)"))
+        XCTAssertFalse(
+            visibleSettingsSource.contains("HStack(alignment: .top, spacing: 8)"),
+            "macOS 设备信息应该和 Windows 一样用浮窗，不应该再作为右侧并排列撑开菜单"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains(".onTapGesture"),
+            "设备信息应恢复鼠标移到数字上显示，不再点击显示"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains(".overlay(alignment: .topTrailing)"),
+            "设备信息不能再用覆盖浮层，否则容易被菜单窗口裁剪遮挡"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains("connectedPeersInfoSidePanel"),
+            "设备信息不能再作为设置面板内部的右侧框体，应该显示为独立浮窗"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains("connectedPeersInfoPanel"),
+            "设备信息不能再在下方内联展开，应该显示为独立浮窗"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains(".help(state.connectedPeersTooltip)"),
+            "macOS 原生 help tooltip 有系统延迟，数量悬浮信息必须使用自绘即时浮层"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains("Toggle(isOn: sharingEnabledBinding) {\n                sharingToggleLabel\n            }\n            .help(state.connectedPeersTooltip)"),
+            "设备信息提示应该只挂在数量上，避免整行开关都弹提示"
+        )
+        XCTAssertContainsVisibleControl("开机启动", in: visibleSettingsSource)
+        XCTAssertContainsVisibleControl("ClipPlus", in: visibleSettingsSource)
+        XCTAssertContainsVisibleControl("局域网剪贴板", in: visibleSettingsSource)
+        XCTAssertContainsVisibleControl("退出 ClipPlus", in: visibleSettingsSource)
+        XCTAssertTrue(visibleSettingsSource.contains(".accessibilityLabel(\"退出 ClipPlus\")"))
+        XCTAssertContainsVisibleControl("By.YJY", in: visibleSettingsSource)
+        XCTAssertTrue(visibleSettingsSource.contains("isSharedKeyVisible"))
+        XCTAssertTrue(visibleSettingsSource.contains("dismissSharedKeyEditor"))
+        XCTAssertTrue(visibleSettingsSource.contains("sharedKeyDismissRequest"))
+        XCTAssertTrue(visibleSettingsSource.contains("saveSharedKeyIfNeeded"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("eye.slash"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("eye"))
+        XCTAssertTrue(visibleSettingsSource.contains("SharedKeyInputField("))
+        XCTAssertTrue(visibleSettingsSource.contains("Link("))
+        XCTAssertTrue(visibleSettingsSource.contains("authorHomepageURL"))
+        XCTAssertTrue(visibleSettingsSource.contains(".foregroundStyle(Color.accentColor)"))
+        XCTAssertTrue(visibleSettingsSource.contains(".frame(width: 160)"))
+        XCTAssertFalse(visibleSettingsSource.contains(".frame(width: 240)"))
+        XCTAssertFalse(visibleSettingsSource.contains("请先设置共享 Key"))
+        XCTAssertFalse(visibleSettingsSource.contains(".background(.orange"))
+        XCTAssertFalse(
+            visibleSettingsSource.contains("Toggle(\"开机启动\", isOn: startupEnabledBinding)\n\n            authorLink"),
+            "By.YJY 不应该再作为开机启动下方的单独一行"
+        )
+
+        let infoBoxStart = try XCTUnwrap(visibleSettingsSource.range(of: "private var infoBox")?.lowerBound)
+        let sharedKeyFieldDeclarationStart = try XCTUnwrap(
+            visibleSettingsSource.range(of: "private var sharedKeyField")?.lowerBound
+        )
+        let infoBoxSource = String(visibleSettingsSource[infoBoxStart..<sharedKeyFieldDeclarationStart])
+        XCTAssertTrue(infoBoxSource.contains("ZStack(alignment: .topTrailing)"), "信息框应该提供右上角布局")
+        XCTAssertTrue(infoBoxSource.contains("Link(\"By.YJY\""), "By.YJY 应该放在信息框里")
+        XCTAssertTrue(infoBoxSource.contains("authorHomepageURL"), "信息框里的 By.YJY 应该保持可点击链接")
+
+        let disallowedVisibleLabels = [
+            "状态",
+            "保存 Key",
+            "导出诊断包",
+            "待确认设备",
+            "允许",
+            "可接收文件",
+            "打开独立设置窗口",
+            "请先设置共享 Key",
+            "已设置",
+            "未设置",
+            "再次输入共享 Key",
+            "作者 YJY"
+        ]
+
+        for label in disallowedVisibleLabels {
+            XCTAssertFalse(visibleSettingsSource.contains(label), "SettingsView 不能显示复杂入口：\(label)")
+            XCTAssertFalse(menuBarSource.contains(label), "MenuBarController 不能显示复杂入口：\(label)")
+        }
+        XCTAssertFalse(syncSource.contains("state.isPeerTrusted(message.senderDeviceId)"))
+        XCTAssertTrue(syncSource.contains("recordConnectedPeer"))
+        XCTAssertTrue(
+            syncSource.contains("state.remoteConnectedPeerSummaries"),
+            "发送逻辑应该把最近发现的设备 IP 作为单播目标，不能只依赖广播"
+        )
+    }
+
+    func testSharedKeyEyeButtonKeepsFocusAndCursorAtEnd() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsViewURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SettingsView.swift")
+        let sharedKeyInputFieldURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SharedKeyInputField.swift")
+        let settingsSource = try String(contentsOf: settingsViewURL, encoding: .utf8)
+        let sharedKeyInputFieldSource = try String(contentsOf: sharedKeyInputFieldURL, encoding: .utf8)
+        let settingsViewStart = try XCTUnwrap(settingsSource.range(of: "struct SettingsView: View")?.lowerBound)
+        let visibleSettingsSource = String(settingsSource[settingsViewStart...])
+
+        XCTAssertFalse(
+            visibleSettingsSource.contains("@FocusState"),
+            "眼睛按钮不能依赖 SwiftUI 焦点切换，否则点击按钮会触发失焦保存并清空输入"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains("TextField(state.sharedKeyFieldPrompt"),
+            "显示/隐藏 Key 不能用 SwiftUI TextField 和 SecureField 互换，否则会丢失光标位置"
+        )
+        XCTAssertFalse(
+            visibleSettingsSource.contains("SecureField(state.sharedKeyFieldPrompt"),
+            "显示/隐藏 Key 不能用 SwiftUI TextField 和 SecureField 互换，否则会丢失光标位置"
+        )
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("SharedKeyInputField: NSViewRepresentable"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("refusesFirstResponder = true"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("private let secureField = SharedKeySecureTextField()"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("private let plainField = SharedKeyPlainTextField()"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("focusActiveFieldAtEnd()"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("onVisibilityChanged"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("isHandlingVisibilityToggle"))
+        XCTAssertTrue(
+            sharedKeyInputFieldSource.contains("guard !isHandlingVisibilityToggle && !isCommittingAndHiding else")
+        )
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("let currentText = fieldView.currentText"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("text: currentText"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("let nextVisibility = !parent.isVisible"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("syncTextFields"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("setVisible"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("parent.isVisible = false"))
+        XCTAssertFalse(sharedKeyInputFieldSource.contains("installTextField"))
+        XCTAssertFalse(sharedKeyInputFieldSource.contains("removeFromSuperview()"))
+    }
+
+    func testSharedKeyInputFieldCommitsWhenClickingOutsideIt() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sharedKeyInputFieldURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SharedKeyInputField.swift")
+        let sharedKeyInputFieldSource = try String(contentsOf: sharedKeyInputFieldURL, encoding: .utf8)
+
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("NSEvent.addLocalMonitorForEvents"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("matching: [.leftMouseDown, .rightMouseDown]"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("NSEvent.removeMonitor(mouseDownMonitor)"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("handleWindowMouseDown"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("guard !bounds.contains(clickLocation) else"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("commitFromOutsideClick"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("dismissRequest"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("applyDismissRequest"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("fieldView.clearFocus()"))
+        XCTAssertTrue(
+            sharedKeyInputFieldSource.contains("guard !isHandlingVisibilityToggle && !isCommittingAndHiding else"),
+            "点击 checkbox 等输入框外部区域时，不能只等原生 end editing；必须主动提交、隐藏并清掉焦点"
+        )
+    }
+
+    func testSharedKeyInputFieldHandlesMouseFocusAtEnd() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sharedKeyInputFieldURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SharedKeyInputField.swift")
+        let sharedKeyInputFieldSource = try String(contentsOf: sharedKeyInputFieldURL, encoding: .utf8)
+
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("override var acceptsFirstResponder: Bool"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("override func mouseDown(with event: NSEvent)"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("focusActiveFieldAtEnd()"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("selectInsertionPointAtEnd(in: textField)"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("DispatchQueue.main.async"))
+    }
+
+    func testSharedKeyEyeButtonUsesStableDirectPressHandling() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sharedKeyInputFieldURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SharedKeyInputField.swift")
+        let sharedKeyInputFieldSource = try String(contentsOf: sharedKeyInputFieldURL, encoding: .utf8)
+
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("SharedKeyVisibilityButton"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("onPress"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("pressVisibilityButton"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("pressVisibilityButton(self)"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("visibilityButton.performClick(nil)"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("override func accessibilityPerformPress() -> Bool"))
+        XCTAssertTrue(sharedKeyInputFieldSource.contains("override func performClick(_ sender: Any?)"))
+        XCTAssertFalse(
+            sharedKeyInputFieldSource.contains("installTextField"),
+            "显示/隐藏不能再通过销毁并重建输入框实现，否则焦点和光标会不稳定"
+        )
+        XCTAssertTrue(
+            sharedKeyInputFieldSource.contains("guard !isHandlingVisibilityToggle && !isCommittingAndHiding else"),
+            "小眼睛按钮 mouseDown 可能先触发输入框失焦，失焦保存逻辑必须识别这次切换，不能抢先隐藏并重建输入框"
+        )
+    }
+
+    func testClipboardPollingDoesNotRunHeavyPasteboardWorkOnMainRunLoop() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertFalse(syncServiceSource.contains("Timer.scheduledTimer"))
+        XCTAssertTrue(syncServiceSource.contains("DispatchSource.makeTimerSource"))
+        XCTAssertTrue(syncServiceSource.contains("clipplus.mac.clipboard.poll"))
+    }
+
+    func testSettingsUIPanelDoesNotDependOnFormForMenuBarPresentation() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsViewURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SettingsView.swift")
+        let settingsSource = try String(contentsOf: settingsViewURL, encoding: .utf8)
+        let settingsViewStart = try XCTUnwrap(settingsSource.range(of: "struct SettingsView: View")?.lowerBound)
+        let visibleSettingsSource = String(settingsSource[settingsViewStart...])
+
+        XCTAssertFalse(
+            visibleSettingsSource.contains("Form {"),
+            "MenuBarExtra 的窗口内容不能依赖 Form，否则点击状态栏图标时容易出现空白设置面板"
+        )
+    }
+
+    func testSharedAppIconAssetsAreConfiguredForPackaging() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let mainPngURL = repositoryRoot.appendingPathComponent("assets/app-icon/clipplus-icon-1024.png")
+        let macIconURL = repositoryRoot.appendingPathComponent("apps/mac/Resources/ClipPlus.icns")
+        let macMenuBarIconURL = repositoryRoot.appendingPathComponent("apps/mac/Resources/ClipPlusMenuBar.png")
+        let windowsIconURL = repositoryRoot.appendingPathComponent("apps/windows/ClipPlus.Windows/Resources/ClipPlus.ico")
+        let packageScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-app.sh")
+        let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mainPngURL.path), "缺少同源主图 PNG")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: macIconURL.path), "缺少 macOS icns 图标")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: macMenuBarIconURL.path), "缺少 macOS 菜单栏图标")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: windowsIconURL.path), "缺少 Windows ico 图标")
+
+        let packageScript = try String(contentsOf: packageScriptURL, encoding: .utf8)
+        XCTAssertTrue(packageScript.contains("CFBundleIconFile"))
+        XCTAssertTrue(packageScript.contains("ClipPlus.icns"))
+        XCTAssertTrue(packageScript.contains("/private/tmp/ClipPlusMac.app"))
+        XCTAssertTrue(packageScript.contains("target/macos/ClipPlus.app"))
+        XCTAssertTrue(packageScript.contains("installed_app=\"/Applications/ClipPlus.app\""))
+        XCTAssertTrue(packageScript.contains("unregister_app \"$installed_app\""))
+        XCTAssertTrue(packageScript.contains("-u \"$candidate\""))
+        XCTAssertTrue(packageScript.contains("clipplus.shared-key"))
+        XCTAssertTrue(packageScript.contains("preserved_shared_key"))
+
+        let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
+        XCTAssertTrue(appSource.contains("ClipPlusMenuBar"))
+        XCTAssertTrue(appSource.contains("sharedKeyInput: storedSettings.sharedKeyInput"))
+
+        let sharedKeyVaultSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/Settings/SharedKeyVault.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(sharedKeyVaultSource.contains("FileSharedKeyVault"))
+        XCTAssertTrue(sharedKeyVaultSource.contains("clipplus.shared-key"))
+        XCTAssertFalse(sharedKeyVaultSource.contains("KeychainSharedKeyVault"))
+        XCTAssertFalse(sharedKeyVaultSource.contains("Security"))
+        XCTAssertFalse(sharedKeyVaultSource.contains("LAContext"))
     }
 
     func testMissingKeyRequiresSetupWhenSharingDisabled() {
@@ -47,12 +516,15 @@ final class SettingsStateTests: XCTestCase {
 
     func testSharedKeyStoresOnlyDerivedGroupIdentifier() throws {
         let state = SettingsState()
+        var persistedGroupId: String?
+        state.sharedGroupIdChanged = { persistedGroupId = $0 }
 
         try state.updateSharedKey("clipplus-test-key", confirmation: "clipplus-test-key")
 
         XCTAssertTrue(state.sharedKeyConfigured)
         XCTAssertEqual(state.sharedGroupId, expectedGroupId(for: "clipplus-test-key"))
         XCTAssertFalse(state.sharedGroupId.contains("clipplus-test-key"))
+        XCTAssertEqual(persistedGroupId, expectedGroupId(for: "clipplus-test-key"))
     }
 
     func testCoreBridgeDerivesGroupIdWhenFFILibraryIsAvailable() {
@@ -95,7 +567,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(state.isPeerTrusted("windows-device"))
     }
 
-    func testPendingPeerDoesNotAllowPublishingClipboardContentUntilApproved() {
+    func testConfiguredKeyAllowsPublishingClipboardContentWithoutPeerApproval() {
         let state = SettingsState(
             sharedKeyConfigured: true,
             sharingEnabled: true,
@@ -104,12 +576,48 @@ final class SettingsStateTests: XCTestCase {
 
         state.markPeerPending(deviceId: "windows-device", deviceName: "Windows 11")
 
-        XCTAssertFalse(state.canPublishClipboardContent)
-
-        state.approvePendingPeer(deviceId: "windows-device")
-
         XCTAssertTrue(state.canPublishClipboardContent)
-        XCTAssertEqual(state.trustedPeerCount, 1)
+        XCTAssertEqual(state.trustedPeerCount, 0)
+    }
+
+    func testConnectedPeersTrackRecentDevicesForStatusTooltip() {
+        let state = SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        )
+        let now = Date()
+
+        state.setLocalDevice(
+            deviceId: "mac-device",
+            deviceName: "MacBook",
+            ipAddress: "10.211.55.2"
+        )
+        state.recordConnectedPeer(
+            deviceId: "windows-device",
+            deviceName: "Windows 11",
+            ipAddress: "10.211.55.3",
+            now: now
+        )
+
+        XCTAssertEqual(state.connectedPeerCount, 2)
+        XCTAssertEqual(state.connectedPeerSummaries.map(\.deviceName), ["MacBook", "Windows 11"])
+        XCTAssertEqual(
+            state.connectedPeersTooltip,
+            "机器名：MacBook（本机）\nIP：10.211.55.2\n\n机器名：Windows 11\nIP：10.211.55.3"
+        )
+        XCTAssertTrue(state.connectedPeersTooltip.contains("机器名："))
+        XCTAssertTrue(state.connectedPeersTooltip.contains("IP："))
+
+        state.purgeExpiredConnectedPeers(now: now.addingTimeInterval(16))
+
+        XCTAssertEqual(state.connectedPeerCount, 1)
+        XCTAssertEqual(state.connectedPeerSummaries.first?.deviceName, "MacBook")
+        XCTAssertTrue(state.remoteConnectedPeerSummaries.isEmpty)
+        XCTAssertEqual(
+            state.connectedPeersTooltip,
+            "机器名：MacBook（本机）\nIP：10.211.55.2"
+        )
     }
 
     func testPendingPeerSummariesAreSortedAndAllowSingleApproval() {
@@ -352,6 +860,7 @@ final class SettingsStateTests: XCTestCase {
 
         XCTAssertEqual(state.remoteFileOffer?.displayTitle, "Windows：2 个文件可接收")
         XCTAssertTrue(state.hasRemoteFileOffer)
+        XCTAssertEqual(requestedTransferId, "transfer-1")
 
         state.requestRemoteFileReceive()
 
@@ -516,6 +1025,62 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: extractedDirectory.appendingPathComponent("source.txt"), encoding: .utf8),
             "served from mac ffi socket"
+        )
+    }
+
+    func testCoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let sourceURL = temporaryDirectory.appendingPathComponent("registered.txt")
+        try "served from mac ffi file server".write(to: sourceURL, atomically: true, encoding: .utf8)
+        guard let server = CoreBridge().openFileServer(bindPort: 0) else {
+            return XCTFail("file server ffi handle should open")
+        }
+        defer { server.close() }
+        XCTAssertGreaterThan(server.localPort, 0)
+        XCTAssertTrue(server.registerTransfer(transferId: "transfer-a", sourcePaths: [sourceURL.path]))
+        let servedExpectation = expectation(description: "file server served archive")
+        var served: UInt64 = 0
+        DispatchQueue.global().async {
+            served = server.serveNext(tempDirectory: temporaryDirectory.path)
+            servedExpectation.fulfill()
+        }
+
+        let receiver = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(receiver, 0)
+        defer { Darwin.close(receiver) }
+        var targetAddress = sockaddr_in()
+        targetAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        targetAddress.sin_family = sa_family_t(AF_INET)
+        targetAddress.sin_port = UInt16(server.localPort).bigEndian
+        targetAddress.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connectResult = withUnsafePointer(to: &targetAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.connect(receiver, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connectResult, 0)
+        _ = "transfer-a\n".withCString { pointer in
+            Darwin.send(receiver, pointer, strlen(pointer), 0)
+        }
+        let lengthData = try readSocketData(receiver, byteCount: 8)
+        let byteCount = lengthData.withUnsafeBytes { rawBuffer in
+            UInt64(bigEndian: rawBuffer.load(as: UInt64.self))
+        }
+        let payload = try readSocketData(receiver, byteCount: Int(byteCount))
+        wait(for: [servedExpectation], timeout: 6)
+        XCTAssertEqual(served, byteCount)
+        XCTAssertGreaterThan(served, 0)
+        let receivedURL = temporaryDirectory.appendingPathComponent("file-server-received.zip")
+        try payload.write(to: receivedURL)
+        let extractedDirectory = temporaryDirectory.appendingPathComponent("file-server-unzipped", isDirectory: true)
+        try unzip(receivedURL, to: extractedDirectory)
+
+        XCTAssertEqual(
+            try String(contentsOf: extractedDirectory.appendingPathComponent("registered.txt"), encoding: .utf8),
+            "served from mac ffi file server"
         )
     }
 
@@ -725,6 +1290,15 @@ private func expectedGroupId(for rawKey: String) -> String {
     }
 }
 
+private func XCTAssertContainsVisibleControl(
+    _ label: String,
+    in source: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertTrue(source.contains(label), "设置界面缺少必要控件：\(label)", file: file, line: line)
+}
+
 private final class FakeLoginItemService: LoginItemService {
     var enabled: Bool
     var requests: [Bool] = []
@@ -736,5 +1310,17 @@ private final class FakeLoginItemService: LoginItemService {
     func setEnabled(_ enabled: Bool) throws {
         requests.append(enabled)
         self.enabled = enabled
+    }
+}
+
+private final class InMemorySharedKeyVault: SharedKeyVault {
+    var sharedKey = ""
+
+    func loadSharedKey() -> String {
+        sharedKey
+    }
+
+    func saveSharedKey(_ sharedKey: String) throws {
+        self.sharedKey = sharedKey
     }
 }

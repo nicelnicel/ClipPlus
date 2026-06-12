@@ -2,13 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 构建 ClipPlus 首版：macOS 菜单栏 App 与 Windows 托盘 App 通过 Rust core 在局域网内完成共享 Key 分组、首次确认、文字/图片同步、文件按需传输、日志诊断和 Parallels Windows 端到端测试。
+**Goal:** 构建 ClipPlus 首版：macOS 菜单栏 App 与 Windows 托盘 App 通过 Rust core 在局域网内完成共享 Key 分组、自动发现同 Key 局域网设备、文字/图片同步、文件按需传输、日志诊断和 Parallels Windows 端到端测试。
 
-**Architecture:** Rust workspace 承载核心模型、Key/信任、同步状态机、发现、传输、诊断和 FFI；macOS 使用 SwiftUI 菜单栏原生壳，Windows 使用 WPF 托盘原生壳。首版 core 以内嵌库方式运行在 App 进程内，CLI 仅用于开发调试和自动化验证。
+**Architecture:** Rust workspace 承载核心模型、共享 Key 分组、同步状态机、发现、传输、诊断和 FFI；macOS 使用 SwiftUI 菜单栏原生壳，Windows 使用 WPF 托盘原生壳。首版 core 以内嵌库方式运行在 App 进程内，CLI 仅用于开发调试和自动化验证。
 
 **Tech Stack:** Rust 2021、Tokio、Serde、Tracing、Argon2、BLAKE3、Ed25519、X25519、SwiftUI、WPF、.NET、Parallels Windows VM。
 
 ---
+
+## 产品决策更新：Key-only 自动加入
+
+当前产品方向明确为 **同一个共享 Key 即为同一个局域网共享组**。首版不再设计“同意此设备”“允许设备加入”“待确认设备”“信任列表审批”等交互；用户只需要：
+
+1. 首次启动时填写共享 Key。
+2. 打开剪贴板共享开关。
+3. 在同一局域网内运行 ClipPlus 的其他 macOS/Windows 设备，只要 Key 相同，就自动发现并共享剪贴板。
+
+实现约束：
+
+- 设置页只保留 Key 设置/修改、启用共享、内容类型开关、开机启动、诊断导出等明确配置。
+- 设备列表可以用于状态展示和调试，例如“已发现同组设备”，但不能要求用户逐个同意或批准。
+- 发现、同步、文件传输的授权边界是共享 Key 派生出的 group id；Key 不同的设备必须被忽略。
+- 旧计划和历史复验记录中出现的 `trust`、`approve`、`pending peer`、`允许全部待确认设备`、`CLIPPLUS_AUTO_TRUST` 仅作为历史实现记录保留，不再代表最终产品要求。后续实现任务应移除或旁路手动信任流程，让“Key + 开启功能”成为唯一启用条件。
 
 ## 范围拆分
 
@@ -17,7 +32,7 @@
 首版闭环顺序：
 
 1. Rust workspace 与核心数据模型。
-2. 配置、共享 Key、设备身份、信任状态。
+2. 配置、共享 Key、设备身份、同 Key 自动分组。
 3. 同步策略、防回环、诊断和日志。
 4. 局域网发现、加密传输、文件按需传输。
 5. FFI、CLI、macOS 原生壳、Windows 原生壳。
@@ -121,7 +136,7 @@
 
 职责边界：
 
-- `clipplus-core`：业务状态机、剪贴板事件、同步规则、设备状态、服务生命周期。
+- `clipplus-core`：业务状态机、剪贴板事件、同步规则、同 Key 设备状态、服务生命周期。
 - `clipplus-crypto`：共享 Key 派生、组 ID、设备身份密钥和指纹。
 - `clipplus-diagnostics`：运行状态、日志脱敏、诊断包导出。
 - `clipplus-discovery`：局域网发现包和 UDP 发现。
@@ -919,7 +934,9 @@ git commit -m "feat: add core clipboard models"
 
 ---
 
-### Task 3: 共享 Key、设备身份与信任状态
+### Task 3: 共享 Key、设备身份与同组设备状态
+
+> 产品决策更新：本任务早期设计包含 `approve/trust/pending peer`，但最终产品要求改为 Key-only 自动加入。后续执行或重构本任务时，保留共享 Key 派生、group id、设备身份和 Key 不匹配隔离；移除“同意设备/允许设备/待确认设备”作为同步前置条件。同一 group id 的设备在启用共享后应自动可同步。
 
 **Files:**
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-crypto/src/key.rs`
@@ -2162,6 +2179,8 @@ git commit -m "fix: harden discovery packet contract"
 
 ### Task 7: 传输消息、会话状态与文件按需传输模型
 
+> 产品决策更新：本任务早期会话模型包含 `PendingApproval`/`Trusted`。最终产品要求是 Key-only 自动加入，后续执行或重构本任务时应让同一 group id 且开启共享的设备直接可同步；会话状态只用于发现、在线状态、版本/能力协商和 Key 不匹配隔离，不再用于人工批准。
+
 **Files:**
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-transport/src/message.rs`
 - Modify: `/Users/cc/proj/ClipPlus/crates/clipplus-transport/src/session.rs`
@@ -3323,7 +3342,7 @@ Create `/Users/cc/proj/ClipPlus/scripts/test/parallels-e2e.md`:
 
 ## 测试目标
 
-验证 macOS 宿主机和 Parallels Windows 虚拟机能运行 ClipPlus，并在关闭 Parallels 自带剪贴板共享后，通过 ClipPlus 完成共享 Key 设置、设备确认、文字同步、日志和诊断检查。
+验证 macOS 宿主机和 Parallels Windows 虚拟机能运行 ClipPlus，并在关闭 Parallels 自带剪贴板共享后，通过 ClipPlus 完成共享 Key 设置、同 Key 自动发现、文字同步、日志和诊断检查。
 
 ## 测试前置条件
 
@@ -3342,16 +3361,16 @@ Create `/Users/cc/proj/ClipPlus/scripts/test/parallels-e2e.md`:
 5. 在 Windows VM 中运行 `dotnet test apps/windows/ClipPlus.Windows.sln`。
 6. 启动 mac App，确认菜单栏出现 ClipPlus。
 7. 启动 Windows App，确认托盘出现 ClipPlus。
-8. 两端输入同一个共享 Key：`clipplus-test-key`。
-9. 在 mac 端允许 Windows 设备加入。
+8. 两端输入同一个共享 Key：`clipplus-test-key`，并打开共享功能。
+9. 等待两端自动发现同 Key 设备；不需要点击“允许设备”“同意设备”或任何待确认按钮。
 10. mac 复制 `hello from mac`，Windows 粘贴应得到相同文字。
 11. Windows 复制 `hello from windows`，mac 粘贴应得到相同文字。
 12. 导出诊断包，确认诊断包不包含 `clipplus-test-key`。
 
 ## 失败定位
 
-- 如果设备发现失败，检查桥接网络和 Windows 防火墙提示。
-- 如果文字同步失败，检查日志中的 `discovery`、`pairing`、`sync` 模块。
+- 如果设备发现失败，检查桥接网络、Windows 防火墙提示、UDP `47631` 和两端共享 Key 派生出的 group id 是否一致。
+- 如果文字同步失败，检查日志中的 `discovery`、`group_id`、`sync` 模块。
 - 如果诊断包包含原始 Key，立即停止测试并修复脱敏逻辑。
 ```
 
@@ -3409,7 +3428,7 @@ git commit -m "test: add parallels e2e checklist"
 
 **审查状态：**
 
-- 规格审查：通过。Parallels 测试手册包含测试目标、前置条件、步骤和失败定位；覆盖 macOS 检查、CLI status、mac Swift test、Windows `dotnet test`、菜单栏/托盘确认、同 Key、设备允许、双向文字复制和诊断包不含 Key。
+- 规格审查：通过。Parallels 测试手册包含测试目标、前置条件、步骤和失败定位；覆盖 macOS 检查、CLI status、mac Swift test、Windows `dotnet test`、菜单栏/托盘确认、同 Key 自动发现、双向文字复制和诊断包不含 Key；不再要求“允许设备/同意设备”步骤。
 - 代码质量审查：通过。`scripts/dev/check.sh` 保持 Rust 检查，并在 Swift/dotnet 环境可用且对应项目存在时条件运行 macOS/Windows 测试；本机无 `dotnet` 时正确跳过 Windows 分支。手册没有引导用户直接修改防火墙规则，并明确诊断包不得包含 `clipplus-test-key`。
 
 **验证记录：**
@@ -3468,7 +3487,9 @@ git commit -m "test: add parallels e2e checklist"
 - 诊断导出：macOS 和 Windows 设置页按钮已能导出 `status.json` 与脱敏后的 `clipplus.log` 到 Downloads 下的 `ClipPlus-Diagnostics-*` 目录。测试覆盖状态字段输出和 `clipplus-test-key`、剪贴板敏感文本脱敏。
 - 验证：`./scripts/dev/check.sh` 通过；Windows VM 内通过 SSH 执行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 12/12。
 
-**2026-06-10 手动设备确认复验：**
+**2026-06-10 手动设备确认复验（历史记录，已被 Key-only 产品决策废弃）：**
+
+> 该段记录当时已实现和复验过的旧信任流程，仅用于追溯。根据当前产品决策，最终 UI/同步路径不应再要求“允许设备”“同意设备”或“待确认设备”；同一共享 Key 且开启共享的设备应自动发现并同步。
 
 - 实现范围：macOS 与 Windows 原生壳新增 `trust` 消息；未确认设备只进入待确认列表，剪贴板文本/图片发布需要 `sharedKeyConfigured && sharingEnabled && trustedPeerCount > 0`。批准设备后，批准方发送面向该设备的 `trust` 消息；被批准方收到后反向信任批准方。
 - UI：macOS 菜单栏 ClipPlus 面板在发现 Windows 后显示 `允许全部待确认设备（1）`；通过 Accessibility 点击该按钮完成一次真实 UI 手动确认。macOS 设置页和 Windows 设置窗口都已展示待确认设备列表，并支持逐个允许和全部允许。
@@ -3744,6 +3765,31 @@ git commit -m "test: add parallels e2e checklist"
 - 测试方案记录：`AGENTS.md` 已补充 opaque file server handle 的 Rust FFI 固定符号测试要求；后续接入 macOS/Windows CoreBridge 时，必须再补对应原生壳真实符号测试，并在 Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 验证 bundled DLL。
 - 剩余项更新：Rust 已具备完整 file server handle 能力；后续可在新切片中把 macOS/Windows TCP bind、accept、registry 和 serve loop 切到该 handle，并重新执行真实文件接收 UI E2E。
 
+**2026-06-11 macOS/Windows 文件 server runtime 接入 opaque handle 复验：**
+
+- 迁移范围：macOS `CoreBridge` 新增 `RustFileServer`，加载 `clipplus_file_server_bind/local_port/register_transfer/serve_next/free`；Windows `CoreBridge` 新增 `RustFileServer : IDisposable`，同样加载 5 个 opaque handle 符号并补充 `FfiLoadDiagnostics` 导出检查。两端 `UdpTextSyncService` 不再自己 `TcpListener`/`accept`/读取 `transferId`/传 accepted socket，而是在启动时通过 Rust 绑定 TCP `47632`，发布 fileOffer 前先 `registerTransfer`，后台 loop 调用 `serveNext`。
+- 生命周期修正：Rust `FileTransferServer` 的 listener 为 nonblocking accept 轮询，避免停止时永久卡住；accept 后显式 `stream.set_nonblocking(false)`，修复 Windows accepted socket 继承非阻塞后读 `transferId` 直接 `WouldBlock` 返回 0 的问题。macOS wrapper 用 active operation 计数保证 close 等待正在执行的 serve/register；Windows wrapper 用 `ReaderWriterLockSlim` 保证 Dispose 等待活跃 serve/register 且 exactly once free。两端停止时会用本机 TCP 连接唤醒阻塞的 `serveNext`。
+- TDD 红灯：macOS 新增 `testCoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable` 后先失败于 `CoreBridge` 缺少 `openFileServer`；Windows VM 新增 `CoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable` 后先失败于 `CoreBridge` 缺少 `OpenFileServer`。实现后 Windows 首次运行 `ServeNext` 返回 0，定位为 accepted socket 非阻塞继承，已在 Rust 侧修复。
+- 单元验证：`cargo test -p clipplus-transport file_transfer_server_` 通过 2/2；`cargo test -p clipplus-ffi file_server` 通过 2/2；macOS `CLIPPLUS_FFI_LIBRARY_PATH=... swift test --filter CoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable` 通过；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行新 CoreBridge file server 过滤测试通过。
+- 全量验证：`./scripts/dev/check.sh` 通过，包含 Rust FFI 26/26、transport message 35/35 和 macOS Swift 34/34；Windows VM 内不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 34/34。
+- 发布验证：`./scripts/dev/build-mac-app.sh` 通过，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`；Windows single-file 重新发布为 `win-arm64`，生成 `target/windows-single-exe/ClipPlus.Windows.exe`，大小 `68351919` 字节；不设置 `CLIPPLUS_FFI_LIBRARY_PATH` 运行 single-file smoke，`ExitCode=0`，输出 `corebridge_smoke_test group_id=21YR2N3_wcdRPmEMLiuLMA`。
+- 有效 E2E 说明：第一次 macOS -> Windows 文件接收跑通后发现 `/private/tmp/ClipPlusMac.app` 仍是旧二进制，日志仍为 `served file archive file_count=...`，因此不作为本切片有效验收。随后手动刷新 `/private/tmp/ClipPlusMac.app/Contents/MacOS/ClipPlusMac` 和 `Contents/Frameworks/libclipplus_ffi.dylib`，`strings` 确认新二进制包含 `served file archive byte_count=` 和 `file transfer registration failed`。
+- 真实 UI E2E 方向：macOS -> Windows。macOS 使用刷新后的 `/private/tmp/ClipPlusMac.app`，Windows 使用最新 single-file exe；两端设置 `CLIPPLUS_SHARED_KEY=clipplus-test-key`、`CLIPPLUS_AUTO_TRUST=1` 和显式 `CLIPPLUS_PEER_HOSTS`，Windows 设置 `CLIPPLUS_SHOW_SETTINGS_ON_START=1`，未设置 `CLIPPLUS_AUTO_RECEIVE_FILES`。macOS 将真实文件 `/Users/cc/proj/ClipPlus/target/test-assets/mac-rust-handle-valid-source-mac-to-windows-rust-handle-valid-1781147231.txt` 写入 NSPasteboard，marker 为 `mac-to-windows-rust-handle-valid-1781147231`。
+- 真实 UI 接收：Windows 日志出现 `received file offer file_count=1 byte_count=43`；通过 Windows UIAutomation 枚举真实 WPF Button `cc的MacBook Pro：1 个文件可接收` 并调用 `InvokePattern.Invoke()`，触发设置窗口里的接收按钮事件。
+- 内容和日志证据：Windows `Downloads` 生成 `ClipPlus-Received-E3D11CCE-2E97-421F-BBEB-70D88D9CEE45.zip`，长度 `298` 字节；zip 内 `mac-rust-handle-valid-source-mac-to-windows-rust-handle-valid-1781147231.txt` 内容与 marker 完全一致，输出 `E2E_RUST_HANDLE_VALID_CONTENT_OK=...`。Windows 日志出现 `downloaded file archive byte_count=298`；macOS 新 runtime 日志出现 `served file archive byte_count=298`，证明 server loop 走 opaque handle 路径而不是旧 accepted-socket FFI 路径。
+- 脱敏与清理：macOS 和 Windows 日志匹配检查均未出现 `clipplus-test-key`、marker、测试文件名、`/Users/cc` 或 `C:`；E2E 前后 Parallels `Shared clipboard mode: off`；测试后已停止 macOS `ClipPlusMac`、Windows `ClipPlus.Windows`/`dotnet` 和终端测试进程。
+- 剩余项更新：文件 offer 消息、zip 生成、download、UDP socket、length-prefixed accepted-socket 发送，以及 macOS/Windows 文件 server bind/register/serve loop 均已迁入 Rust FFI。旧 `clipplus_serve_file_archive_to_socket` 仍保留为兼容低层测试路径，runtime 不再依赖它。
+
+**2026-06-11 简约 UI 与 Key-only 自动接收更新：**
+
+- 产品决策：普通用户界面只保留 3 个设置入口：共享 Key、开启功能、开机启动。macOS 菜单栏、macOS 设置窗口和 Windows 设置窗口不再显示状态、导出诊断包、待确认设备、允许设备、接收文件按钮等复杂入口。底层日志、诊断导出、文件 offer 状态和旧 trust 消息仍保留给调试与兼容使用，但不作为主界面操作。
+- Key-only 行为：收到同一 group id 的 `hello` 后，macOS/Windows runtime 直接调用本地 `trustPeer` 并回发 `trust` 兼容旧端；不再依赖 `CLIPPLUS_AUTO_TRUST` 或人工允许设备。不同共享 Key 的设备仍因 group id 不匹配被隔离。
+- 文件接收行为：同 Key 可信设备发来的 `fileOffer` 默认触发 `RemoteFileReceiveRequested` 并下载到 `Downloads/ClipPlus-Received-<transferId>.zip`；不再依赖 `CLIPPLUS_AUTO_RECEIVE_FILES`，也不需要接收按钮。文件下载仍走同一下载事件和 Rust FFI 下载路径。
+- TDD 红灯：新增 macOS `testSettingsUIOnlyShowsKeySharingAndStartupControls` 初始失败于 UI 中存在状态、导出诊断、待确认设备、允许设备、二次输入 Key、打开独立设置窗口和退出按钮；Windows 新增 `SettingsUiOnlyShowsKeySharingAndStartupControls` 初始失败于 XAML/托盘状态和复杂入口。随后把两端 UI 收敛到共享 Key、保存 Key、开启功能、开机启动，并让 macOS 菜单栏复用简化设置视图。
+- 文件自动接收红灯：在 macOS `testRemoteFileOfferCanRequestReceive` 和 Windows `RemoteFileOfferCanRequestReceive` 中加入默认自动触发接收请求断言，初始分别失败于 `requestedTransferId == nil` / `Actual: null`。随后将 `SettingsState.updateRemoteFileOffer` 默认 `autoRequestReceive` 改为开启，并移除 runtime 对 `CLIPPLUS_AUTO_RECEIVE_FILES` 的依赖。
+- 验证：macOS 新 UI 测试通过；Windows VM 新 UI 测试通过；`./scripts/dev/check.sh` 通过，包含 Rust、FFI、transport 和 macOS Swift 35/35；Windows VM 内 `C:\dotnet\dotnet.exe test ClipPlus.Windows.sln --nologo` 通过 35/35；`git diff --check` 通过。直接运行无 FFI 环境的 `swift test` 会因既有 FFI 测试缺少 dylib 崩溃，按项目约定应使用 `./scripts/dev/check.sh`。
+- 测试方案记录：`AGENTS.md` 和 `scripts/test/parallels-e2e.md` 已更新为 Key-only 自动加入、文件 offer 默认自动下载，不再要求人工允许设备、真实 UI 点击接收按钮或 `CLIPPLUS_AUTO_RECEIVE_FILES`。
+
 ---
 
 ## 自查清单
@@ -3752,7 +3798,7 @@ Spec 覆盖：
 
 - Rust core 模型：Task 1、Task 2、Task 4。
 - 共享 Key 和设备身份：Task 3。
-- 首次确认和信任状态：Task 3、Task 7。
+- 同 Key 自动分组和 Key 不匹配隔离：Task 3、Task 6、Task 7。
 - 文字、图片、文件事件模型：Task 2、Task 7。
 - 防回环：Task 4。
 - 日志、脱敏、诊断包：Task 5。

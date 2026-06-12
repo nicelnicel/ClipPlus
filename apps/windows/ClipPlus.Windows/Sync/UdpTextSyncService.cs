@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Windows.Threading;
@@ -22,21 +23,17 @@ public sealed class UdpTextSyncService : IDisposable
     private readonly DispatcherTimer timer;
     private readonly string deviceId;
     private readonly string deviceName;
-    private readonly bool autoTrustPeers;
-    private readonly bool autoReceiveFiles;
     private readonly IReadOnlyList<string> peerHosts;
     private readonly object udpSocketLock = new();
 
     private RustUdpSocket? udpSocket;
-    private TcpListener? archiveListener;
+    private RustFileServer? fileServer;
     private CancellationTokenSource? cancellation;
     private string? lastLocalText;
     private string? lastRemoteText;
     private string? lastLocalImageHash;
     private string? lastRemoteImageHash;
     private string? lastLocalFileSignature;
-    private readonly Dictionary<string, IReadOnlyList<string>> localFileTransfers = new(StringComparer.Ordinal);
-    private readonly object localFileTransfersLock = new();
     private int tickCount;
 
     public UdpTextSyncService(SettingsState state, ClipPlusLogger logger, Dispatcher dispatcher)
@@ -46,8 +43,6 @@ public sealed class UdpTextSyncService : IDisposable
         this.dispatcher = dispatcher;
         deviceId = LoadOrCreateDeviceId();
         deviceName = Environment.MachineName;
-        autoTrustPeers = Environment.GetEnvironmentVariable("CLIPPLUS_AUTO_TRUST") == "1";
-        autoReceiveFiles = Environment.GetEnvironmentVariable("CLIPPLUS_AUTO_RECEIVE_FILES") == "1";
         peerHosts = (Environment.GetEnvironmentVariable("CLIPPLUS_PEER_HOSTS") ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         state.PeerApproved += SendTrust;
@@ -57,6 +52,7 @@ public sealed class UdpTextSyncService : IDisposable
             Interval = TimeSpan.FromMilliseconds(750)
         };
         timer.Tick += (_, _) => PollClipboardAndBroadcast();
+        _ = RefreshLocalDeviceInfoAsync();
     }
 
     public void Start()
@@ -71,13 +67,18 @@ public sealed class UdpTextSyncService : IDisposable
         try
         {
             cancellation = new CancellationTokenSource();
-            udpSocket = new ClipPlus.Windows.CoreBridge.CoreBridge().OpenUdpSocket(Port)
+            var bridge = new ClipPlus.Windows.CoreBridge.CoreBridge();
+            udpSocket = bridge.OpenUdpSocket(Port)
                 ?? throw new InvalidOperationException("Rust UDP socket is unavailable.");
-            archiveListener = new TcpListener(IPAddress.Any, ArchivePort);
-            archiveListener.Start();
+            fileServer = bridge.OpenFileServer(ArchivePort)
+                ?? throw new InvalidOperationException("Rust file server is unavailable.");
+            if (fileServer.LocalPort != ArchivePort)
+            {
+                throw new InvalidOperationException("Rust file server bound an unexpected port.");
+            }
 
             _ = Task.Run(() => ReceiveLoopAsync(cancellation.Token));
-            _ = Task.Run(() => FileArchiveLoopAsync(cancellation.Token));
+            _ = Task.Run(() => FileArchiveLoop(cancellation.Token));
             timer.Start();
             SendHello();
             logger.Info($"sync service started on UDP {Port}");
@@ -95,7 +96,9 @@ public sealed class UdpTextSyncService : IDisposable
         state.RemoteFileReceiveRequested -= DownloadRemoteFileOffer;
         timer.Stop();
         cancellation?.Cancel();
-        archiveListener?.Stop();
+        WakeFileServer();
+        fileServer?.Dispose();
+        fileServer = null;
         RustUdpSocket? socketToDispose;
         lock (udpSocketLock)
         {
@@ -170,6 +173,7 @@ public sealed class UdpTextSyncService : IDisposable
 
     private void PollClipboardAndBroadcast()
     {
+        state.PurgeExpiredConnectedPeers();
         if (!state.SharedKeyConfigured || !state.SharingEnabled)
         {
             return;
@@ -263,15 +267,20 @@ public sealed class UdpTextSyncService : IDisposable
             return;
         }
 
+        state.RecordConnectedPeer(message.SenderDeviceId, message.SenderDeviceName, sourceHost);
+
         switch (message.Kind)
         {
             case ClipPlusMessageKind.Hello:
-                state.MarkPeerPending(message.SenderDeviceId, message.SenderDeviceName);
-                if (autoTrustPeers)
+                if (state.TrustPeer(message.SenderDeviceId, message.SenderDeviceName))
                 {
-                    state.ApprovePendingPeers();
+                    SendTrust(message.SenderDeviceId);
+                    logger.Info($"peer hello trusted device_id_prefix={message.SenderDeviceId[..Math.Min(8, message.SenderDeviceId.Length)]}");
                 }
-                logger.Info($"peer hello device_id_prefix={message.SenderDeviceId[..Math.Min(8, message.SenderDeviceId.Length)]}");
+                else
+                {
+                    logger.Info($"peer hello device_id_prefix={message.SenderDeviceId[..Math.Min(8, message.SenderDeviceId.Length)]}");
+                }
                 break;
             case ClipPlusMessageKind.Trust:
                 if (!string.Equals(message.ApprovedDeviceId, deviceId, StringComparison.Ordinal))
@@ -286,7 +295,6 @@ public sealed class UdpTextSyncService : IDisposable
                 break;
             case ClipPlusMessageKind.Text:
                 if (!state.SharingEnabled
-                    || !state.IsPeerTrusted(message.SenderDeviceId)
                     || string.IsNullOrEmpty(message.Text))
                 {
                     return;
@@ -301,7 +309,6 @@ public sealed class UdpTextSyncService : IDisposable
             case ClipPlusMessageKind.Image:
                 var imageData = message.DecodedImageData;
                 if (!state.SharingEnabled
-                    || !state.IsPeerTrusted(message.SenderDeviceId)
                     || imageData is null
                     || imageData.Length > ClipPlusMessage.MaxInlineImageBytes
                     || string.IsNullOrEmpty(message.ImageContentHash))
@@ -318,7 +325,6 @@ public sealed class UdpTextSyncService : IDisposable
                 break;
             case ClipPlusMessageKind.FileOffer:
                 if (!state.SharingEnabled
-                    || !state.IsPeerTrusted(message.SenderDeviceId)
                     || string.IsNullOrEmpty(message.TransferId)
                     || message.Files is null
                     || message.Files.Count == 0)
@@ -334,7 +340,7 @@ public sealed class UdpTextSyncService : IDisposable
                     SourceHost: sourceHost,
                     FileCount: message.Files.Count,
                     TotalBytes: totalBytes
-                ), autoRequestReceive: autoReceiveFiles);
+                ));
                 logger.Info($"received file offer file_count={message.Files.Count} byte_count={totalBytes}");
                 break;
         }
@@ -343,9 +349,11 @@ public sealed class UdpTextSyncService : IDisposable
     private void PublishFileOffer(IReadOnlyList<string> filePaths)
     {
         var transferId = Guid.NewGuid().ToString();
-        lock (localFileTransfersLock)
+        if (fileServer?.RegisterTransfer(transferId, filePaths) != true)
         {
-            localFileTransfers[transferId] = filePaths.ToArray();
+            state.LastStatusMessage = "文件广播失败";
+            logger.Error("file transfer registration failed");
+            return;
         }
 
         var items = filePaths.Select(CreateFileTransferItem).ToArray();
@@ -380,14 +388,27 @@ public sealed class UdpTextSyncService : IDisposable
         );
     }
 
-    private async Task FileArchiveLoopAsync(CancellationToken token)
+    private void FileArchiveLoop(CancellationToken token)
     {
-        while (!token.IsCancellationRequested && archiveListener is not null)
+        while (!token.IsCancellationRequested)
         {
             try
             {
-                var client = await archiveListener.AcceptTcpClientAsync(token);
-                _ = Task.Run(() => HandleArchiveClientAsync(client, token), token);
+                var server = fileServer;
+                if (server is null)
+                {
+                    return;
+                }
+
+                var byteCount = server.ServeNext(Path.GetTempPath());
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+                if (byteCount > 0)
+                {
+                    logger.Info($"served file archive byte_count={byteCount}");
+                }
             }
             catch (OperationCanceledException)
             {
@@ -400,51 +421,6 @@ public sealed class UdpTextSyncService : IDisposable
             catch (Exception error)
             {
                 logger.Error($"file archive loop error: {error.Message}");
-            }
-        }
-    }
-
-    private async Task HandleArchiveClientAsync(TcpClient client, CancellationToken token)
-    {
-        using (client)
-        {
-            try
-            {
-                await using var stream = client.GetStream();
-                using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-                var transferId = (await reader.ReadLineAsync(token))?.Trim();
-                if (string.IsNullOrEmpty(transferId))
-                {
-                    return;
-                }
-
-                IReadOnlyList<string>? filePaths;
-                lock (localFileTransfersLock)
-                {
-                    localFileTransfers.TryGetValue(transferId, out filePaths);
-                }
-
-                if (filePaths is null)
-                {
-                    return;
-                }
-
-                var archivePath = Path.Combine(Path.GetTempPath(), $"ClipPlus-{transferId}.zip");
-                var byteCount = new ClipPlus.Windows.CoreBridge.CoreBridge().ServeFileArchiveToSocket(
-                    client.Client.Handle,
-                    filePaths,
-                    archivePath);
-                if (byteCount == 0)
-                {
-                    logger.Error("file transfer serve failed");
-                    return;
-                }
-
-                logger.Info($"served file archive file_count={filePaths.Count} byte_count={byteCount}");
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                logger.Error($"file transfer serve failed: {error.Message}");
             }
         }
     }
@@ -555,8 +531,21 @@ public sealed class UdpTextSyncService : IDisposable
                     return;
                 }
 
-                _ = udpSocket.SendTo(bytes, IPAddress.Broadcast.ToString(), Port);
+                var targets = new HashSet<string>(StringComparer.Ordinal)
+                {
+                    IPAddress.Broadcast.ToString()
+                };
                 foreach (var peerHost in peerHosts)
+                {
+                    targets.Add(peerHost);
+                }
+
+                foreach (var peerHost in state.ConnectedRemotePeerSummaries.Select(peer => peer.IpAddress))
+                {
+                    targets.Add(peerHost);
+                }
+
+                foreach (var peerHost in targets)
                 {
                     if (IPAddress.TryParse(peerHost, out var address))
                     {
@@ -568,6 +557,70 @@ public sealed class UdpTextSyncService : IDisposable
         catch (Exception error)
         {
             logger.Error($"send failed: {error.Message}");
+        }
+    }
+
+    private static string LocalIPv4Address()
+    {
+        var candidates = NetworkInterface.GetAllNetworkInterfaces()
+            .Where(networkInterface =>
+                networkInterface.OperationalStatus == OperationalStatus.Up
+                && networkInterface.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                && networkInterface.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+            .SelectMany(networkInterface => networkInterface.GetIPProperties().UnicastAddresses)
+            .Select(address => address.Address)
+            .Where(address => address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address))
+            .Select(address => address.ToString())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        return candidates.FirstOrDefault(IsPrivateIPv4Address)
+            ?? candidates.FirstOrDefault()
+            ?? "未知 IP";
+    }
+
+    private static bool IsPrivateIPv4Address(string ipAddress)
+    {
+        var parts = ipAddress
+            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => byte.TryParse(part, out var value) ? value : (byte?)null)
+            .ToArray();
+        if (parts.Length != 4 || parts.Any(part => part is null))
+        {
+            return false;
+        }
+
+        var first = parts[0]!.Value;
+        var second = parts[1]!.Value;
+        return first == 10
+            || (first == 172 && second is >= 16 and <= 31)
+            || (first == 192 && second == 168);
+    }
+
+    private async Task RefreshLocalDeviceInfoAsync()
+    {
+        var currentDeviceId = deviceId;
+        var currentDeviceName = deviceName;
+        var ipAddress = await Task.Run(LocalIPv4Address);
+        await dispatcher.InvokeAsync(() => state.SetLocalDevice(
+            currentDeviceId,
+            currentDeviceName,
+            ipAddress
+        ));
+    }
+
+    private static void WakeFileServer()
+    {
+        try
+        {
+            using var client = new TcpClient();
+            client.Connect(IPAddress.Loopback, ArchivePort);
+            using var stream = client.GetStream();
+            stream.Write(Encoding.UTF8.GetBytes("\n"));
+        }
+        catch
+        {
+            // Best-effort wakeup for a blocking Rust accept during shutdown.
         }
     }
 

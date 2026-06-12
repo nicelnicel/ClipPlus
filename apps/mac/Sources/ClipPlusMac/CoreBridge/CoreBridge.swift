@@ -93,6 +93,10 @@ struct CoreBridge {
         Self.ffiBridge?.openUdpSocket(bindPort: bindPort)
     }
 
+    func openFileServer(bindPort: Int) -> RustFileServer? {
+        Self.ffiBridge?.openFileServer(bindPort: bindPort)
+    }
+
     func createTrustMessageJSON(
         groupId: String,
         senderDeviceId: String,
@@ -172,6 +176,85 @@ final class RustUdpSocket {
     }
 }
 
+final class RustFileServer {
+    private let bridge: ClipPlusFFIBridge
+    private let condition = NSCondition()
+    private var handle: UnsafeMutableRawPointer?
+    private var closing = false
+    private var activeOperations = 0
+
+    fileprivate init(bridge: ClipPlusFFIBridge, handle: UnsafeMutableRawPointer) {
+        self.bridge = bridge
+        self.handle = handle
+    }
+
+    var localPort: Int {
+        guard let handle = beginOperation() else {
+            return 0
+        }
+        defer { endOperation() }
+
+        return bridge.fileServerLocalPort(handle)
+    }
+
+    func registerTransfer(transferId: String, sourcePaths: [String]) -> Bool {
+        guard let handle = beginOperation() else {
+            return false
+        }
+        defer { endOperation() }
+
+        return bridge.fileServerRegisterTransfer(handle, transferId: transferId, sourcePaths: sourcePaths)
+    }
+
+    func serveNext(tempDirectory: String) -> UInt64 {
+        guard let handle = beginOperation() else {
+            return 0
+        }
+        defer { endOperation() }
+
+        return bridge.fileServerServeNext(handle, tempDirectory: tempDirectory)
+    }
+
+    func close() {
+        condition.lock()
+        closing = true
+        while activeOperations > 0 {
+            condition.wait()
+        }
+        let handleToClose = handle
+        handle = nil
+        condition.unlock()
+
+        if let handleToClose {
+            bridge.fileServerFree(handleToClose)
+        }
+    }
+
+    deinit {
+        close()
+    }
+
+    private func beginOperation() -> UnsafeMutableRawPointer? {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !closing, let handle else {
+            return nil
+        }
+
+        activeOperations += 1
+        return handle
+    }
+
+    private func endOperation() {
+        condition.lock()
+        activeOperations -= 1
+        if activeOperations == 0 {
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
+}
+
 private final class ClipPlusFFIBridge {
     private typealias DeriveGroupIdFunction = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
     private typealias CreateHelloMessageJSONFunction = @convention(c) (
@@ -233,6 +316,18 @@ private final class ClipPlusFFIBridge {
         Int,
         UnsafeMutablePointer<UInt16>?
     ) -> Int
+    private typealias FileServerBindFunction = @convention(c) (UInt16) -> UnsafeMutableRawPointer?
+    private typealias FileServerFreeFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    private typealias FileServerLocalPortFunction = @convention(c) (UnsafeMutableRawPointer?) -> UInt16
+    private typealias FileServerRegisterTransferFunction = @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> Bool
+    private typealias FileServerServeNextFunction = @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafePointer<CChar>?
+    ) -> UInt64
     private typealias FreeStringFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let handle: UnsafeMutableRawPointer
@@ -249,6 +344,11 @@ private final class ClipPlusFFIBridge {
     private let udpSocketLocalPortFunction: UdpSocketLocalPortFunction
     private let udpSocketSendToFunction: UdpSocketSendToFunction
     private let udpSocketRecvFunction: UdpSocketRecvFunction
+    private let fileServerBindFunction: FileServerBindFunction
+    private let fileServerFreeFunction: FileServerFreeFunction
+    private let fileServerLocalPortFunction: FileServerLocalPortFunction
+    private let fileServerRegisterTransferFunction: FileServerRegisterTransferFunction
+    private let fileServerServeNextFunction: FileServerServeNextFunction
     private let createTrustMessageJSONFunction: CreateTextMessageJSONFunction
     private let freeStringFunction: FreeStringFunction
 
@@ -267,6 +367,11 @@ private final class ClipPlusFFIBridge {
         udpSocketLocalPortFunction: @escaping UdpSocketLocalPortFunction,
         udpSocketSendToFunction: @escaping UdpSocketSendToFunction,
         udpSocketRecvFunction: @escaping UdpSocketRecvFunction,
+        fileServerBindFunction: @escaping FileServerBindFunction,
+        fileServerFreeFunction: @escaping FileServerFreeFunction,
+        fileServerLocalPortFunction: @escaping FileServerLocalPortFunction,
+        fileServerRegisterTransferFunction: @escaping FileServerRegisterTransferFunction,
+        fileServerServeNextFunction: @escaping FileServerServeNextFunction,
         createTrustMessageJSONFunction: @escaping CreateTextMessageJSONFunction,
         freeStringFunction: @escaping FreeStringFunction
     ) {
@@ -284,6 +389,11 @@ private final class ClipPlusFFIBridge {
         self.udpSocketLocalPortFunction = udpSocketLocalPortFunction
         self.udpSocketSendToFunction = udpSocketSendToFunction
         self.udpSocketRecvFunction = udpSocketRecvFunction
+        self.fileServerBindFunction = fileServerBindFunction
+        self.fileServerFreeFunction = fileServerFreeFunction
+        self.fileServerLocalPortFunction = fileServerLocalPortFunction
+        self.fileServerRegisterTransferFunction = fileServerRegisterTransferFunction
+        self.fileServerServeNextFunction = fileServerServeNextFunction
         self.createTrustMessageJSONFunction = createTrustMessageJSONFunction
         self.freeStringFunction = freeStringFunction
     }
@@ -312,6 +422,11 @@ private final class ClipPlusFFIBridge {
                   let udpSocketLocalPortSymbol = dlsym(handle, "clipplus_udp_socket_local_port"),
                   let udpSocketSendToSymbol = dlsym(handle, "clipplus_udp_socket_send_to"),
                   let udpSocketRecvSymbol = dlsym(handle, "clipplus_udp_socket_recv"),
+                  let fileServerBindSymbol = dlsym(handle, "clipplus_file_server_bind"),
+                  let fileServerFreeSymbol = dlsym(handle, "clipplus_file_server_free"),
+                  let fileServerLocalPortSymbol = dlsym(handle, "clipplus_file_server_local_port"),
+                  let fileServerRegisterTransferSymbol = dlsym(handle, "clipplus_file_server_register_transfer"),
+                  let fileServerServeNextSymbol = dlsym(handle, "clipplus_file_server_serve_next"),
                   let createTrustMessageJSONSymbol = dlsym(handle, "clipplus_create_trust_message_json"),
                   let freeSymbol = dlsym(handle, "clipplus_free_string") else {
                 dlclose(handle)
@@ -361,6 +476,20 @@ private final class ClipPlusFFIBridge {
                 udpSocketRecvSymbol,
                 to: UdpSocketRecvFunction.self
             )
+            let fileServerBindFunction = unsafeBitCast(fileServerBindSymbol, to: FileServerBindFunction.self)
+            let fileServerFreeFunction = unsafeBitCast(fileServerFreeSymbol, to: FileServerFreeFunction.self)
+            let fileServerLocalPortFunction = unsafeBitCast(
+                fileServerLocalPortSymbol,
+                to: FileServerLocalPortFunction.self
+            )
+            let fileServerRegisterTransferFunction = unsafeBitCast(
+                fileServerRegisterTransferSymbol,
+                to: FileServerRegisterTransferFunction.self
+            )
+            let fileServerServeNextFunction = unsafeBitCast(
+                fileServerServeNextSymbol,
+                to: FileServerServeNextFunction.self
+            )
             let createTrustMessageJSONFunction = unsafeBitCast(
                 createTrustMessageJSONSymbol,
                 to: CreateTextMessageJSONFunction.self
@@ -381,6 +510,11 @@ private final class ClipPlusFFIBridge {
                 udpSocketLocalPortFunction: udpSocketLocalPortFunction,
                 udpSocketSendToFunction: udpSocketSendToFunction,
                 udpSocketRecvFunction: udpSocketRecvFunction,
+                fileServerBindFunction: fileServerBindFunction,
+                fileServerFreeFunction: fileServerFreeFunction,
+                fileServerLocalPortFunction: fileServerLocalPortFunction,
+                fileServerRegisterTransferFunction: fileServerRegisterTransferFunction,
+                fileServerServeNextFunction: fileServerServeNextFunction,
                 createTrustMessageJSONFunction: createTrustMessageJSONFunction,
                 freeStringFunction: freeStringFunction
             )
@@ -664,6 +798,52 @@ private final class ClipPlusFFIBridge {
 
     fileprivate func udpSocketFree(_ handle: UnsafeMutableRawPointer) {
         udpSocketFreeFunction(handle)
+    }
+
+    func openFileServer(bindPort: Int) -> RustFileServer? {
+        guard bindPort >= 0,
+              bindPort <= Int(UInt16.max),
+              let handle = fileServerBindFunction(UInt16(bindPort)) else {
+            return nil
+        }
+
+        return RustFileServer(bridge: self, handle: handle)
+    }
+
+    fileprivate func fileServerLocalPort(_ handle: UnsafeMutableRawPointer) -> Int {
+        Int(fileServerLocalPortFunction(handle))
+    }
+
+    fileprivate func fileServerRegisterTransfer(
+        _ handle: UnsafeMutableRawPointer,
+        transferId: String,
+        sourcePaths: [String]
+    ) -> Bool {
+        guard !transferId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let sourcePathsData = try? JSONEncoder().encode(sourcePaths),
+              let sourcePathsJSON = String(data: sourcePathsData, encoding: .utf8) else {
+            return false
+        }
+
+        return transferId.withCString { transferIdPointer in
+            sourcePathsJSON.withCString { sourcePathsPointer in
+                fileServerRegisterTransferFunction(handle, transferIdPointer, sourcePathsPointer)
+            }
+        }
+    }
+
+    fileprivate func fileServerServeNext(_ handle: UnsafeMutableRawPointer, tempDirectory: String) -> UInt64 {
+        guard !tempDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return 0
+        }
+
+        return tempDirectory.withCString { tempDirectoryPointer in
+            fileServerServeNextFunction(handle, tempDirectoryPointer)
+        }
+    }
+
+    fileprivate func fileServerFree(_ handle: UnsafeMutableRawPointer) {
+        fileServerFreeFunction(handle)
     }
 
     func createTrustMessageJSON(

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -146,11 +146,15 @@ pub struct FileTransferServer {
 }
 
 impl FileTransferServer {
+    const ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
+    const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
     pub fn bind(port: u16) -> Result<Self, FileTransferError> {
         let listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(
             Ipv4Addr::UNSPECIFIED,
             port,
         )))?;
+        listener.set_nonblocking(true)?;
 
         Ok(Self {
             listener,
@@ -189,7 +193,8 @@ impl FileTransferServer {
         if !temp_dir.is_dir() {
             return Err(FileTransferError::InvalidField("temp_dir"));
         }
-        let (mut stream, _) = self.listener.accept()?;
+        let (mut stream, _) = self.accept_next_client()?;
+        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
         let transfer_id = read_transfer_request_line(&mut stream)?;
@@ -210,6 +215,22 @@ impl FileTransferServer {
         let _ = std::fs::remove_file(&archive_path);
 
         result
+    }
+
+    fn accept_next_client(&self) -> Result<(TcpStream, SocketAddr), FileTransferError> {
+        let started_at = std::time::Instant::now();
+        loop {
+            match self.listener.accept() {
+                Ok(client) => return Ok(client),
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+                        && started_at.elapsed() < Self::ACCEPT_TIMEOUT =>
+                {
+                    std::thread::sleep(Self::ACCEPT_POLL_INTERVAL);
+                }
+                Err(error) => return Err(FileTransferError::Io(error)),
+            }
+        }
     }
 }
 

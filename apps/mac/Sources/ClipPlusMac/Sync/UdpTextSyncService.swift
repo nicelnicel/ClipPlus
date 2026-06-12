@@ -8,24 +8,21 @@ final class UdpTextSyncService {
     private let clipboard = NativeClipboard()
     private let logger: ClipPlusLogger
     private let receiveQueue = DispatchQueue(label: "clipplus.mac.udp.receive")
+    private let clipboardQueue = DispatchQueue(label: "clipplus.mac.clipboard.poll")
     private let fileQueue = DispatchQueue(label: "clipplus.mac.file.transfer", attributes: .concurrent)
     private let deviceId: String
     private let deviceName: String
-    private let autoTrustPeers: Bool
-    private let autoReceiveFiles: Bool
     private let peerHosts: [String]
 
     private var udpSocket: RustUdpSocket?
-    private var fileServerSocket: Int32 = -1
+    private var fileServer: RustFileServer?
     private var running = false
-    private var timer: Timer?
+    private var clipboardTimer: DispatchSourceTimer?
     private var lastLocalText: String?
     private var lastRemoteText: String?
     private var lastLocalImageHash: String?
     private var lastRemoteImageHash: String?
     private var lastLocalFileSignature: String?
-    private var localFileTransfers: [String: [URL]] = [:]
-    private let localFileTransfersLock = NSLock()
     private var tickCount = 0
 
     init(state: SettingsState, logger: ClipPlusLogger) {
@@ -37,8 +34,6 @@ final class UdpTextSyncService {
             return value
         }()
         deviceName = Host.current().localizedName ?? "Mac"
-        autoTrustPeers = ProcessInfo.processInfo.environment["CLIPPLUS_AUTO_TRUST"] == "1"
-        autoReceiveFiles = ProcessInfo.processInfo.environment["CLIPPLUS_AUTO_RECEIVE_FILES"] == "1"
         peerHosts = ProcessInfo.processInfo.environment["CLIPPLUS_PEER_HOSTS"]?
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -49,6 +44,7 @@ final class UdpTextSyncService {
         state.remoteFileReceiveRequested = { [weak self] transferId in
             self?.downloadRemoteFileOffer(transferId: transferId)
         }
+        refreshLocalDeviceInfo()
     }
 
     func start() {
@@ -67,9 +63,13 @@ final class UdpTextSyncService {
             fileQueue.async { [weak self] in
                 self?.fileServerLoop()
             }
-            timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+            let timer = DispatchSource.makeTimerSource(queue: clipboardQueue)
+            timer.schedule(deadline: .now() + 0.75, repeating: 0.75)
+            timer.setEventHandler { [weak self] in
                 self?.pollClipboardAndBroadcast()
             }
+            clipboardTimer = timer
+            timer.resume()
             sendHello()
             logger.info("sync service started on UDP \(port)")
         } catch {
@@ -80,15 +80,14 @@ final class UdpTextSyncService {
 
     func stop() {
         running = false
-        timer?.invalidate()
-        timer = nil
+        clipboardTimer?.cancel()
+        clipboardTimer = nil
 
         udpSocket?.close()
         udpSocket = nil
-        if fileServerSocket >= 0 {
-            close(fileServerSocket)
-            fileServerSocket = -1
-        }
+        wakeFileServer()
+        fileServer?.close()
+        fileServer = nil
     }
 
     private func applyEnvironmentKeyIfNeeded() {
@@ -115,30 +114,12 @@ final class UdpTextSyncService {
     }
 
     private func openFileServer() throws {
-        fileServerSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fileServerSocket >= 0 else {
+        guard let fileServer = CoreBridge().openFileServer(bindPort: Int(archivePort)),
+              fileServer.localPort == Int(archivePort) else {
             throw SocketError.openFailed
         }
 
-        var yes: Int32 = 1
-        setsockopt(fileServerSocket, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout.size(ofValue: yes)))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = archivePort.bigEndian
-        address.sin_addr = in_addr(s_addr: INADDR_ANY)
-
-        let bindResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                bind(fileServerSocket, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bindResult == 0 else {
-            throw SocketError.bindFailed
-        }
-
-        listen(fileServerSocket, 8)
+        self.fileServer = fileServer
     }
 
     private func receiveLoop() {
@@ -160,16 +141,17 @@ final class UdpTextSyncService {
     }
 
     private func pollClipboardAndBroadcast() {
-        guard state.sharedKeyConfigured, state.sharingEnabled else {
+        let snapshot = syncSnapshot()
+        guard snapshot.sharedKeyConfigured, snapshot.sharingEnabled else {
             return
         }
 
         tickCount += 1
         if tickCount % 4 == 0 {
-            sendHello()
+            sendHello(groupId: snapshot.sharedGroupId, trustedPeerIds: snapshot.trustedPeerIds)
         }
 
-        guard state.canPublishClipboardContent else {
+        guard snapshot.canPublishClipboardContent else {
             return
         }
 
@@ -178,7 +160,7 @@ final class UdpTextSyncService {
             let signature = fileURLs.map(\.path).sorted().joined(separator: "|")
             if signature != lastLocalFileSignature {
                 lastLocalFileSignature = signature
-                publishFileOffer(fileURLs: fileURLs)
+                publishFileOffer(fileURLs: fileURLs, groupId: snapshot.sharedGroupId)
             }
             return
         }
@@ -189,18 +171,18 @@ final class UdpTextSyncService {
            text != lastRemoteText {
             lastLocalText = text
             send(.text(
-                groupId: state.sharedGroupId,
+                groupId: snapshot.sharedGroupId,
                 senderDeviceId: deviceId,
                 senderDeviceName: deviceName,
                 text: text
             ))
-            state.lastStatusMessage = "已广播文本剪贴板"
+            updateStatus("已广播文本剪贴板")
             logger.info("published text clipboard byte_count=\(text.utf8.count)")
         }
 
         guard let pngData = clipboard.readPngImageData(),
               let message = ClipPlusMessage.image(
-            groupId: state.sharedGroupId,
+            groupId: snapshot.sharedGroupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,
             pngData: pngData
@@ -213,7 +195,7 @@ final class UdpTextSyncService {
 
         lastLocalImageHash = imageHash
         send(message)
-        state.lastStatusMessage = "已广播图片剪贴板"
+        updateStatus("已广播图片剪贴板")
         logger.info("published image clipboard byte_count=\(pngData.count)")
     }
 
@@ -231,6 +213,25 @@ final class UdpTextSyncService {
         return message.imageContentHash
     }
 
+    private func syncSnapshot() -> SyncSnapshot {
+        DispatchQueue.main.sync {
+            state.purgeExpiredConnectedPeers()
+            return SyncSnapshot(
+                sharedKeyConfigured: state.sharedKeyConfigured,
+                sharingEnabled: state.sharingEnabled,
+                canPublishClipboardContent: state.canPublishClipboardContent,
+                sharedGroupId: state.sharedGroupId,
+                trustedPeerIds: Array(state.trustedPeerIds)
+            )
+        }
+    }
+
+    private func updateStatus(_ status: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.state.lastStatusMessage = status
+        }
+    }
+
     private func handle(_ message: ClipPlusMessage, sourceHost: String) {
         guard state.sharedKeyConfigured,
               message.protocolVersion == 1,
@@ -239,16 +240,24 @@ final class UdpTextSyncService {
             return
         }
 
+        state.recordConnectedPeer(
+            deviceId: message.senderDeviceId,
+            deviceName: message.senderDeviceName,
+            ipAddress: sourceHost
+        )
+
         switch message.kind {
         case .hello:
-            state.markPeerPending(
+            let newlyTrusted = state.trustPeer(
                 deviceId: message.senderDeviceId,
                 deviceName: message.senderDeviceName
             )
-            if autoTrustPeers {
-                state.approvePendingPeers()
+            if newlyTrusted {
+                sendTrust(approvedDeviceId: message.senderDeviceId)
+                logger.info("peer hello trusted device_id_prefix=\(message.senderDeviceId.prefix(8))")
+            } else {
+                logger.info("peer hello device_id_prefix=\(message.senderDeviceId.prefix(8))")
             }
-            logger.info("peer hello device_id_prefix=\(message.senderDeviceId.prefix(8))")
         case .trust:
             guard message.approvedDeviceId == deviceId else {
                 return
@@ -263,7 +272,6 @@ final class UdpTextSyncService {
             }
         case .text:
             guard state.sharingEnabled,
-                  state.isPeerTrusted(message.senderDeviceId),
                   let text = message.text,
                   !text.isEmpty else {
                 return
@@ -276,7 +284,6 @@ final class UdpTextSyncService {
             logger.info("received text clipboard byte_count=\(text.utf8.count)")
         case .image:
             guard state.sharingEnabled,
-                  state.isPeerTrusted(message.senderDeviceId),
                   let imageData = message.decodedImageData,
                   let imageHash = message.imageContentHash,
                   imageData.count <= ClipPlusMessage.maxInlineImageBytes else {
@@ -293,7 +300,6 @@ final class UdpTextSyncService {
             logger.info("received image clipboard byte_count=\(imageData.count)")
         case .fileOffer:
             guard state.sharingEnabled,
-                  state.isPeerTrusted(message.senderDeviceId),
                   let transferId = message.transferId,
                   let files = message.files,
                   !files.isEmpty else {
@@ -308,24 +314,30 @@ final class UdpTextSyncService {
                 sourceHost: sourceHost,
                 fileCount: files.count,
                 totalBytes: totalBytes
-            ), autoRequestReceive: autoReceiveFiles)
+            ))
             logger.info("received file offer file_count=\(files.count) byte_count=\(totalBytes)")
         }
     }
 
-    private func publishFileOffer(fileURLs: [URL]) {
+    private func publishFileOffer(fileURLs: [URL], groupId: String) {
         let transferId = UUID().uuidString
-        storeLocalFileTransfer(transferId: transferId, fileURLs: fileURLs)
+        guard let fileServer,
+              fileServer.registerTransfer(transferId: transferId, sourcePaths: fileURLs.map(\.path)) else {
+            updateStatus("文件广播失败")
+            logger.error("file transfer registration failed")
+            return
+        }
+
         let items = fileURLs.map { fileTransferItem(for: $0) }
         send(.fileOffer(
-            groupId: state.sharedGroupId,
+            groupId: groupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,
             transferId: transferId,
             files: items,
             archivePort: Int(archivePort)
         ))
-        state.lastStatusMessage = "已广播文件剪贴板"
+        updateStatus("已广播文件剪贴板")
         logger.info("published file offer file_count=\(items.count)")
     }
 
@@ -353,52 +365,21 @@ final class UdpTextSyncService {
     }
 
     private func fileServerLoop() {
-        while running && fileServerSocket >= 0 {
-            let client = accept(fileServerSocket, nil, nil)
-            guard client >= 0 else {
+        while running {
+            guard let fileServer else {
+                return
+            }
+
+            let byteCount = fileServer.serveNext(tempDirectory: FileManager.default.temporaryDirectory.path)
+            guard running else {
+                return
+            }
+            guard byteCount > 0 else {
                 continue
             }
 
-            fileQueue.async { [weak self] in
-                self?.handleFileClient(client)
-            }
+            logger.info("served file archive byte_count=\(byteCount)")
         }
-    }
-
-    private func handleFileClient(_ client: Int32) {
-        defer { close(client) }
-
-        guard let transferId = readLine(from: client),
-              let fileURLs = localFileTransfer(transferId: transferId) else {
-            return
-        }
-
-        let archiveURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ClipPlus-\(transferId).zip")
-
-        let byteCount = CoreBridge().serveFileArchive(
-            socketDescriptor: client,
-            sourcePaths: fileURLs.map(\.path),
-            archivePath: archiveURL.path
-        )
-        if byteCount > 0 {
-            logger.info("served file archive file_count=\(fileURLs.count) byte_count=\(byteCount)")
-        } else {
-            logger.error("file transfer serve failed")
-        }
-    }
-
-    private func storeLocalFileTransfer(transferId: String, fileURLs: [URL]) {
-        localFileTransfersLock.lock()
-        localFileTransfers[transferId] = fileURLs
-        localFileTransfersLock.unlock()
-    }
-
-    private func localFileTransfer(transferId: String) -> [URL]? {
-        localFileTransfersLock.lock()
-        let fileURLs = localFileTransfers[transferId]
-        localFileTransfersLock.unlock()
-        return fileURLs
     }
 
     private func downloadRemoteFileOffer(transferId: String) {
@@ -453,33 +434,28 @@ final class UdpTextSyncService {
         return candidate
     }
 
-    private func readLine(from socketDescriptor: Int32) -> String? {
-        var bytes: [UInt8] = []
-        var byte: UInt8 = 0
-        while recv(socketDescriptor, &byte, 1, 0) == 1 {
-            if byte == 0x0A {
-                break
-            }
-            bytes.append(byte)
-        }
-
-        return String(data: Data(bytes), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private func sendHello() {
         guard state.sharedKeyConfigured else {
             return
         }
 
+        sendHello(groupId: state.sharedGroupId, trustedPeerIds: Array(state.trustedPeerIds))
+    }
+
+    private func sendHello(groupId: String, trustedPeerIds: [String]) {
         send(.hello(
-            groupId: state.sharedGroupId,
+            groupId: groupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName
         ))
 
-        for trustedPeerId in state.trustedPeerIds {
-            sendTrust(approvedDeviceId: trustedPeerId)
+        for trustedPeerId in trustedPeerIds {
+            send(.trust(
+                groupId: groupId,
+                senderDeviceId: deviceId,
+                senderDeviceName: deviceName,
+                approvedDeviceId: trustedPeerId
+            ))
         }
     }
 
@@ -502,25 +478,126 @@ final class UdpTextSyncService {
             return
         }
 
-        var targets = ["255.255.255.255"]
-        targets.append(contentsOf: peerHosts)
+        var targets = Set(["255.255.255.255"])
+        targets.formUnion(peerHosts)
+        targets.formUnion(state.remoteConnectedPeerSummaries.map(\.ipAddress))
 
         for target in targets {
             _ = udpSocket.send(data, to: target, port: Int(port))
+        }
+    }
+
+    private static func localIPv4Address() -> String {
+        var interfaceAddresses: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaceAddresses) == 0 else {
+            return "未知 IP"
+        }
+        defer { freeifaddrs(interfaceAddresses) }
+
+        var fallbackAddress: String?
+        var currentAddress = interfaceAddresses
+        while let interface = currentAddress?.pointee {
+            defer { currentAddress = interface.ifa_next }
+            guard let socketAddress = interface.ifa_addr,
+                  socketAddress.pointee.sa_family == UInt8(AF_INET),
+                  interface.ifa_flags & UInt32(IFF_UP) != 0,
+                  interface.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else {
+                continue
+            }
+
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                socketAddress,
+                socklen_t(socketAddress.pointee.sa_len),
+                &host,
+                socklen_t(host.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            guard result == 0 else {
+                continue
+            }
+
+            let ipAddress = String(cString: host)
+            if isPrivateIPv4Address(ipAddress) {
+                return ipAddress
+            }
+
+            if fallbackAddress == nil {
+                fallbackAddress = ipAddress
+            }
+        }
+
+        return fallbackAddress ?? "未知 IP"
+    }
+
+    private static func isPrivateIPv4Address(_ ipAddress: String) -> Bool {
+        let parts = ipAddress.split(separator: ".").compactMap { UInt8($0) }
+        guard parts.count == 4 else {
+            return false
+        }
+
+        return parts[0] == 10
+            || (parts[0] == 172 && (16...31).contains(parts[1]))
+            || (parts[0] == 192 && parts[1] == 168)
+    }
+
+    private func refreshLocalDeviceInfo() {
+        let currentDeviceId = deviceId
+        let currentDeviceName = deviceName
+        DispatchQueue.global(qos: .utility).async { [weak self, currentDeviceId, currentDeviceName] in
+            let ipAddress = Self.localIPv4Address()
+            DispatchQueue.main.async {
+                self?.state.setLocalDevice(
+                    deviceId: currentDeviceId,
+                    deviceName: currentDeviceName,
+                    ipAddress: ipAddress
+                )
+            }
+        }
+    }
+
+    private func wakeFileServer() {
+        let client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+        guard client >= 0 else {
+            return
+        }
+        defer { close(client) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = archivePort.bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connectResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                connect(client, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if connectResult == 0 {
+            _ = "\n".withCString { pointer in
+                Darwin.send(client, pointer, strlen(pointer), 0)
+            }
         }
     }
 }
 
 private enum SocketError: LocalizedError {
     case openFailed
-    case bindFailed
 
     var errorDescription: String? {
         switch self {
         case .openFailed:
             return "无法打开 UDP socket"
-        case .bindFailed:
-            return "无法绑定 UDP 端口"
         }
     }
+}
+
+private struct SyncSnapshot {
+    let sharedKeyConfigured: Bool
+    let sharingEnabled: Bool
+    let canPublishClipboardContent: Bool
+    let sharedGroupId: String
+    let trustedPeerIds: [String]
 }

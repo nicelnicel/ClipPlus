@@ -9,6 +9,9 @@ $repoRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $windowsDir = Join-Path $repoRoot "apps\windows"
 $projectPath = Join-Path $windowsDir "ClipPlus.Windows\ClipPlus.Windows.csproj"
 $outputDir = Join-Path $repoRoot "target\windows-single-exe"
+$sharedKeyFileName = "clipplus.shared-key"
+$sharedKeyPath = Join-Path $outputDir $sharedKeyFileName
+$preservedSharedKey = $null
 $dotnet = "dotnet"
 
 if ([string]::IsNullOrWhiteSpace($RuntimeIdentifier)) {
@@ -27,6 +30,10 @@ $cargoTarget = switch ($RuntimeIdentifier) {
 
 if (Test-Path "C:\dotnet\dotnet.exe") {
     $dotnet = "C:\dotnet\dotnet.exe"
+}
+
+if (Test-Path $sharedKeyPath) {
+    $preservedSharedKey = Get-Content -Raw $sharedKeyPath
 }
 
 Remove-Item -Recurse -Force $outputDir -ErrorAction SilentlyContinue
@@ -48,6 +55,10 @@ Write-Host "Publishing ClipPlus.Windows for $RuntimeIdentifier with Rust target 
 $exePath = Join-Path $outputDir "ClipPlus.Windows.exe"
 if (!(Test-Path $exePath)) {
     throw "Publish did not produce $exePath"
+}
+
+if ($null -ne $preservedSharedKey) {
+    Set-Content -Path (Join-Path $outputDir $sharedKeyFileName) -Value $preservedSharedKey -NoNewline
 }
 
 Get-Item $exePath | Select-Object FullName, Length

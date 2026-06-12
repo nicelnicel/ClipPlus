@@ -25,6 +25,27 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void ConfiguredSharedKeyCanLoadStoredRawKeyForEyeReveal()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false,
+            sharedGroupId: "stored-group",
+            sharedKeyInput: "clipplus-test-key"
+        );
+
+        Assert.Equal("***", state.SharedKeyPlaceholder);
+        Assert.Equal("clipplus-test-key", state.SharedKeyInput);
+
+        state.UpdateSharedKey("clipplus-test-key", "clipplus-test-key");
+
+        Assert.Equal("***", state.SharedKeyPlaceholder);
+        Assert.Equal("clipplus-test-key", state.SharedKeyInput);
+        Assert.DoesNotContain("clipplus-test-key", state.SharedGroupId);
+    }
+
+    [Fact]
     public void AppOpensSettingsWhenKeySetupIsRequiredOrE2ERequestsIt()
     {
         var missingKeyState = new SettingsState(
@@ -38,6 +59,7 @@ public sealed class SettingsStateTests
             startupEnabled: false
         );
 
+        Assert.Equal("输入 Key", missingKeyState.SharedKeyPlaceholder);
         Assert.True(ClipPlus.Windows.App.ShouldOpenSettingsWindow(missingKeyState, showSettingsRequested: false));
         Assert.True(ClipPlus.Windows.App.ShouldOpenSettingsWindow(configuredState, showSettingsRequested: true));
         Assert.False(ClipPlus.Windows.App.ShouldOpenSettingsWindow(configuredState, showSettingsRequested: false));
@@ -55,6 +77,326 @@ public sealed class SettingsStateTests
         state.StartupEnabled = true;
 
         Assert.True(state.StartupEnabled);
+    }
+
+    [Fact]
+    public void SettingsStorePersistsInstallSafeConfiguration()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusTests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new SettingsStore(directory);
+
+            Assert.Equal(
+                new PersistedSettings(
+                    SharedKeyConfigured: false,
+                    SharingEnabled: true,
+                    SharedGroupId: string.Empty
+                ),
+                store.Load()
+            );
+
+            store.Save(new PersistedSettings(
+                SharedKeyConfigured: true,
+                SharingEnabled: false,
+                SharedGroupId: "group-id"
+            )
+            {
+                SharedKeyInput = "clipplus-test-key"
+            });
+
+            Assert.Equal(
+                new PersistedSettings(
+                    SharedKeyConfigured: true,
+                    SharingEnabled: false,
+                    SharedGroupId: "group-id"
+                )
+                {
+                    SharedKeyInput = "clipplus-test-key"
+                },
+                new SettingsStore(directory).Load()
+            );
+
+            var settingsJson = File.ReadAllText(Path.Combine(directory, "settings.json"));
+            Assert.DoesNotContain("clipplus-test-key", settingsJson);
+            Assert.Equal(
+                "clipplus-test-key",
+                File.ReadAllText(Path.Combine(directory, "clipplus.shared-key")).Trim()
+            );
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StoredGroupIdWithoutPlainTextKeyRequiresSetupAgain()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusTests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(directory, "settings.json"),
+                """{"SharedKeyConfigured":true,"SharingEnabled":true,"SharedGroupId":"legacy-group-id"}"""
+            );
+
+            Assert.Equal(
+                new PersistedSettings(
+                    SharedKeyConfigured: false,
+                    SharingEnabled: true,
+                    SharedGroupId: "legacy-group-id"
+                ),
+                new SettingsStore(directory).Load()
+            );
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SettingsStoreSaveStatePersistsPlainTextKeyForEyeRevealAfterRestart()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusTests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var state = new SettingsState(
+                sharedKeyConfigured: false,
+                sharingEnabled: true,
+                startupEnabled: false
+            );
+            state.UpdateSharedKey("clipplus-test-key", "clipplus-test-key");
+
+            new SettingsStore(directory).Save(state);
+
+            Assert.Equal(
+                new PersistedSettings(
+                    SharedKeyConfigured: true,
+                    SharingEnabled: true,
+                    SharedGroupId: ExpectedGroupId("clipplus-test-key")
+                )
+                {
+                    SharedKeyInput = "clipplus-test-key"
+                },
+                new SettingsStore(directory).Load()
+            );
+            Assert.Equal(
+                "clipplus-test-key",
+                File.ReadAllText(Path.Combine(directory, "clipplus.shared-key")).Trim()
+            );
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SettingsUiOnlyShowsKeySharingAndStartupControls()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var settingsXaml = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsWindow.xaml"
+        ));
+        var traySource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Tray",
+            "TrayController.cs"
+        ));
+        var settingsCode = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsWindow.xaml.cs"
+        ));
+        var syncSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+        var settingsStateSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsState.cs"
+        ));
+        Assert.Contains("共享 Key", settingsXaml);
+        Assert.Contains("SizeToContent=\"Height\"", settingsXaml);
+        Assert.DoesNotContain("Height=\"255\"", settingsXaml);
+        Assert.DoesNotContain("Height=\"210\"", settingsXaml);
+        Assert.Contains("开启局域网剪贴板", settingsXaml);
+        Assert.Contains("开机启动", settingsXaml);
+        Assert.Contains("By.YJY", settingsXaml);
+        Assert.Contains("RequestNavigate=\"AuthorLink_RequestNavigate\"", settingsXaml);
+        Assert.Contains("NavigateUri=\"https://example.com/yjy\"", settingsXaml);
+        Assert.Contains("HorizontalAlignment=\"Right\"", settingsXaml);
+        Assert.Contains("退出 ClipPlus", settingsXaml);
+        Assert.Contains("Click=\"Exit_Click\"", settingsXaml);
+        Assert.True(
+            settingsXaml.IndexOf("By.YJY", StringComparison.Ordinal)
+                < settingsXaml.IndexOf("退出 ClipPlus", StringComparison.Ordinal),
+            "By.YJY 应该放在退出按钮上一行"
+        );
+        Assert.Contains("ToggleKeyVisibility", settingsXaml);
+        Assert.Contains("SharedKeyPasswordBox", settingsXaml);
+        Assert.Contains("SharedKeyTextBox", settingsXaml);
+        Assert.Contains("SharedKeyInput_LostFocus", settingsXaml);
+        Assert.Contains("SharedKeyInputBorder", settingsXaml);
+        Assert.Contains("Text=\"输入 Key\"", settingsXaml);
+        Assert.DoesNotContain("Text=\"{Binding SharedKeyPlaceholder}\"", settingsXaml);
+        Assert.Contains("!state.SharedKeyConfigured", settingsCode);
+        Assert.Contains("BorderThickness=\"1\"", settingsXaml);
+        Assert.Contains("BorderThickness=\"0\"", settingsXaml);
+        Assert.Contains("Segoe MDL2 Assets", settingsXaml);
+        Assert.DoesNotContain("保存 Key", settingsXaml);
+        Assert.DoesNotContain("请先设置共享 Key", settingsXaml);
+
+        var disallowedVisibleLabels = new[]
+        {
+            "状态",
+            "LastStatusMessage",
+            "导出诊断包",
+            "待确认设备",
+            "允许",
+            "可接收文件",
+            "暂无可接收文件",
+            "再次输入共享 Key",
+            "开始局域网剪贴板",
+            "作者 YJY"
+        };
+
+        foreach (var label in disallowedVisibleLabels)
+        {
+            Assert.DoesNotContain(label, settingsXaml);
+            Assert.DoesNotContain(label, traySource);
+        }
+
+        Assert.DoesNotContain("ApprovePending", settingsXaml);
+        Assert.DoesNotContain("ReceiveRemoteFiles", settingsXaml);
+        Assert.DoesNotContain("ExportDiagnostics", settingsXaml);
+        Assert.DoesNotContain("state.IsPeerTrusted(message.SenderDeviceId)", syncSource);
+        Assert.Contains("ConnectedPeerCount", settingsXaml);
+        Assert.Contains("ConnectedPeersTooltip", settingsXaml);
+        Assert.Contains("private int connectedPeerCount;", settingsStateSource);
+        Assert.Contains("private string connectedPeersTooltip", settingsStateSource);
+        Assert.Contains("x:Name=\"ConnectedPeerCountText\"", settingsXaml);
+        Assert.Contains("Foreground=\"#0067C0\"", settingsXaml);
+        Assert.Contains("<Popup x:Name=\"ConnectedPeersInfoPopup\"", settingsXaml);
+        Assert.Contains("PlacementTarget=\"{Binding ElementName=ConnectedPeerCountText}\"", settingsXaml);
+        Assert.Contains("IsOpen=\"{Binding IsMouseOver, ElementName=ConnectedPeerCountText, Mode=OneWay}\"", settingsXaml);
+        Assert.Contains("Text=\"{Binding ConnectedPeersTooltip}\"", settingsXaml);
+        Assert.DoesNotContain(
+            "public string ConnectedPeersTooltip\r\n    {\r\n        get",
+            settingsStateSource
+        );
+        Assert.Contains("Task.Run(LocalIPv4Address)", syncSource);
+        Assert.Contains("state.SetLocalDevice", syncSource);
+        Assert.Contains("Text=\"{Binding ConnectedPeerCount, StringFormat= ({0})}\"", settingsXaml);
+        Assert.DoesNotContain("ToolTip=\"{Binding ConnectedPeersTooltip}\"", settingsXaml);
+        Assert.DoesNotContain(
+            "CheckBox IsChecked=\"{Binding SharingEnabled}\"\r\n                  Margin=\"0,12,0,0\"\r\n                  ToolTip=\"{Binding ConnectedPeersTooltip}\"",
+            settingsXaml
+        );
+        Assert.Contains("RecordConnectedPeer", syncSource);
+        Assert.Contains("state.ConnectedRemotePeerSummaries", syncSource);
+    }
+
+    [Fact]
+    public void TrayControllerReusesSingleSettingsWindow()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var traySource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Tray",
+            "TrayController.cs"
+        ));
+        var appSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "App.xaml.cs"
+        ));
+
+        Assert.Contains("private SettingsWindow? settingsWindow;", traySource);
+        Assert.Contains("notifyIcon.MouseClick", traySource);
+        Assert.Contains("MouseButtons.Left", traySource);
+        Assert.Contains("settingsWindow is null", traySource);
+        Assert.Contains("settingsWindow.Closed +=", traySource);
+        Assert.Contains("settingsWindow = null", traySource);
+        Assert.Contains("settingsWindow.Activate()", traySource);
+        Assert.DoesNotContain("new SettingsWindow(settingsState).Show();", traySource);
+        Assert.Contains("public void ShowSettingsWindow()", traySource);
+        Assert.Contains("trayController.ShowSettingsWindow();", appSource);
+        Assert.DoesNotContain("new SettingsWindow(settings).Show();", appSource);
+    }
+
+    [Fact]
+    public void WindowsAppIconIsConfiguredForSingleExePublishing()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var iconPath = Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Resources",
+            "ClipPlus.ico"
+        );
+        var projectPath = Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "ClipPlus.Windows.csproj"
+        );
+        var publishScriptPath = Path.Combine(
+            repositoryRoot,
+            "scripts",
+            "dev",
+            "publish-windows-single-exe.ps1"
+        );
+        var trayControllerPath = Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Tray",
+            "TrayController.cs"
+        );
+
+        Assert.True(File.Exists(iconPath), $"Missing Windows icon: {iconPath}");
+        var project = File.ReadAllText(projectPath);
+        Assert.Contains("<OutputType>WinExe</OutputType>", project);
+        Assert.Contains("<UseWPF>true</UseWPF>", project);
+        Assert.Contains("<ApplicationIcon>Resources\\ClipPlus.ico</ApplicationIcon>", project);
+        Assert.Contains("ExtractAssociatedIcon", File.ReadAllText(trayControllerPath));
+        var publishScript = File.ReadAllText(publishScriptPath);
+        Assert.Contains("clipplus.shared-key", publishScript);
+        Assert.Contains("$preservedSharedKey", publishScript);
     }
 
     [Fact]
@@ -145,7 +487,7 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
-    public void PendingPeerDoesNotAllowPublishingClipboardContentUntilApproved()
+    public void ConfiguredKeyAllowsPublishingClipboardContentWithoutPeerApproval()
     {
         var state = new SettingsState(
             sharedKeyConfigured: true,
@@ -155,12 +497,41 @@ public sealed class SettingsStateTests
 
         state.MarkPeerPending("mac-device", "MacBook");
 
-        Assert.False(state.CanPublishClipboardContent);
-
-        state.ApprovePendingPeer("mac-device");
-
         Assert.True(state.CanPublishClipboardContent);
-        Assert.Equal(1, state.TrustedPeerCount);
+        Assert.Equal(0, state.TrustedPeerCount);
+    }
+
+    [Fact]
+    public void ConnectedPeersTrackRecentDevicesForStatusTooltip()
+    {
+        var state = new SettingsState(
+            sharedKeyConfigured: true,
+            sharingEnabled: true,
+            startupEnabled: false
+        );
+        var now = DateTimeOffset.UtcNow;
+
+        state.SetLocalDevice("windows-device", "Windows 11", "10.211.55.3");
+        state.RecordConnectedPeer("mac-device", "MacBook", "10.211.55.2", now);
+
+        Assert.Equal(2, state.ConnectedPeerCount);
+        Assert.Equal(new[] { "Windows 11", "MacBook" }, state.ConnectedPeerSummaries.Select(peer => peer.DeviceName));
+        Assert.Equal(
+            $"机器名：Windows 11（本机）{Environment.NewLine}IP：10.211.55.3{Environment.NewLine}{Environment.NewLine}机器名：MacBook{Environment.NewLine}IP：10.211.55.2",
+            state.ConnectedPeersTooltip
+        );
+        Assert.Contains("机器名：", state.ConnectedPeersTooltip);
+        Assert.Contains("IP：", state.ConnectedPeersTooltip);
+
+        state.PurgeExpiredConnectedPeers(now.AddSeconds(16));
+
+        Assert.Equal(1, state.ConnectedPeerCount);
+        Assert.Equal("Windows 11", Assert.Single(state.ConnectedPeerSummaries).DeviceName);
+        Assert.Empty(state.ConnectedRemotePeerSummaries);
+        Assert.Equal(
+            $"机器名：Windows 11（本机）{Environment.NewLine}IP：10.211.55.3",
+            state.ConnectedPeersTooltip
+        );
     }
 
     [Fact]
@@ -427,6 +798,7 @@ public sealed class SettingsStateTests
 
         Assert.Equal("Mac：2 个文件可接收", state.RemoteFileOffer?.DisplayTitle);
         Assert.True(state.HasRemoteFileOffer);
+        Assert.Equal("transfer-1", requestedTransferId);
 
         state.RequestRemoteFileReceive();
 
@@ -548,6 +920,47 @@ public sealed class SettingsStateTests
         finally
         {
             listener.Stop();
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CoreBridgeFileServerServesRegisteredArchiveWhenFfiLibraryIsAvailable()
+    {
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(temporaryDirectory);
+        var sourcePath = Path.Combine(temporaryDirectory, "registered.txt");
+        File.WriteAllText(sourcePath, "served from windows ffi file server");
+        using var server = new ClipPlus.Windows.CoreBridge.CoreBridge().OpenFileServer(0);
+        Assert.NotNull(server);
+        Assert.NotEqual(0, server.LocalPort);
+        Assert.True(server.RegisterTransfer("transfer-a", new[] { sourcePath }));
+        var serverTask = Task.Run(() => server.ServeNext(temporaryDirectory));
+
+        try
+        {
+            using var receiver = new TcpClient();
+            await receiver.ConnectAsync(IPAddress.Loopback, server.LocalPort);
+            await using var stream = receiver.GetStream();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes("transfer-a\n"));
+            var servedByteCount = await serverTask.WaitAsync(TimeSpan.FromSeconds(6));
+            Assert.True(servedByteCount > 0);
+            var lengthBytes = new byte[8];
+            await stream.ReadExactlyAsync(lengthBytes);
+            var byteCount = BinaryPrimitives.ReadUInt64BigEndian(lengthBytes);
+            var payload = new byte[byteCount];
+            await stream.ReadExactlyAsync(payload);
+
+            Assert.Equal(byteCount, servedByteCount);
+            var receivedPath = Path.Combine(temporaryDirectory, "file-server-received.zip");
+            await File.WriteAllBytesAsync(receivedPath, payload);
+            var extractedDirectory = Path.Combine(temporaryDirectory, "file-server-unzipped");
+            ZipFile.ExtractToDirectory(receivedPath, extractedDirectory);
+
+            Assert.Equal("served from windows ffi file server", File.ReadAllText(Path.Combine(extractedDirectory, "registered.txt")));
+        }
+        finally
+        {
             Directory.Delete(temporaryDirectory, recursive: true);
         }
     }
@@ -772,6 +1185,23 @@ public sealed class SettingsStateTests
             "net8.0-windows",
             "ClipPlus.Windows.exe"
         ));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md"))
+                && Directory.Exists(Path.Combine(directory.FullName, "apps")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Cannot locate ClipPlus repository root.");
     }
 
     private static string ExpectedGroupId(string rawKey)

@@ -2,48 +2,107 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ClipPlus 设置"
-        Height="520"
-        Width="520">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="16">
-            <TextBlock Text="共享" FontWeight="Bold" />
-            <TextBlock Text="{Binding LastStatusMessage}" Margin="0,4,0,8" />
-            <CheckBox Content="启用剪贴板共享" IsChecked="{Binding SharingEnabled}" />
-            <TextBlock Text="共享 Key" Margin="0,8,0,0" />
-            <TextBox Text="{Binding SharedKeyInput, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Text="再次输入共享 Key" Margin="0,8,0,0" />
-            <TextBox Text="{Binding SharedKeyConfirmationInput, UpdateSourceTrigger=PropertyChanged}" />
-            <Button Content="保存 Key" Width="120" HorizontalAlignment="Left" Margin="0,8,0,0" Click="SaveKey_Click" />
-            <TextBlock Text="{Binding PendingPeerCount, StringFormat=待确认设备：{0}}" Margin="0,16,0,0" />
-            <ItemsControl ItemsSource="{Binding PendingPeerSummaries}" Margin="0,4,0,0">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <DockPanel Margin="0,4,0,0">
-                            <Button Content="允许"
-                                    Width="64"
-                                    DockPanel.Dock="Right"
-                                    Tag="{Binding DeviceId}"
-                                    Click="ApprovePendingPeer_Click" />
-                            <StackPanel>
-                                <TextBlock Text="{Binding DeviceName}" />
-                                <TextBlock Text="{Binding ShortDeviceId, StringFormat=ID {0}}"
-                                           FontSize="11"
-                                           Foreground="Gray" />
-                            </StackPanel>
-                        </DockPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <Button Content="允许全部待确认设备" Width="160" HorizontalAlignment="Left" Margin="0,8,0,0" Click="ApprovePendingPeers_Click" />
-            <Button Content="{Binding RemoteFileOffer.DisplayTitle, TargetNullValue=暂无可接收文件, FallbackValue=暂无可接收文件}"
-                    Width="180"
-                    HorizontalAlignment="Left"
-                    Margin="0,8,0,0"
-                    IsEnabled="{Binding HasRemoteFileOffer}"
-                    Click="ReceiveRemoteFiles_Click" />
-            <TextBlock Text="系统" FontWeight="Bold" Margin="0,16,0,0" />
-            <CheckBox Content="开机自动启动" IsChecked="{Binding StartupEnabled}" />
-            <Button Content="导出诊断包" Width="120" HorizontalAlignment="Left" Click="ExportDiagnostics_Click" />
-        </StackPanel>
-    </ScrollViewer>
+        SizeToContent="Height"
+        Width="220"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize">
+    <StackPanel Margin="12">
+        <Border x:Name="SharedKeyInputBorder"
+                Height="26"
+                BorderBrush="#B8B8B8"
+                BorderThickness="1"
+                CornerRadius="4"
+                Background="White"
+                SnapsToDevicePixels="True">
+            <Grid x:Name="SharedKeyInputContainer" ClipToBounds="True">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="26" />
+                </Grid.ColumnDefinitions>
+
+                <Grid Grid.Column="0">
+                    <PasswordBox x:Name="SharedKeyPasswordBox"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 Padding="6,2,0,2"
+                                 VerticalContentAlignment="Center"
+                                 PasswordChanged="SharedKeyPasswordBox_PasswordChanged"
+                                 LostFocus="SharedKeyInput_LostFocus" />
+                    <TextBox x:Name="SharedKeyTextBox"
+                             Text="{Binding SharedKeyInput, UpdateSourceTrigger=PropertyChanged}"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="6,2,0,2"
+                             VerticalContentAlignment="Center"
+                             Visibility="Collapsed"
+                             LostFocus="SharedKeyInput_LostFocus" />
+                    <TextBlock x:Name="SharedKeyPlaceholderText"
+                               Text="输入 Key"
+                               Foreground="#808080"
+                               Margin="6,0,0,0"
+                               VerticalAlignment="Center"
+                               IsHitTestVisible="False" />
+                </Grid>
+
+                <Button x:Name="ToggleKeyVisibility"
+                        Grid.Column="1"
+                        Width="24"
+                        Height="24"
+                        Padding="0"
+                        Margin="0"
+                        BorderThickness="0"
+                        Background="Transparent"
+                        Click="ToggleKeyVisibility_Click"
+                        ToolTip="查看共享 Key">
+                    <TextBlock x:Name="ToggleKeyVisibilityIcon"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="12"
+                               Text="&#xE890;" />
+                </Button>
+            </Grid>
+        </Border>
+        <CheckBox IsChecked="{Binding SharingEnabled}"
+                  Margin="0,12,0,0">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="开启局域网剪贴板" />
+                <Grid Margin="2,0,0,0">
+                    <TextBlock x:Name="ConnectedPeerCountText"
+                               Text="{Binding ConnectedPeerCount, StringFormat= ({0})}"
+                               Foreground="#0067C0"
+                               Cursor="Hand" />
+                    <Popup x:Name="ConnectedPeersInfoPopup"
+                           Placement="Right"
+                           PlacementTarget="{Binding ElementName=ConnectedPeerCountText}"
+                           IsOpen="{Binding IsMouseOver, ElementName=ConnectedPeerCountText, Mode=OneWay}"
+                           AllowsTransparency="True"
+                           StaysOpen="False"
+                           PopupAnimation="Fade">
+                        <Border Background="#FAFAFA"
+                                BorderBrush="#D0D0D0"
+                                BorderThickness="1"
+                                CornerRadius="5"
+                                Padding="7,6">
+                            <TextBlock Text="{Binding ConnectedPeersTooltip}"
+                                       Width="160"
+                                       FontSize="11"
+                                       Foreground="#202020"
+                                       TextWrapping="Wrap" />
+                        </Border>
+                    </Popup>
+                </Grid>
+            </StackPanel>
+        </CheckBox>
+        <CheckBox Content="开机启动" IsChecked="{Binding StartupEnabled}" Margin="0,8,0,0" />
+        <TextBlock Margin="0,10,0,0"
+                   HorizontalAlignment="Right">
+            <Hyperlink NavigateUri="https://example.com/yjy"
+                       RequestNavigate="AuthorLink_RequestNavigate">
+                By.YJY
+            </Hyperlink>
+        </TextBlock>
+        <Button Content="退出 ClipPlus"
+                Click="Exit_Click"
+                HorizontalContentAlignment="Left"
+                Margin="0,10,0,0" />
+    </StackPanel>
 </Window>

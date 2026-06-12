@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum SettingsStateError: LocalizedError, Equatable {
@@ -27,6 +28,17 @@ struct PendingPeerSummary: Identifiable, Equatable {
     }
 }
 
+struct ConnectedPeerSummary: Identifiable, Equatable {
+    let deviceId: String
+    let deviceName: String
+    let ipAddress: String
+    let lastSeen: Date
+
+    var id: String {
+        deviceId
+    }
+}
+
 struct RemoteFileOfferSummary: Equatable {
     let transferId: String
     let sourceDeviceId: String
@@ -41,8 +53,23 @@ struct RemoteFileOfferSummary: Equatable {
 }
 
 final class SettingsState: ObservableObject, Equatable {
-    @Published var sharedKeyConfigured: Bool
-    @Published var sharingEnabled: Bool
+    @Published var sharedKeyConfigured: Bool {
+        didSet {
+            guard sharedKeyConfigured != oldValue else {
+                return
+            }
+            refreshConnectedPeerDisplay()
+        }
+    }
+    @Published var sharingEnabled: Bool {
+        didSet {
+            guard sharingEnabled != oldValue else {
+                return
+            }
+            refreshConnectedPeerDisplay()
+            sharingEnabledChanged?(sharingEnabled)
+        }
+    }
     @Published var startupEnabled: Bool {
         didSet {
             guard startupEnabled != oldValue else {
@@ -54,16 +81,35 @@ final class SettingsState: ObservableObject, Equatable {
     @Published private(set) var sharedGroupId: String
     @Published private(set) var pendingPeers: [String: String]
     @Published private(set) var trustedPeerIds: Set<String>
+    @Published private(set) var localDevice: ConnectedPeerSummary?
+    @Published private(set) var connectedPeers: [String: ConnectedPeerSummary]
+    @Published private(set) var remoteConnectedPeerSummaries: [ConnectedPeerSummary]
+    @Published private(set) var connectedPeerSummaries: [ConnectedPeerSummary]
+    @Published private(set) var connectedPeerCount: Int
+    @Published private(set) var connectedPeersTooltip: String
     @Published private(set) var remoteFileOffer: RemoteFileOfferSummary?
     @Published var sharedKeyInput: String
     @Published var sharedKeyConfirmationInput: String
     @Published var lastStatusMessage: String
     var startupEnabledChanged: ((Bool) -> Void)?
+    var sharingEnabledChanged: ((Bool) -> Void)?
+    var sharedGroupIdChanged: ((String) -> Void)?
+    var sharedKeyChanged: ((String, String) throws -> Void)?
     var peerApproved: ((String) -> Void)?
     var remoteFileReceiveRequested: ((String) -> Void)?
 
+    private static let connectedPeerTimeout: TimeInterval = 15
+
     var requiresKeySetup: Bool {
         !sharedKeyConfigured
+    }
+
+    var shouldShowKeySetupPrompt: Bool {
+        requiresKeySetup
+    }
+
+    var sharedKeyFieldPrompt: String {
+        "输入 Key"
     }
 
     var pendingPeerCount: Int {
@@ -88,7 +134,7 @@ final class SettingsState: ObservableObject, Equatable {
     }
 
     var canPublishClipboardContent: Bool {
-        sharedKeyConfigured && sharingEnabled && !trustedPeerIds.isEmpty
+        sharedKeyConfigured && sharingEnabled
     }
 
     var hasRemoteFileOffer: Bool {
@@ -100,6 +146,7 @@ final class SettingsState: ObservableObject, Equatable {
         sharingEnabled: Bool = true,
         startupEnabled: Bool = false,
         sharedGroupId: String = "",
+        sharedKeyInput: String = "",
         trustedPeerIds: Set<String> = []
     ) {
         self.sharedKeyConfigured = sharedKeyConfigured
@@ -108,8 +155,14 @@ final class SettingsState: ObservableObject, Equatable {
         self.sharedGroupId = sharedGroupId
         self.pendingPeers = [:]
         self.trustedPeerIds = trustedPeerIds
+        self.localDevice = nil
+        self.connectedPeers = [:]
+        self.remoteConnectedPeerSummaries = []
+        self.connectedPeerSummaries = []
+        self.connectedPeerCount = 0
+        self.connectedPeersTooltip = "暂无连接设备"
         self.remoteFileOffer = nil
-        self.sharedKeyInput = ""
+        self.sharedKeyInput = sharedKeyInput
         self.sharedKeyConfirmationInput = ""
         self.lastStatusMessage = sharedKeyConfigured ? "剪贴板共享准备就绪" : "请先设置共享 Key"
     }
@@ -121,6 +174,8 @@ final class SettingsState: ObservableObject, Equatable {
             && lhs.sharedGroupId == rhs.sharedGroupId
             && lhs.pendingPeers == rhs.pendingPeers
             && lhs.trustedPeerIds == rhs.trustedPeerIds
+            && lhs.localDevice == rhs.localDevice
+            && lhs.connectedPeers == rhs.connectedPeers
             && lhs.remoteFileOffer == rhs.remoteFileOffer
     }
 
@@ -135,11 +190,14 @@ final class SettingsState: ObservableObject, Equatable {
             throw SettingsStateError.confirmationMismatch
         }
 
-        sharedGroupId = try SharedKeyHasher.groupId(for: normalizedKey)
+        let derivedSharedGroupId = try SharedKeyHasher.groupId(for: normalizedKey)
+        try sharedKeyChanged?(normalizedKey, derivedSharedGroupId)
+
+        sharedGroupId = derivedSharedGroupId
         sharedKeyConfigured = true
-        sharedKeyInput = ""
         sharedKeyConfirmationInput = ""
         lastStatusMessage = "共享 Key 已设置"
+        sharedGroupIdChanged?(sharedGroupId)
     }
 
     func markPeerPending(deviceId: String, deviceName: String) {
@@ -175,6 +233,59 @@ final class SettingsState: ObservableObject, Equatable {
         trustedPeerIds.contains(deviceId)
     }
 
+    func recordConnectedPeer(
+        deviceId: String,
+        deviceName: String,
+        ipAddress: String,
+        now: Date = Date()
+    ) {
+        let normalizedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedDeviceId.isEmpty else {
+            return
+        }
+
+        let normalizedDeviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedIPAddress = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        connectedPeers[normalizedDeviceId] = ConnectedPeerSummary(
+            deviceId: normalizedDeviceId,
+            deviceName: normalizedDeviceName.isEmpty ? normalizedDeviceId : normalizedDeviceName,
+            ipAddress: normalizedIPAddress.isEmpty ? "未知 IP" : normalizedIPAddress,
+            lastSeen: now
+        )
+        purgeExpiredConnectedPeers(now: now)
+    }
+
+    func setLocalDevice(
+        deviceId: String,
+        deviceName: String,
+        ipAddress: String
+    ) {
+        let normalizedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedDeviceId.isEmpty else {
+            return
+        }
+
+        let normalizedDeviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedIPAddress = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        localDevice = ConnectedPeerSummary(
+            deviceId: normalizedDeviceId,
+            deviceName: normalizedDeviceName.isEmpty ? normalizedDeviceId : normalizedDeviceName,
+            ipAddress: normalizedIPAddress.isEmpty ? "未知 IP" : normalizedIPAddress,
+            lastSeen: Date()
+        )
+        refreshConnectedPeerDisplay()
+    }
+
+    func purgeExpiredConnectedPeers(now: Date = Date()) {
+        let activePeers = connectedPeers.filter {
+            now.timeIntervalSince($0.value.lastSeen) <= Self.connectedPeerTimeout
+        }
+        if activePeers.count != connectedPeers.count {
+            connectedPeers = activePeers
+        }
+        refreshConnectedPeerDisplay(now: now)
+    }
+
     @discardableResult
     func trustPeer(deviceId: String, deviceName: String) -> Bool {
         guard !deviceId.isEmpty else {
@@ -191,7 +302,7 @@ final class SettingsState: ObservableObject, Equatable {
         return true
     }
 
-    func updateRemoteFileOffer(_ offer: RemoteFileOfferSummary, autoRequestReceive: Bool = false) {
+    func updateRemoteFileOffer(_ offer: RemoteFileOfferSummary, autoRequestReceive: Bool = true) {
         remoteFileOffer = offer
         lastStatusMessage = offer.displayTitle
         if autoRequestReceive {
@@ -214,122 +325,241 @@ final class SettingsState: ObservableObject, Equatable {
 
         remoteFileReceiveRequested?(transferId)
     }
+
+    private func recentConnectedPeerSummaries(now: Date) -> [ConnectedPeerSummary] {
+        connectedPeers.values
+            .filter { now.timeIntervalSince($0.lastSeen) <= Self.connectedPeerTimeout }
+            .sorted { lhs, rhs in
+                let nameOrder = lhs.deviceName.localizedCaseInsensitiveCompare(rhs.deviceName)
+                if nameOrder == .orderedSame {
+                    if lhs.ipAddress == rhs.ipAddress {
+                        return lhs.deviceId < rhs.deviceId
+                    }
+
+                    return lhs.ipAddress < rhs.ipAddress
+                }
+
+                return nameOrder == .orderedAscending
+            }
+    }
+
+    private func refreshConnectedPeerDisplay(now: Date = Date()) {
+        let remoteSummaries = recentConnectedPeerSummaries(now: now)
+        var allSummaries = remoteSummaries
+        if sharedKeyConfigured,
+           sharingEnabled,
+           let localDevice {
+            allSummaries.removeAll { $0.deviceId == localDevice.deviceId }
+            allSummaries.insert(localDevice, at: 0)
+        }
+
+        remoteConnectedPeerSummaries = remoteSummaries
+        connectedPeerSummaries = allSummaries
+        connectedPeerCount = allSummaries.count
+        connectedPeersTooltip = Self.connectedPeersTooltip(
+            for: allSummaries,
+            localDeviceId: canPublishClipboardContent ? localDevice?.deviceId : nil
+        )
+    }
+
+    private static func connectedPeersTooltip(
+        for summaries: [ConnectedPeerSummary],
+        localDeviceId: String?
+    ) -> String {
+        guard !summaries.isEmpty else {
+            return "暂无连接设备"
+        }
+
+        return summaries
+            .map { summary in
+                let localMarker = summary.deviceId == localDeviceId ? "（本机）" : ""
+                return "机器名：\(summary.deviceName)\(localMarker)\nIP：\(summary.ipAddress)"
+            }
+            .joined(separator: "\n\n")
+    }
 }
 
 struct SettingsView: View {
     @ObservedObject var state: SettingsState
-    @State private var keyErrorMessage: String?
-    @State private var diagnosticsMessage: String?
+    @State private var isSharedKeyVisible = false
+    @State private var sharedKeyDismissRequest = 0
+    @State private var keySaveErrorMessage: String?
+    @State private var isConnectedPeersInfoVisible = false
+
+    private let authorHomepageURL = URL(string: "https://example.com/yjy")!
 
     var body: some View {
-        Form {
-            Section("共享") {
-                Toggle("启用剪贴板共享", isOn: $state.sharingEnabled)
-
-                LabeledContent("共享 Key") {
-                    keyStatusText
-                }
-
-                SecureField("输入共享 Key", text: $state.sharedKeyInput)
-                SecureField("再次输入共享 Key", text: $state.sharedKeyConfirmationInput)
-
-                if let keyErrorMessage {
-                    Text(keyErrorMessage)
-                        .foregroundStyle(.red)
-                }
-
-                Button("保存 Key") {
-                    do {
-                        try state.updateSharedKey(
-                            state.sharedKeyInput,
-                            confirmation: state.sharedKeyConfirmationInput
-                        )
-                        keyErrorMessage = nil
-                    } catch {
-                        keyErrorMessage = error.localizedDescription
+        mainSettingsColumn
+        .controlSize(.small)
+        .padding(10)
+        .fixedSize(horizontal: true, vertical: true)
+        .alert(
+            "ClipPlus",
+            isPresented: Binding(
+                get: { keySaveErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        keySaveErrorMessage = nil
                     }
                 }
+            )
+        ) {
+            Button("确定") {
+                keySaveErrorMessage = nil
             }
-
-            Section("设备") {
-                LabeledContent("待确认设备") {
-                    Text("\(state.pendingPeerCount)")
-                        .foregroundStyle(state.pendingPeerCount == 0 ? .secondary : .primary)
-                }
-
-                if state.pendingPeerSummaries.isEmpty {
-                    Text("暂无待确认设备")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(state.pendingPeerSummaries) { peer in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(peer.deviceName)
-                                Text("ID \(peer.shortDeviceId)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Button("允许") {
-                                state.approvePendingPeer(deviceId: peer.deviceId)
-                            }
-                        }
-                    }
-                }
-
-                Button("允许全部待确认设备") {
-                    state.approvePendingPeers()
-                }
-                .disabled(state.pendingPeerCount == 0)
-
-                if let remoteFileOffer = state.remoteFileOffer {
-                    Button(remoteFileOffer.displayTitle) {
-                        state.requestRemoteFileReceive()
-                    }
-                }
-            }
-
-            Section("系统") {
-                Toggle("开机自动启动", isOn: $state.startupEnabled)
-
-                Button("导出诊断包") {
-                    exportDiagnostics()
-                }
-
-                if let diagnosticsMessage {
-                    Text(diagnosticsMessage)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-        .frame(width: 420)
-    }
-
-    @ViewBuilder
-    private var keyStatusText: some View {
-        if state.sharedKeyConfigured {
-            Text("已设置")
-                .foregroundStyle(.secondary)
-        } else {
-            Text("未设置")
-                .foregroundStyle(.red)
+        } message: {
+            Text(keySaveErrorMessage ?? "")
         }
     }
 
-    private func exportDiagnostics() {
-        let sensitiveValues = [
-            ProcessInfo.processInfo.environment["CLIPPLUS_SHARED_KEY"]
-        ].compactMap { $0 }
+    private var mainSettingsColumn: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            infoBox
+
+            Divider()
+
+            sharedKeyField
+
+            sharingToggleRow
+
+            Toggle("开机启动", isOn: startupEnabledBinding)
+
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Label("退出 ClipPlus", systemImage: "power")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("退出 ClipPlus")
+        }
+        .frame(width: 160)
+    }
+
+    private var infoBox: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("ClipPlus")
+                    .font(.headline)
+
+                Text("局域网剪贴板")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            authorLink
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var authorLink: some View {
+        Link("By.YJY", destination: authorHomepageURL)
+            .font(.caption)
+            .foregroundStyle(Color.accentColor)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var sharedKeyField: some View {
+        SharedKeyInputField(
+            prompt: state.sharedKeyFieldPrompt,
+            text: $state.sharedKeyInput,
+            isVisible: $isSharedKeyVisible,
+            dismissRequest: sharedKeyDismissRequest,
+            onCommit: saveSharedKeyIfNeeded,
+            onVisibilityChanged: {}
+        )
+        .frame(height: 22)
+    }
+
+    private var sharingToggleRow: some View {
+        HStack(spacing: 2) {
+            Toggle("开启局域网剪贴板", isOn: sharingEnabledBinding)
+
+            connectedPeerCountLabel
+        }
+    }
+
+    private var connectedPeerCountLabel: some View {
+        Text("(\(state.connectedPeerCount))")
+            .foregroundStyle(Color.accentColor)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onHover { isHovering in
+                withAnimation(.easeOut(duration: 0.08)) {
+                    isConnectedPeersInfoVisible = isHovering
+                }
+            }
+            .accessibilityHint(Text(state.connectedPeersTooltip))
+            .popover(
+                isPresented: $isConnectedPeersInfoVisible,
+                attachmentAnchor: .rect(.bounds),
+                arrowEdge: .trailing
+            ) {
+                connectedPeersInfoPopover
+            }
+    }
+
+    private var connectedPeersInfoPopover: some View {
+        Text(state.connectedPeersTooltip)
+            .font(.caption2)
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.leading)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 6)
+            .frame(width: 160, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            }
+    }
+
+    private var sharingEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { state.sharingEnabled },
+            set: { newValue in
+                dismissSharedKeyEditor()
+                isConnectedPeersInfoVisible = false
+                state.sharingEnabled = newValue
+            }
+        )
+    }
+
+    private var startupEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { state.startupEnabled },
+            set: { newValue in
+                dismissSharedKeyEditor()
+                isConnectedPeersInfoVisible = false
+                state.startupEnabled = newValue
+            }
+        )
+    }
+
+    private func dismissSharedKeyEditor() {
+        isSharedKeyVisible = false
+        sharedKeyDismissRequest += 1
+    }
+
+    private func saveSharedKeyIfNeeded() {
+        guard !state.sharedKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
 
         do {
-            let exportURL = try DiagnosticsExporter(sensitiveValues: sensitiveValues).export(state: state)
-            diagnosticsMessage = "已导出：\(exportURL.path)"
+            try state.updateSharedKey(
+                state.sharedKeyInput,
+                confirmation: state.sharedKeyInput
+            )
+            keySaveErrorMessage = nil
         } catch {
-            diagnosticsMessage = "诊断包导出失败"
+            keySaveErrorMessage = error.localizedDescription
         }
     }
 }

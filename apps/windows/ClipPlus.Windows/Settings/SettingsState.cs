@@ -16,12 +16,27 @@ public sealed class SettingsState : INotifyPropertyChanged
     private RemoteFileOfferSummary? remoteFileOffer;
     private readonly Dictionary<string, string> pendingPeers = new();
     private readonly HashSet<string> trustedPeerIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ConnectedPeerSummary> connectedPeers = new(StringComparer.Ordinal);
+    private ConnectedPeerSummary? localDevice;
+    private int connectedPeerCount;
+    private IReadOnlyList<ConnectedPeerSummary> connectedRemotePeerSummaries = Array.Empty<ConnectedPeerSummary>();
+    private IReadOnlyList<ConnectedPeerSummary> connectedPeerSummaries = Array.Empty<ConnectedPeerSummary>();
+    private string connectedPeersTooltip = "暂无连接设备";
 
-    public SettingsState(bool sharedKeyConfigured, bool sharingEnabled, bool startupEnabled)
+    private static readonly TimeSpan ConnectedPeerTimeout = TimeSpan.FromSeconds(15);
+
+    public SettingsState(
+        bool sharedKeyConfigured,
+        bool sharingEnabled,
+        bool startupEnabled,
+        string sharedGroupId = "",
+        string sharedKeyInput = "")
     {
         this.sharedKeyConfigured = sharedKeyConfigured;
         this.sharingEnabled = sharingEnabled;
         this.startupEnabled = startupEnabled;
+        this.sharedGroupId = sharedGroupId;
+        this.sharedKeyInput = sharedKeyInput;
         lastStatusMessage = sharedKeyConfigured ? "剪贴板共享准备就绪" : "请先设置共享 Key";
     }
 
@@ -37,7 +52,9 @@ public sealed class SettingsState : INotifyPropertyChanged
             if (SetField(ref sharedKeyConfigured, value))
             {
                 OnPropertyChanged(nameof(RequiresKeySetup));
+                OnPropertyChanged(nameof(SharedKeyPlaceholder));
                 OnPropertyChanged(nameof(CanPublishClipboardContent));
+                RefreshConnectedPeerDisplay(DateTimeOffset.UtcNow);
             }
         }
     }
@@ -50,6 +67,7 @@ public sealed class SettingsState : INotifyPropertyChanged
             if (SetField(ref sharingEnabled, value))
             {
                 OnPropertyChanged(nameof(CanPublishClipboardContent));
+                RefreshConnectedPeerDisplay(DateTimeOffset.UtcNow);
             }
         }
     }
@@ -97,12 +115,18 @@ public sealed class SettingsState : INotifyPropertyChanged
     }
 
     public bool RequiresKeySetup => !SharedKeyConfigured;
+    public string SharedKeyPlaceholder => SharedKeyConfigured ? "***" : "输入 Key";
     public int PendingPeerCount => pendingPeers.Count;
     public int TrustedPeerCount => trustedPeerIds.Count;
-    public bool CanPublishClipboardContent => SharedKeyConfigured && SharingEnabled && trustedPeerIds.Count > 0;
+    public bool CanPublishClipboardContent => SharedKeyConfigured && SharingEnabled;
     public bool HasRemoteFileOffer => RemoteFileOffer is not null;
+    public int ConnectedPeerCount => connectedPeerCount;
 
     public IReadOnlyCollection<string> TrustedPeerIds => trustedPeerIds.ToArray();
+
+    public IReadOnlyList<ConnectedPeerSummary> ConnectedRemotePeerSummaries => connectedRemotePeerSummaries;
+    public IReadOnlyList<ConnectedPeerSummary> ConnectedPeerSummaries => connectedPeerSummaries;
+    public string ConnectedPeersTooltip => connectedPeersTooltip;
 
     public IReadOnlyList<PendingPeerSummary> PendingPeerSummaries => pendingPeers
         .Select(peer => new PendingPeerSummary(peer.Key, peer.Value))
@@ -125,9 +149,9 @@ public sealed class SettingsState : INotifyPropertyChanged
             throw new ArgumentException("两次输入的共享 Key 不一致", nameof(confirmation));
         }
 
+        SharedKeyInput = normalizedKey;
         SharedGroupId = SharedKeyHasher.GroupIdFor(normalizedKey);
         SharedKeyConfigured = true;
-        SharedKeyInput = string.Empty;
         SharedKeyConfirmationInput = string.Empty;
         LastStatusMessage = "共享 Key 已设置";
     }
@@ -211,7 +235,66 @@ public sealed class SettingsState : INotifyPropertyChanged
         return trustedPeerIds.Contains(deviceId);
     }
 
-    public void UpdateRemoteFileOffer(RemoteFileOfferSummary offer, bool autoRequestReceive = false)
+    public void RecordConnectedPeer(
+        string deviceId,
+        string deviceName,
+        string ipAddress,
+        DateTimeOffset? now = null)
+    {
+        var normalizedDeviceId = deviceId.Trim();
+        if (string.IsNullOrEmpty(normalizedDeviceId))
+        {
+            return;
+        }
+
+        var referenceTime = now ?? DateTimeOffset.UtcNow;
+        var normalizedDeviceName = string.IsNullOrWhiteSpace(deviceName)
+            ? normalizedDeviceId
+            : deviceName.Trim();
+        var normalizedIpAddress = string.IsNullOrWhiteSpace(ipAddress)
+            ? "未知 IP"
+            : ipAddress.Trim();
+
+        connectedPeers[normalizedDeviceId] = new ConnectedPeerSummary(
+            normalizedDeviceId,
+            normalizedDeviceName,
+            normalizedIpAddress,
+            referenceTime
+        );
+        RemoveExpiredConnectedPeers(referenceTime);
+        RefreshConnectedPeerDisplay(referenceTime);
+    }
+
+    public void SetLocalDevice(
+        string deviceId,
+        string deviceName,
+        string ipAddress)
+    {
+        var normalizedDeviceId = deviceId.Trim();
+        if (string.IsNullOrEmpty(normalizedDeviceId))
+        {
+            return;
+        }
+
+        localDevice = new ConnectedPeerSummary(
+            normalizedDeviceId,
+            string.IsNullOrWhiteSpace(deviceName) ? normalizedDeviceId : deviceName.Trim(),
+            string.IsNullOrWhiteSpace(ipAddress) ? "未知 IP" : ipAddress.Trim(),
+            DateTimeOffset.UtcNow
+        );
+        RefreshConnectedPeerDisplay(DateTimeOffset.UtcNow);
+    }
+
+    public void PurgeExpiredConnectedPeers(DateTimeOffset? now = null)
+    {
+        var referenceTime = now ?? DateTimeOffset.UtcNow;
+        if (RemoveExpiredConnectedPeers(referenceTime))
+        {
+            RefreshConnectedPeerDisplay(referenceTime);
+        }
+    }
+
+    public void UpdateRemoteFileOffer(RemoteFileOfferSummary offer, bool autoRequestReceive = true)
     {
         RemoteFileOffer = offer;
         LastStatusMessage = offer.DisplayTitle;
@@ -257,12 +340,85 @@ public sealed class SettingsState : INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
+
+    private bool RemoveExpiredConnectedPeers(DateTimeOffset now)
+    {
+        var expiredDeviceIds = connectedPeers
+            .Where(peer => IsConnectedPeerExpired(peer.Value.LastSeen, now))
+            .Select(peer => peer.Key)
+            .ToArray();
+        foreach (var deviceId in expiredDeviceIds)
+        {
+            connectedPeers.Remove(deviceId);
+        }
+
+        return expiredDeviceIds.Length > 0;
+    }
+
+    private void OnConnectedPeersChanged()
+    {
+        OnPropertyChanged(nameof(ConnectedPeerCount));
+        OnPropertyChanged(nameof(ConnectedPeerSummaries));
+        OnPropertyChanged(nameof(ConnectedRemotePeerSummaries));
+        OnPropertyChanged(nameof(ConnectedPeersTooltip));
+    }
+
+    private void RefreshConnectedPeerDisplay(DateTimeOffset now)
+    {
+        connectedRemotePeerSummaries = connectedPeers.Values
+            .Where(peer => !IsConnectedPeerExpired(peer.LastSeen, now))
+            .OrderBy(peer => peer.DeviceName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(peer => peer.IpAddress, StringComparer.Ordinal)
+            .ThenBy(peer => peer.DeviceId, StringComparer.Ordinal)
+            .ToArray();
+        var displayRemotePeers = connectedRemotePeerSummaries
+            .Where(peer => !string.Equals(peer.DeviceId, localDevice?.DeviceId, StringComparison.Ordinal))
+            .ToArray();
+        connectedPeerSummaries = CanPublishClipboardContent && localDevice is not null
+            ? new[] { localDevice }.Concat(displayRemotePeers).ToArray()
+            : displayRemotePeers;
+        connectedPeerCount = connectedPeerSummaries.Count;
+        connectedPeersTooltip = ConnectedPeersTooltipFor(
+            connectedPeerSummaries,
+            CanPublishClipboardContent ? localDevice?.DeviceId : null
+        );
+        OnConnectedPeersChanged();
+    }
+
+    private static string ConnectedPeersTooltipFor(
+        IReadOnlyList<ConnectedPeerSummary> summaries,
+        string? localDeviceId)
+    {
+        return summaries.Count == 0
+            ? "暂无连接设备"
+            : string.Join(
+                $"{Environment.NewLine}{Environment.NewLine}",
+                summaries.Select(peer =>
+                {
+                    var localMarker = string.Equals(peer.DeviceId, localDeviceId, StringComparison.Ordinal)
+                        ? "（本机）"
+                        : string.Empty;
+                    return $"机器名：{peer.DeviceName}{localMarker}{Environment.NewLine}IP：{peer.IpAddress}";
+                })
+            );
+    }
+
+    private static bool IsConnectedPeerExpired(DateTimeOffset lastSeen, DateTimeOffset now)
+    {
+        return now - lastSeen > ConnectedPeerTimeout;
+    }
 }
 
 public sealed record PendingPeerSummary(string DeviceId, string DeviceName)
 {
     public string ShortDeviceId => DeviceId.Length <= 8 ? DeviceId : DeviceId[..8];
 }
+
+public sealed record ConnectedPeerSummary(
+    string DeviceId,
+    string DeviceName,
+    string IpAddress,
+    DateTimeOffset LastSeen);
 
 public sealed record RemoteFileOfferSummary(
     string TransferId,
