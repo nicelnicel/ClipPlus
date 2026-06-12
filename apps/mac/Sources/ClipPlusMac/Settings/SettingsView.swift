@@ -386,7 +386,7 @@ struct SettingsView: View {
     @State private var keySaveErrorMessage: String?
     @State private var isConnectedPeersInfoVisible = false
 
-    private let authorHomepageURL = URL(string: "https://example.com/yjy")!
+    private let authorHomepageURL = URL(string: "https://github.com/nicelnicel")!
 
     var body: some View {
         mainSettingsColumn
@@ -457,7 +457,7 @@ struct SettingsView: View {
     }
 
     private var authorLink: some View {
-        Link("By.YJY", destination: authorHomepageURL)
+        Link("by.YJY_hi", destination: authorHomepageURL)
             .font(.caption)
             .foregroundStyle(Color.accentColor)
             .frame(maxWidth: .infinity, alignment: .trailing)

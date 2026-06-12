@@ -95,9 +95,9 @@
         <CheckBox Content="开机启动" IsChecked="{Binding StartupEnabled}" Margin="0,8,0,0" />
         <TextBlock Margin="0,10,0,0"
                    HorizontalAlignment="Right">
-            <Hyperlink NavigateUri="https://example.com/yjy"
+            <Hyperlink NavigateUri="https://github.com/nicelnicel"
                        RequestNavigate="AuthorLink_RequestNavigate">
-                By.YJY
+                by.YJY_hi
             </Hyperlink>
         </TextBlock>
         <Button Content="退出 ClipPlus"

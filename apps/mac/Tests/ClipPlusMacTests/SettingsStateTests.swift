@@ -251,7 +251,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertContainsVisibleControl("局域网剪贴板", in: visibleSettingsSource)
         XCTAssertContainsVisibleControl("退出 ClipPlus", in: visibleSettingsSource)
         XCTAssertTrue(visibleSettingsSource.contains(".accessibilityLabel(\"退出 ClipPlus\")"))
-        XCTAssertContainsVisibleControl("By.YJY", in: visibleSettingsSource)
+        XCTAssertContainsVisibleControl("by.YJY_hi", in: visibleSettingsSource)
         XCTAssertTrue(visibleSettingsSource.contains("isSharedKeyVisible"))
         XCTAssertTrue(visibleSettingsSource.contains("dismissSharedKeyEditor"))
         XCTAssertTrue(visibleSettingsSource.contains("sharedKeyDismissRequest"))
@@ -260,6 +260,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(sharedKeyInputFieldSource.contains("eye"))
         XCTAssertTrue(visibleSettingsSource.contains("SharedKeyInputField("))
         XCTAssertTrue(visibleSettingsSource.contains("Link("))
+        XCTAssertTrue(visibleSettingsSource.contains("https://github.com/nicelnicel"))
         XCTAssertTrue(visibleSettingsSource.contains("authorHomepageURL"))
         XCTAssertTrue(visibleSettingsSource.contains(".foregroundStyle(Color.accentColor)"))
         XCTAssertTrue(visibleSettingsSource.contains(".frame(width: 160)"))
@@ -268,7 +269,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(visibleSettingsSource.contains(".background(.orange"))
         XCTAssertFalse(
             visibleSettingsSource.contains("Toggle(\"开机启动\", isOn: startupEnabledBinding)\n\n            authorLink"),
-            "By.YJY 不应该再作为开机启动下方的单独一行"
+            "作者链接不应该再作为开机启动下方的单独一行"
         )
 
         let infoBoxStart = try XCTUnwrap(visibleSettingsSource.range(of: "private var infoBox")?.lowerBound)
@@ -277,8 +278,8 @@ final class SettingsStateTests: XCTestCase {
         )
         let infoBoxSource = String(visibleSettingsSource[infoBoxStart..<sharedKeyFieldDeclarationStart])
         XCTAssertTrue(infoBoxSource.contains("ZStack(alignment: .topTrailing)"), "信息框应该提供右上角布局")
-        XCTAssertTrue(infoBoxSource.contains("Link(\"By.YJY\""), "By.YJY 应该放在信息框里")
-        XCTAssertTrue(infoBoxSource.contains("authorHomepageURL"), "信息框里的 By.YJY 应该保持可点击链接")
+        XCTAssertTrue(infoBoxSource.contains("Link(\"by.YJY_hi\""), "作者链接应该放在信息框里")
+        XCTAssertTrue(infoBoxSource.contains("authorHomepageURL"), "信息框里的作者链接应该保持可点击")
 
         let disallowedVisibleLabels = [
             "状态",

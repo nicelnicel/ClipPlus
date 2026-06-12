@@ -246,16 +246,16 @@ public sealed class SettingsStateTests
         Assert.DoesNotContain("Height=\"210\"", settingsXaml);
         Assert.Contains("开启局域网剪贴板", settingsXaml);
         Assert.Contains("开机启动", settingsXaml);
-        Assert.Contains("By.YJY", settingsXaml);
+        Assert.Contains("by.YJY_hi", settingsXaml);
         Assert.Contains("RequestNavigate=\"AuthorLink_RequestNavigate\"", settingsXaml);
-        Assert.Contains("NavigateUri=\"https://example.com/yjy\"", settingsXaml);
+        Assert.Contains("NavigateUri=\"https://github.com/nicelnicel\"", settingsXaml);
         Assert.Contains("HorizontalAlignment=\"Right\"", settingsXaml);
         Assert.Contains("退出 ClipPlus", settingsXaml);
         Assert.Contains("Click=\"Exit_Click\"", settingsXaml);
         Assert.True(
-            settingsXaml.IndexOf("By.YJY", StringComparison.Ordinal)
+            settingsXaml.IndexOf("by.YJY_hi", StringComparison.Ordinal)
                 < settingsXaml.IndexOf("退出 ClipPlus", StringComparison.Ordinal),
-            "By.YJY 应该放在退出按钮上一行"
+            "作者链接应该放在退出按钮上一行"
         );
         Assert.Contains("ToggleKeyVisibility", settingsXaml);
         Assert.Contains("SharedKeyPasswordBox", settingsXaml);
