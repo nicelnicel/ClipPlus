@@ -73,22 +73,12 @@ public sealed class NativeClipboard
 
     public byte[]? ReadPngImageData()
     {
-        if (!System.Windows.Clipboard.ContainsImage())
-        {
-            return null;
-        }
-
-        var image = System.Windows.Clipboard.GetImage();
-        if (image is null)
-        {
-            return null;
-        }
-
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(image));
-        using var stream = new MemoryStream();
-        encoder.Save(stream);
-        return stream.ToArray();
+        return ReadWpfImageAsPng()
+            ?? ReadClipboardDataObjectPng()
+            ?? ClipboardImageFormats.ReadNativePngFormat("PNG")
+            ?? ClipboardImageFormats.ReadNativePngFormat("image/png")
+            ?? ClipboardImageFormats.ReadNativeDib()
+            ?? ReadWinFormsImageAsPng();
     }
 
     public void WritePngImageData(byte[] pngData)
@@ -123,6 +113,56 @@ public sealed class NativeClipboard
         bitmap.EndInit();
         bitmap.Freeze();
         return bitmap;
+    }
+
+    private static byte[]? ReadWpfImageAsPng()
+    {
+        try
+        {
+            if (!System.Windows.Clipboard.ContainsImage())
+            {
+                return null;
+            }
+
+            var image = System.Windows.Clipboard.GetImage();
+            return image is null ? null : ClipboardImageFormats.EncodeBitmapSourceToPng(image);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static byte[]? ReadClipboardDataObjectPng()
+    {
+        try
+        {
+            return ClipboardImageFormats.ReadPngFromDataObject(System.Windows.Clipboard.GetDataObject());
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static byte[]? ReadWinFormsImageAsPng()
+    {
+        try
+        {
+            using var image = System.Windows.Forms.Clipboard.GetImage();
+            if (image is null)
+            {
+                return null;
+            }
+
+            using var stream = new MemoryStream();
+            image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+            return stream.ToArray();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static bool IsSupportedImageFile(string path)

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -1449,6 +1450,61 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void NativeClipboardReadsRegisteredPngClipboardFormat()
+    {
+        RunStaClipboardTest(() =>
+        {
+            var pngData = CreateTestPngData();
+            var dataObject = new System.Windows.DataObject();
+            dataObject.SetData("PNG", new MemoryStream(pngData));
+
+            System.Windows.Clipboard.SetDataObject(dataObject, true);
+            try
+            {
+                Assert.False(System.Windows.Clipboard.ContainsImage());
+                Assert.Equal(pngData, new NativeClipboard().ReadPngImageData());
+            }
+            finally
+            {
+                System.Windows.Clipboard.Clear();
+            }
+        });
+    }
+
+    [Fact]
+    public void ClipboardImageFormatsConvertsDeviceIndependentBitmapToPng()
+    {
+        var pngData = ClipboardImageFormats.ConvertDibToPng(CreateTestDibPayload());
+
+        AssertPngDimensions(pngData, 24, 18);
+    }
+
+    [Fact]
+    public void ClipboardImageFormatsConvertsDeviceIndependentBitmapV5ToPng()
+    {
+        var pngData = ClipboardImageFormats.ConvertDibToPng(CreateTestDibV5Payload());
+
+        AssertPngDimensions(pngData, 4, 3);
+    }
+
+    [Fact]
+    public void NativeClipboardReadsNativeDeviceIndependentBitmapV5ClipboardFormat()
+    {
+        RunStaClipboardTest(() =>
+        {
+            Assert.True(SetRawClipboardData(format: 17, CreateTestDibV5Payload()));
+            try
+            {
+                AssertPngDimensions(new NativeClipboard().ReadPngImageData(), 4, 3);
+            }
+            finally
+            {
+                System.Windows.Clipboard.Clear();
+            }
+        });
+    }
+
+    [Fact]
     public void UdpTextSyncServiceUsesDirectImageTransferForOversizedImages()
     {
         var source = File.ReadAllText(Path.Combine(
@@ -1697,6 +1753,11 @@ public sealed class SettingsStateTests
 
     private static void WriteTestPng(string path)
     {
+        File.WriteAllBytes(path, CreateTestPngData());
+    }
+
+    private static byte[] CreateTestPngData()
+    {
         const int width = 24;
         const int height = 18;
         var stride = width * 4;
@@ -1725,9 +1786,196 @@ public sealed class SettingsStateTests
         );
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        using var stream = File.Create(path);
+        using var stream = new MemoryStream();
         encoder.Save(stream);
+        return stream.ToArray();
     }
+
+    private static byte[] CreateTestDibPayload()
+    {
+        const int width = 24;
+        const int height = 18;
+        var stride = width * 4;
+        var pixels = new byte[stride * height];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var offset = (y * stride) + (x * 4);
+                pixels[offset] = (byte)(30 + x);
+                pixels[offset + 1] = (byte)(80 + y);
+                pixels[offset + 2] = 190;
+                pixels[offset + 3] = 255;
+            }
+        }
+
+        var bitmap = BitmapSource.Create(
+            width,
+            height,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null,
+            pixels,
+            stride
+        );
+        var encoder = new BmpBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return stream.ToArray()[14..];
+    }
+
+    private static byte[] CreateTestDibV5Payload()
+    {
+        const int headerSize = 124;
+        const int width = 4;
+        const int height = 3;
+        const int stride = width * 4;
+        var data = new byte[headerSize + (stride * height)];
+
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(0), headerSize);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(4), width);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(8), -height);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(12), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(14), 32);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(16), 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(20), (uint)(stride * height));
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(24), 3780);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(28), 3780);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(40), 0x00FF0000);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(44), 0x0000FF00);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(48), 0x000000FF);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(52), 0xFF000000);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(56), 0x57696E20);
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var offset = headerSize + (y * stride) + (x * 4);
+                data[offset] = (byte)(10 + x);
+                data[offset + 1] = (byte)(40 + y);
+                data[offset + 2] = 220;
+                data[offset + 3] = 255;
+            }
+        }
+
+        return data;
+    }
+
+    private static void AssertPngDimensions(byte[]? pngData, int expectedWidth, int expectedHeight)
+    {
+        Assert.NotNull(pngData);
+        Assert.True(ClipboardImageFormats.IsPng(pngData!));
+        using var stream = new MemoryStream(pngData!);
+        var decoder = BitmapDecoder.Create(
+            stream,
+            BitmapCreateOptions.PreservePixelFormat,
+            BitmapCacheOption.OnLoad
+        );
+
+        Assert.Equal(expectedWidth, decoder.Frames[0].PixelWidth);
+        Assert.Equal(expectedHeight, decoder.Frames[0].PixelHeight);
+    }
+
+    private static void RunStaClipboardTest(Action action)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (failure is not null)
+        {
+            throw failure;
+        }
+    }
+
+    private static bool SetRawClipboardData(uint format, byte[] data)
+    {
+        const uint gmemMoveable = 0x0002;
+
+        if (!OpenClipboard(IntPtr.Zero))
+        {
+            return false;
+        }
+
+        var handle = IntPtr.Zero;
+        try
+        {
+            if (!EmptyClipboard())
+            {
+                return false;
+            }
+
+            handle = GlobalAlloc(gmemMoveable, (UIntPtr)data.Length);
+            if (handle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var pointer = GlobalLock(handle);
+            if (pointer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            Marshal.Copy(data, 0, pointer, data.Length);
+            _ = GlobalUnlock(handle);
+            if (SetClipboardData(format, handle) == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            handle = IntPtr.Zero;
+            return true;
+        }
+        finally
+        {
+            if (handle != IntPtr.Zero)
+            {
+                _ = GlobalFree(handle);
+            }
+
+            _ = CloseClipboard();
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EmptyClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseClipboard();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalLock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GlobalUnlock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalFree(IntPtr hMem);
 
     private static string FindRepositoryRoot()
     {
