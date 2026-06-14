@@ -17,6 +17,8 @@ public sealed class UdpTextSyncService : IDisposable
     private const int Port = 47_631;
     private const int ArchivePort = 47_632;
     private const int MaxSafeTransferIdLength = 128;
+    // Keep inline image UDP packets below virtual LAN fragmentation thresholds.
+    private const int ReliableInlineImageBytes = 1_024;
 
     private readonly SettingsState state;
     private readonly NativeClipboard clipboard = new();
@@ -256,18 +258,21 @@ public sealed class UdpTextSyncService : IDisposable
         }
 
         lastLocalImageHash = imageHash;
-        var imageMessage = ClipPlusMessage.CreateImage(
-            state.SharedGroupId,
-            deviceId,
-            deviceName,
-            pngData
-        );
-        if (imageMessage is not null)
+        if (pngData.Length <= ReliableInlineImageBytes)
         {
-            Send(imageMessage);
-            state.LastStatusMessage = "已广播图片剪贴板";
-            logger.Info($"published image clipboard byte_count={pngData.Length}");
-            return;
+            var imageMessage = ClipPlusMessage.CreateImage(
+                state.SharedGroupId,
+                deviceId,
+                deviceName,
+                pngData
+            );
+            if (imageMessage is not null)
+            {
+                Send(imageMessage);
+                state.LastStatusMessage = "已广播图片剪贴板";
+                logger.Info($"published image clipboard byte_count={pngData.Length}");
+                return;
+            }
         }
 
         if (PublishImageOffer(pngData, imageHash))

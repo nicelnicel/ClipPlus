@@ -1267,13 +1267,16 @@ fn ffi_udp_socket_rejects_invalid_values() {
 }
 
 fn unique_temp_dir() -> PathBuf {
+    static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("clipplus-ffi-{}", std::process::id()));
     let path = path.join(format!(
-        "{}",
+        "{}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        counter
     ));
     std::fs::create_dir_all(&path).unwrap();
     path

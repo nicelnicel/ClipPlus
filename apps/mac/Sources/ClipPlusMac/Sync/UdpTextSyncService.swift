@@ -60,6 +60,8 @@ final class UdpTextSyncService {
     private let port: UInt16 = 47_631
     private let archivePort: UInt16 = 47_632
     private static let imageOfferDownloadRetryDelay: DispatchTimeInterval = .milliseconds(250)
+    // Keep inline image UDP packets below virtual LAN fragmentation thresholds.
+    private static let maxReliableInlineImageBytes = 1_024
     private let state: SettingsState
     private let clipboard = NativeClipboard()
     private let logger: ClipPlusLogger
@@ -251,7 +253,8 @@ final class UdpTextSyncService {
         }
 
         lastLocalImageHash = imageHash
-        if let message = ClipPlusMessage.image(
+        if pngData.count <= Self.maxReliableInlineImageBytes,
+           let message = ClipPlusMessage.image(
             groupId: snapshot.sharedGroupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,

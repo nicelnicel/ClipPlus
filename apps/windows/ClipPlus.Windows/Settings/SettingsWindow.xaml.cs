@@ -5,20 +5,28 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Threading;
+using ClipPlus.Windows.Update;
 
 namespace ClipPlus.Windows.Settings;
 
 public partial class SettingsWindow : Window
 {
     private readonly SettingsState state;
+    private readonly UpdateService updateService;
     private bool isSharedKeyVisible;
     private bool syncingPasswordBox;
 
     public SettingsWindow(SettingsState state)
+        : this(state, new UpdateService())
+    {
+    }
+
+    internal SettingsWindow(SettingsState state, UpdateService updateService)
     {
         InitializeComponent();
         Title = AppVersion.SettingsWindowTitle;
         this.state = state;
+        this.updateService = updateService;
         DataContext = state;
         state.PropertyChanged += State_PropertyChanged;
         UpdateKeyInputMode();
@@ -48,6 +56,66 @@ public partial class SettingsWindow : Window
     private void Exit_Click(object sender, RoutedEventArgs e)
     {
         System.Windows.Application.Current.Shutdown();
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpdateButton.IsEnabled = false;
+        CheckUpdateButton.Content = "检查中...";
+        try
+        {
+            var result = await updateService.CheckAndDownloadLatestAsync(progress =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    CheckUpdateButton.Content = $"下载中 {(int)(progress * 100)}%";
+                });
+            });
+
+            if (result.Status == UpdateCheckStatus.UpToDate)
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    "已是最新版本",
+                    "ClipPlus",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+                return;
+            }
+
+            var downloadedUpdate = result.DownloadedUpdate
+                ?? throw new UpdateException(UpdateErrorKind.DownloadFailed);
+            var response = System.Windows.MessageBox.Show(
+                this,
+                $"新版本 v{downloadedUpdate.Version} 已下载完成。ClipPlus 将退出并自动安装，然后重新启动。",
+                "ClipPlus",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information
+            );
+            if (response == MessageBoxResult.Yes)
+            {
+                updateService.InstallAndRelaunch(downloadedUpdate);
+            }
+        }
+        catch (Exception error)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                error.Message,
+                "ClipPlus",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning
+            );
+        }
+        finally
+        {
+            if (!Dispatcher.HasShutdownStarted)
+            {
+                CheckUpdateButton.Content = "检查更新";
+                CheckUpdateButton.IsEnabled = true;
+            }
+        }
     }
 
     private void SharedKeyPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)

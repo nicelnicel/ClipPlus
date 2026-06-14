@@ -11,6 +11,7 @@ using ClipPlus.Windows.Clipboard;
 using ClipPlus.Windows.Settings;
 using ClipPlus.Windows.Startup;
 using ClipPlus.Windows.Diagnostics;
+using ClipPlus.Windows.Update;
 using Xunit;
 
 namespace ClipPlus.Windows.Tests;
@@ -435,6 +436,146 @@ public sealed class SettingsStateTests
         Assert.Contains("Release tag", checkReleaseVersionScript);
         Assert.Contains("VERSION", checkReleaseVersionScript);
         Assert.Contains("Cargo.lock", checkReleaseVersionScript);
+    }
+
+    [Fact]
+    public void WindowsUpdateVersionComparisonHandlesSemanticVersions()
+    {
+        Assert.True(UpdateVersion.Parse("0.1.4").CompareTo(UpdateVersion.Parse("v0.1.5")) < 0);
+        Assert.True(UpdateVersion.Parse("0.1.10").CompareTo(UpdateVersion.Parse("0.1.9")) > 0);
+        Assert.Equal("0.1.4", UpdateVersion.Parse("v0.1.4").ToString());
+        Assert.False(UpdateVersion.TryParse("dev", out _));
+    }
+
+    [Fact]
+    public void WindowsUpdateSelectsFullExeReleaseAssetAndRequiresDigest()
+    {
+        var releaseJson = """
+            {
+              "tag_name": "v0.1.5",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "ClipPlus-Windows-x64-runtime-dependent.exe",
+                  "browser_download_url": "https://example.com/runtime.exe",
+                  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "size": 10
+                },
+                {
+                  "name": "ClipPlus-Windows-x64-full.exe",
+                  "browser_download_url": "https://example.com/full.exe",
+                  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "size": 20
+                }
+              ]
+            }
+            """;
+
+        var release = GitHubReleaseClient.DecodeRelease(releaseJson);
+        var asset = GitHubReleaseClient.SelectWindowsAsset(
+            release,
+            UpdateVersion.Parse("0.1.4")
+        );
+
+        Assert.Equal("0.1.5", asset.Version.ToString());
+        Assert.Equal("ClipPlus-Windows-x64-full.exe", asset.Name);
+        Assert.Equal("https://example.com/full.exe", asset.DownloadUrl.ToString());
+        Assert.Equal(new string('b', 64), asset.Sha256Hex);
+        Assert.Equal(20, asset.Size);
+
+        var missingDigestJson = """
+            {
+              "tag_name": "v0.1.5",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "ClipPlus-Windows-x64-full.exe",
+                  "browser_download_url": "https://example.com/full.exe",
+                  "size": 20
+                }
+              ]
+            }
+            """;
+        var missingDigestRelease = GitHubReleaseClient.DecodeRelease(missingDigestJson);
+
+        var error = Assert.Throws<UpdateException>(() => GitHubReleaseClient.SelectWindowsAsset(
+            missingDigestRelease,
+            UpdateVersion.Parse("0.1.4")
+        ));
+        Assert.Equal(UpdateErrorKind.MissingDigest, error.Kind);
+    }
+
+    [Fact]
+    public void WindowsUpdateDownloaderVerifiesSha256()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusUpdate-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var payloadPath = Path.Combine(directory, "payload.bin");
+        try
+        {
+            File.WriteAllBytes(payloadPath, Encoding.UTF8.GetBytes("clipplus update"));
+
+            UpdateDownloader.VerifySha256(
+                payloadPath,
+                "6d117130cdf62d70ef384c91de7ef1de3c637afb3aef12df44fe61ba3b789b62"
+            );
+            var error = Assert.Throws<UpdateException>(() => UpdateDownloader.VerifySha256(
+                payloadPath,
+                new string('0', 64)
+            ));
+            Assert.Equal(UpdateErrorKind.Sha256Mismatch, error.Kind);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WindowsUpdateInstallerScriptBacksUpReplacesAndRelaunchesExe()
+    {
+        var script = WindowsUpdateInstaller.CreateUpdaterScript(
+            currentExePath: @"C:\ClipPlus\ClipPlus.Windows.exe",
+            newExePath: @"C:\Users\YJY\AppData\Local\ClipPlus\Updates\v0.1.5\ClipPlus-Windows-x64-full.exe",
+            currentProcessId: 12345
+        );
+
+        Assert.Contains("Wait-Process -Id 12345", script);
+        Assert.Contains("ClipPlus.Windows.exe.old", script);
+        Assert.Contains("Move-Item -LiteralPath $currentExe -Destination $backupExe", script);
+        Assert.Contains("Copy-Item -LiteralPath $newExe -Destination $currentExe", script);
+        Assert.Contains("Start-Process -FilePath $currentExe", script);
+    }
+
+    [Fact]
+    public void WindowsSettingsUiContainsSimpleCheckUpdateButton()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var settingsXaml = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsWindow.xaml"
+        ));
+        var settingsCode = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsWindow.xaml.cs"
+        ));
+
+        Assert.Contains("检查更新", settingsXaml);
+        Assert.Contains("CheckUpdate_Click", settingsXaml);
+        Assert.Contains("检查中...", settingsCode);
+        Assert.Contains("下载中", settingsCode);
+        Assert.Contains("UpdateService", settingsCode);
+        Assert.DoesNotContain("自动检查更新", settingsXaml);
     }
 
     [Fact]
@@ -1298,6 +1439,8 @@ public sealed class SettingsStateTests
         Assert.Contains("DownloadRemoteImageOfferAsync", source, StringComparison.Ordinal);
         Assert.Contains("case ClipPlusMessageKind.ImageOffer", source, StringComparison.Ordinal);
         Assert.Contains("ImageContentHasher.Sha256Hex", source, StringComparison.Ordinal);
+        Assert.Contains("ReliableInlineImageBytes", source, StringComparison.Ordinal);
+        Assert.Contains("pngData.Length <= ReliableInlineImageBytes", source, StringComparison.Ordinal);
         Assert.Contains("RegisterTemporaryImageTransferSource", source, StringComparison.Ordinal);
         Assert.Contains("DownloadFileTreeWithRetry", source, StringComparison.Ordinal);
         Assert.Contains("Task.Delay(TimeSpan.FromMilliseconds(250))", source, StringComparison.Ordinal);

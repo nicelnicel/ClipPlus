@@ -93,6 +93,11 @@
             </StackPanel>
         </CheckBox>
         <CheckBox Content="开机启动" IsChecked="{Binding StartupEnabled}" Margin="0,8,0,0" />
+        <Button x:Name="CheckUpdateButton"
+                Content="检查更新"
+                Click="CheckUpdate_Click"
+                HorizontalContentAlignment="Left"
+                Margin="0,10,0,0" />
         <TextBlock Margin="0,10,0,0"
                    HorizontalAlignment="Right">
             <Hyperlink NavigateUri="https://github.com/nicelnicel"

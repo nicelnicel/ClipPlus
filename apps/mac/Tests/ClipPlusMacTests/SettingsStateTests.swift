@@ -463,6 +463,133 @@ final class SettingsStateTests: XCTestCase {
         )
     }
 
+    func testMacUpdateVersionComparisonHandlesSemanticVersions() throws {
+        XCTAssertLessThan(
+            try XCTUnwrap(UpdateVersion("0.1.4")),
+            try XCTUnwrap(UpdateVersion("v0.1.5"))
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(UpdateVersion("0.1.10")),
+            try XCTUnwrap(UpdateVersion("0.1.9"))
+        )
+        XCTAssertEqual(try XCTUnwrap(UpdateVersion("v0.1.4")).description, "0.1.4")
+        XCTAssertNil(UpdateVersion("dev"))
+    }
+
+    func testMacUpdateSelectsDmgReleaseAssetAndRequiresDigest() throws {
+        let releaseJSON = Data(
+            """
+            {
+              "tag_name": "v0.1.5",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "ClipPlus-Windows-x64-full.exe",
+                  "browser_download_url": "https://example.com/windows.exe",
+                  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "size": 10
+                },
+                {
+                  "name": "ClipPlus-macOS.dmg",
+                  "browser_download_url": "https://example.com/ClipPlus-macOS.dmg",
+                  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "size": 20
+                }
+              ]
+            }
+            """.utf8
+        )
+
+        let release = try GitHubReleaseClient.decodeRelease(from: releaseJSON)
+        let asset = try GitHubReleaseClient.selectMacAsset(
+            from: release,
+            currentVersion: try XCTUnwrap(UpdateVersion("0.1.4"))
+        )
+
+        XCTAssertEqual(asset.version.description, "0.1.5")
+        XCTAssertEqual(asset.name, "ClipPlus-macOS.dmg")
+        XCTAssertEqual(asset.downloadURL.absoluteString, "https://example.com/ClipPlus-macOS.dmg")
+        XCTAssertEqual(asset.sha256Hex, String(repeating: "b", count: 64))
+        XCTAssertEqual(asset.size, 20)
+
+        let missingDigestJSON = Data(
+            """
+            {
+              "tag_name": "v0.1.5",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "ClipPlus-macOS.dmg",
+                  "browser_download_url": "https://example.com/ClipPlus-macOS.dmg",
+                  "size": 20
+                }
+              ]
+            }
+            """.utf8
+        )
+        let missingDigestRelease = try GitHubReleaseClient.decodeRelease(from: missingDigestJSON)
+
+        XCTAssertThrowsError(
+            try GitHubReleaseClient.selectMacAsset(
+                from: missingDigestRelease,
+                currentVersion: try XCTUnwrap(UpdateVersion("0.1.4"))
+            )
+        ) { error in
+            XCTAssertEqual(error as? UpdateError, .missingDigest)
+        }
+    }
+
+    func testMacUpdateDownloaderVerifiesSha256() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let fileURL = temporaryDirectory.appendingPathComponent("payload.bin")
+        try Data("clipplus update".utf8).write(to: fileURL)
+
+        XCTAssertNoThrow(try UpdateDownloader.verifySha256(
+            fileURL: fileURL,
+            expectedHex: "6d117130cdf62d70ef384c91de7ef1de3c637afb3aef12df44fe61ba3b789b62"
+        ))
+        XCTAssertThrowsError(try UpdateDownloader.verifySha256(
+            fileURL: fileURL,
+            expectedHex: String(repeating: "0", count: 64)
+        )) { error in
+            XCTAssertEqual(error as? UpdateError, .sha256Mismatch)
+        }
+    }
+
+    func testMacUpdateInstallerScriptPreservesSharedKeyAndRelaunchesApp() throws {
+        let script = MacUpdateInstaller.makeInstallScript(
+            dmgURL: URL(fileURLWithPath: "/tmp/ClipPlus-macOS.dmg"),
+            appBundleURL: URL(fileURLWithPath: "/Applications/ClipPlus.app"),
+            currentPID: 12345
+        )
+
+        XCTAssertTrue(script.contains("while kill -0 12345"))
+        XCTAssertTrue(script.contains("hdiutil attach"))
+        XCTAssertTrue(script.contains("clipplus.shared-key"))
+        XCTAssertTrue(script.contains("ditto"))
+        XCTAssertTrue(script.contains("open \"/Applications/ClipPlus.app\""))
+    }
+
+    func testMacSettingsUiContainsSimpleCheckUpdateButton() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsViewURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Settings/SettingsView.swift")
+        let settingsSource = try String(contentsOf: settingsViewURL, encoding: .utf8)
+
+        XCTAssertTrue(settingsSource.contains("检查更新"))
+        XCTAssertTrue(settingsSource.contains("检查中..."))
+        XCTAssertTrue(settingsSource.contains("下载中"))
+        XCTAssertFalse(settingsSource.contains("自动检查更新"))
+    }
+
     func testSharedAppIconAssetsAreConfiguredForPackaging() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1528,6 +1655,8 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(syncServiceSource.contains("downloadRemoteImageOffer"))
         XCTAssertTrue(syncServiceSource.contains("case .imageOffer"))
         XCTAssertTrue(syncServiceSource.contains("ImageContentHasher.sha256Hex"))
+        XCTAssertTrue(syncServiceSource.contains("maxReliableInlineImageBytes"))
+        XCTAssertTrue(syncServiceSource.contains("pngData.count <= Self.maxReliableInlineImageBytes"))
         XCTAssertTrue(syncServiceSource.contains("registerTemporaryImageTransferSource"))
         XCTAssertTrue(syncServiceSource.contains("downloadFileTreeWithRetry"))
         XCTAssertTrue(syncServiceSource.contains(".milliseconds(250)"))

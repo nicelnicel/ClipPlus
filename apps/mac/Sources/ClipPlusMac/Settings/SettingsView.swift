@@ -385,8 +385,18 @@ struct SettingsView: View {
     @State private var sharedKeyDismissRequest = 0
     @State private var keySaveErrorMessage: String?
     @State private var isConnectedPeersInfoVisible = false
+    @State private var isCheckingUpdate = false
+    @State private var updateButtonTitle = "检查更新"
+    @State private var updateAlertMessage: String?
+    @State private var pendingDownloadedUpdate: DownloadedUpdate?
 
     private let authorHomepageURL = URL(string: "https://github.com/nicelnicel")!
+    private let updateService: any AppUpdateServicing
+
+    init(state: SettingsState, updateService: any AppUpdateServicing = UpdateService()) {
+        self.state = state
+        self.updateService = updateService
+    }
 
     var body: some View {
         mainSettingsColumn
@@ -410,6 +420,30 @@ struct SettingsView: View {
         } message: {
             Text(keySaveErrorMessage ?? "")
         }
+        .alert(
+            "ClipPlus",
+            isPresented: Binding(
+                get: { updateAlertMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        updateAlertMessage = nil
+                        pendingDownloadedUpdate = nil
+                    }
+                }
+            )
+        ) {
+            if pendingDownloadedUpdate != nil {
+                Button("安装并重启") {
+                    installPendingUpdate()
+                }
+            }
+            Button(pendingDownloadedUpdate == nil ? "确定" : "稍后", role: .cancel) {
+                updateAlertMessage = nil
+                pendingDownloadedUpdate = nil
+            }
+        } message: {
+            Text(updateAlertMessage ?? "")
+        }
     }
 
     private var mainSettingsColumn: some View {
@@ -423,6 +457,16 @@ struct SettingsView: View {
             sharingToggleRow
 
             Toggle("开机启动", isOn: startupEnabledBinding)
+
+            Button {
+                checkForUpdates()
+            } label: {
+                Label(updateButtonTitle, systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(isCheckingUpdate)
+            .accessibilityLabel("检查更新")
 
             Button {
                 NSApplication.shared.terminate(nil)
@@ -566,6 +610,54 @@ struct SettingsView: View {
             keySaveErrorMessage = nil
         } catch {
             keySaveErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func checkForUpdates() {
+        guard !isCheckingUpdate else {
+            return
+        }
+
+        Task {
+            await runUpdateCheck()
+        }
+    }
+
+    @MainActor
+    private func runUpdateCheck() async {
+        isCheckingUpdate = true
+        updateButtonTitle = "检查中..."
+        defer {
+            isCheckingUpdate = false
+            updateButtonTitle = "检查更新"
+        }
+
+        do {
+            let result = try await updateService.checkAndDownloadLatest { progress in
+                updateButtonTitle = "下载中 \(Int(progress * 100))%"
+            }
+            switch result {
+            case .upToDate:
+                updateAlertMessage = "已是最新版本"
+            case .downloaded(let downloadedUpdate):
+                pendingDownloadedUpdate = downloadedUpdate
+                updateAlertMessage = "新版本 v\(downloadedUpdate.version.description) 已下载完成。ClipPlus 将退出并自动安装，然后重新启动。"
+            }
+        } catch {
+            updateAlertMessage = error.localizedDescription
+        }
+    }
+
+    private func installPendingUpdate() {
+        guard let pendingDownloadedUpdate else {
+            return
+        }
+
+        do {
+            try updateService.installAndRelaunch(pendingDownloadedUpdate)
+        } catch {
+            self.pendingDownloadedUpdate = nil
+            updateAlertMessage = error.localizedDescription
         }
     }
 }
