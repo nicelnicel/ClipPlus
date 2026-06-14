@@ -56,6 +56,10 @@ struct MacUpdateInstaller {
         if [[ -f "$backup_key_path" ]]; then
           cp "$backup_key_path" "$app_path/Contents/MacOS/clipplus.shared-key"
         fi
+        if command -v codesign >/dev/null 2>&1; then
+          codesign --force --deep --sign - "$app_path" >/dev/null
+          codesign --verify --deep --strict "$app_path"
+        fi
 
         open "\(appBundleURL.path)"
         """

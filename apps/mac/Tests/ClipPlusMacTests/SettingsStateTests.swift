@@ -603,6 +603,8 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(script.contains("hdiutil attach"))
         XCTAssertTrue(script.contains("clipplus.shared-key"))
         XCTAssertTrue(script.contains("ditto"))
+        XCTAssertTrue(script.contains("codesign --force --deep --sign - \"$app_path\""))
+        XCTAssertTrue(script.contains("codesign --verify --deep --strict \"$app_path\""))
         XCTAssertTrue(script.contains("open \"/Applications/ClipPlus.app\""))
     }
 
@@ -682,6 +684,8 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(packageScript.contains("-u \"$candidate\""))
         XCTAssertTrue(packageScript.contains("clipplus.shared-key"))
         XCTAssertTrue(packageScript.contains("preserved_shared_key"))
+        XCTAssertTrue(packageScript.contains("codesign --force --deep --sign - \"$installed_app\""))
+        XCTAssertTrue(packageScript.contains("codesign --verify --deep --strict \"$installed_app\""))
 
         let dmgScript = try String(contentsOf: dmgScriptURL, encoding: .utf8)
         XCTAssertTrue(dmgScript.contains("ClipPlus-macOS.dmg"))

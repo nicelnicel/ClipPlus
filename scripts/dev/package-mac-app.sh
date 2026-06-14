@@ -130,6 +130,10 @@ if [[ "$install_app" -eq 1 ]]; then
     if [[ -n "$preserved_shared_key" && -f "$preserved_shared_key" ]]; then
         cp "$preserved_shared_key" "$installed_app/Contents/MacOS/$shared_key_name"
     fi
+    if command -v codesign >/dev/null 2>&1; then
+        codesign --force --deep --sign - "$installed_app" >/dev/null
+        codesign --verify --deep --strict "$installed_app"
+    fi
     rm -rf "$legacy_tmp_app" "$legacy_indexed_app" "$app_dir"
     app_dir="$installed_app"
     mdimport "$app_dir" >/dev/null 2>&1 || true
