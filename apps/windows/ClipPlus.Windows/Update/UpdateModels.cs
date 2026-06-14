@@ -1,5 +1,7 @@
 namespace ClipPlus.Windows.Update;
 
+using System.IO;
+
 public enum UpdateErrorKind
 {
     InvalidVersion,
@@ -10,6 +12,30 @@ public enum UpdateErrorKind
     Sha256Mismatch,
     UnsupportedRuntime,
     DownloadFailed
+}
+
+public enum WindowsUpdatePackageKind
+{
+    Full,
+    RuntimeDependent
+}
+
+public static class WindowsUpdatePackageKindDetector
+{
+    public static WindowsUpdatePackageKind DetectCurrent()
+    {
+        return DetectFromExecutablePath(Environment.ProcessPath);
+    }
+
+    public static WindowsUpdatePackageKind DetectFromExecutablePath(string? executablePath)
+    {
+        var fileName = string.IsNullOrWhiteSpace(executablePath)
+            ? string.Empty
+            : Path.GetFileName(executablePath);
+        return fileName.Contains("runtime-dependent", StringComparison.OrdinalIgnoreCase)
+            ? WindowsUpdatePackageKind.RuntimeDependent
+            : WindowsUpdatePackageKind.Full;
+    }
 }
 
 public sealed class UpdateException : Exception

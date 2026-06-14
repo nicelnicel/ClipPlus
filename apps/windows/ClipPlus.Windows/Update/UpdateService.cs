@@ -29,8 +29,9 @@ public sealed class UpdateService
         try
         {
             var release = await releaseClient.FetchLatestReleaseAsync(cancellationToken);
-            var asset = GitHubReleaseClient.SelectWindowsAsset(release, currentVersion);
-            logger.Info($"update available version={asset.Version} asset={asset.Name}");
+            var packageKind = WindowsUpdatePackageKindDetector.DetectCurrent();
+            var asset = GitHubReleaseClient.SelectWindowsAsset(release, currentVersion, packageKind);
+            logger.Info($"update available version={asset.Version} asset={asset.Name} package_kind={packageKind}");
             var downloadedUpdate = await downloader.DownloadAsync(asset, progress, cancellationToken);
             logger.Info($"update downloaded version={downloadedUpdate.Version}");
             return UpdateCheckResult.Downloaded(downloadedUpdate);

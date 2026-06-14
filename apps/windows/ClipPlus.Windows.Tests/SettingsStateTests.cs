@@ -503,7 +503,8 @@ public sealed class SettingsStateTests
         var release = GitHubReleaseClient.DecodeRelease(releaseJson);
         var asset = GitHubReleaseClient.SelectWindowsAsset(
             release,
-            UpdateVersion.Parse("0.1.4")
+            UpdateVersion.Parse("0.1.4"),
+            WindowsUpdatePackageKind.Full
         );
 
         Assert.Equal("0.1.5", asset.Version.ToString());
@@ -530,9 +531,72 @@ public sealed class SettingsStateTests
 
         var error = Assert.Throws<UpdateException>(() => GitHubReleaseClient.SelectWindowsAsset(
             missingDigestRelease,
-            UpdateVersion.Parse("0.1.4")
+            UpdateVersion.Parse("0.1.4"),
+            WindowsUpdatePackageKind.Full
         ));
         Assert.Equal(UpdateErrorKind.MissingDigest, error.Kind);
+    }
+
+    [Fact]
+    public void WindowsUpdateSelectsRuntimeDependentExeWhenCurrentExeIsRuntimeDependent()
+    {
+        var releaseJson = """
+            {
+              "tag_name": "v0.1.5",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "ClipPlus-Windows-x64-full.exe",
+                  "browser_download_url": "https://example.com/full.exe",
+                  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "size": 20
+                },
+                {
+                  "name": "ClipPlus-Windows-x64-runtime-dependent.exe",
+                  "browser_download_url": "https://example.com/runtime.exe",
+                  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "size": 10
+                }
+              ]
+            }
+            """;
+
+        var release = GitHubReleaseClient.DecodeRelease(releaseJson);
+        var asset = GitHubReleaseClient.SelectWindowsAsset(
+            release,
+            UpdateVersion.Parse("0.1.4"),
+            WindowsUpdatePackageKind.RuntimeDependent
+        );
+
+        Assert.Equal("0.1.5", asset.Version.ToString());
+        Assert.Equal("ClipPlus-Windows-x64-runtime-dependent.exe", asset.Name);
+        Assert.Equal("https://example.com/runtime.exe", asset.DownloadUrl.ToString());
+        Assert.Equal(new string('a', 64), asset.Sha256Hex);
+        Assert.Equal(10, asset.Size);
+    }
+
+    [Fact]
+    public void WindowsUpdatePackageKindDetectsReleaseAssetName()
+    {
+        Assert.Equal(
+            WindowsUpdatePackageKind.RuntimeDependent,
+            WindowsUpdatePackageKindDetector.DetectFromExecutablePath(
+                @"C:\Users\YJY\Downloads\ClipPlus-Windows-x64-runtime-dependent.exe"
+            )
+        );
+        Assert.Equal(
+            WindowsUpdatePackageKind.Full,
+            WindowsUpdatePackageKindDetector.DetectFromExecutablePath(
+                @"C:\Users\YJY\Downloads\ClipPlus-Windows-x64-full.exe"
+            )
+        );
+        Assert.Equal(
+            WindowsUpdatePackageKind.Full,
+            WindowsUpdatePackageKindDetector.DetectFromExecutablePath(
+                @"C:\Users\YJY\Downloads\ClipPlus.Windows.exe"
+            )
+        );
     }
 
     [Fact]

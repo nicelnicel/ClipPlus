@@ -24,6 +24,18 @@ public sealed class GitHubReleaseClient
 
     public static SelectedUpdateAsset SelectWindowsAsset(GitHubRelease release, UpdateVersion currentVersion)
     {
+        return SelectWindowsAsset(
+            release,
+            currentVersion,
+            WindowsUpdatePackageKindDetector.DetectCurrent()
+        );
+    }
+
+    public static SelectedUpdateAsset SelectWindowsAsset(
+        GitHubRelease release,
+        UpdateVersion currentVersion,
+        WindowsUpdatePackageKind packageKind)
+    {
         if (release.Draft || release.Prerelease || !UpdateVersion.TryParse(release.TagName, out var releaseVersion))
         {
             throw new UpdateException(UpdateErrorKind.InvalidVersion);
@@ -34,7 +46,12 @@ public sealed class GitHubReleaseClient
             throw new UpdateException(UpdateErrorKind.UpToDate);
         }
 
-        var asset = release.Assets.FirstOrDefault(asset => asset.Name == "ClipPlus-Windows-x64-full.exe")
+        var assetName = packageKind switch
+        {
+            WindowsUpdatePackageKind.RuntimeDependent => "ClipPlus-Windows-x64-runtime-dependent.exe",
+            _ => "ClipPlus-Windows-x64-full.exe"
+        };
+        var asset = release.Assets.FirstOrDefault(asset => asset.Name == assetName)
             ?? throw new UpdateException(UpdateErrorKind.MissingAsset);
         var digest = NormalizedSha256Digest(asset.Digest);
         return new SelectedUpdateAsset(
