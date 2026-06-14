@@ -2,28 +2,26 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class StatusBarController: NSObject {
+final class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
-    private let panel: NSPanel
-    private let hostingView: NSHostingView<SettingsView>
+    private let statusMenu: NSMenu
+    private let popover: NSPopover
+    private let hostingController: NSHostingController<SettingsView>
 
     init(state: SettingsState) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        hostingView = NSHostingView(rootView: SettingsView(state: state))
-        panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 180, height: 220),
-            styleMask: [.nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
+        statusMenu = NSMenu()
+        popover = NSPopover()
+        hostingController = NSHostingController(rootView: SettingsView(state: state))
         super.init()
 
         configureStatusItem()
-        configurePanel()
+        configureStatusMenu()
+        configurePopover()
 
         if state.requiresKeySetup {
             DispatchQueue.main.async { [weak self] in
-                self?.showSettingsWindow()
+                self?.showSettingsPopover()
             }
         }
     }
@@ -36,66 +34,38 @@ final class StatusBarController: NSObject {
         button.image = ClipPlusAppIcon.menuBarImage
         button.imagePosition = .imageOnly
         button.toolTip = "ClipPlus"
-        button.target = self
-        button.action = #selector(toggleSettingsWindow)
-        button.sendAction(on: [.leftMouseUp])
         button.setAccessibilityLabel("ClipPlus")
     }
 
-    private func configurePanel() {
-        panel.contentView = hostingView
-        panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = true
-        panel.hasShadow = true
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.level = .statusBar
-        panel.collectionBehavior = [.transient, .ignoresCycle]
+    private func configureStatusMenu() {
+        statusMenu.delegate = self
+        statusMenu.addItem(NSMenuItem(title: "ClipPlus", action: nil, keyEquivalent: ""))
+        statusItem.menu = statusMenu
     }
 
-    @objc private func toggleSettingsWindow() {
-        if panel.isVisible {
-            panel.orderOut(nil)
-        } else {
-            showSettingsWindow()
+    private func configurePopover() {
+        popover.contentViewController = hostingController
+        popover.contentSize = NSSize(width: 180, height: 220)
+        popover.behavior = .transient
+        popover.animates = false
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        menu.cancelTrackingWithoutAnimation()
+        DispatchQueue.main.async { [weak self] in
+            self?.showSettingsPopover()
         }
     }
 
-    private func showSettingsWindow() {
-        resizePanelToFitContent()
-        positionPanelBelowStatusItem()
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    private func resizePanelToFitContent() {
-        let fittingSize = hostingView.fittingSize
-        let width = max(180, fittingSize.width)
-        let height = max(1, fittingSize.height)
-        panel.setContentSize(NSSize(width: width, height: height))
-    }
-
-    private func positionPanelBelowStatusItem() {
-        guard let button = statusItem.button,
-              let buttonWindow = button.window,
-              let screen = buttonWindow.screen ?? NSScreen.main else {
-            panel.center()
+    private func showSettingsPopover() {
+        guard let button = statusItem.button else {
             return
         }
 
-        let buttonFrame = buttonWindow.convertToScreen(button.frame)
-        let panelSize = panel.frame.size
-        let visibleFrame = screen.visibleFrame
-        var origin = NSPoint(
-            x: buttonFrame.midX - (panelSize.width / 2),
-            y: buttonFrame.minY - panelSize.height - 6
-        )
-
-        origin.x = min(max(origin.x, visibleFrame.minX + 4), visibleFrame.maxX - panelSize.width - 4)
-        if origin.y < visibleFrame.minY + 4 {
-            origin.y = buttonFrame.maxY + 6
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
-
-        panel.setFrameOrigin(origin)
     }
 }

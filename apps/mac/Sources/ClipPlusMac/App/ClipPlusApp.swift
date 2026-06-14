@@ -59,12 +59,8 @@ struct ClipPlusApp: App {
     }
 
     var body: some Scene {
-        Window(AppVersion.settingsWindowTitle, id: "settings") {
-            SettingsView(state: appModel.settingsState)
-        }
-
         Settings {
-            SettingsView(state: appModel.settingsState)
+            EmptyView()
         }
     }
 }

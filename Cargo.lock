@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-cli"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "clipplus-core",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "chrono",
  "serde",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-crypto"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "argon2",
  "base64",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-diagnostics"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "chrono",
  "serde",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-discovery"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-ffi"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "clipplus-core",
  "clipplus-crypto",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "clipplus-transport"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64",
  "chrono",

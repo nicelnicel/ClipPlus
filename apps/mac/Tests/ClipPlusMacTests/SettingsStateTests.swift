@@ -256,9 +256,9 @@ final class SettingsStateTests: XCTestCase {
             visibleSettingsSource.contains("AppVersion.display"),
             "设置界面的标题必须显示当前版本号，避免用户误跑旧版本时无法辨认"
         )
-        XCTAssertTrue(
-            appSource.contains("AppVersion.settingsWindowTitle"),
-            "macOS 设置窗口标题栏必须包含当前版本号"
+        XCTAssertFalse(
+            appSource.contains("Window(AppVersion.settingsWindowTitle"),
+            "状态栏 App 不能声明独立设置 Window，否则启动时会弹出 900x450 的默认窗口"
         )
         XCTAssertContainsVisibleControl("局域网剪贴板", in: visibleSettingsSource)
         XCTAssertContainsVisibleControl("退出 ClipPlus", in: visibleSettingsSource)
@@ -480,10 +480,29 @@ final class SettingsStateTests: XCTestCase {
             appSource.contains("MenuBarExtra {"),
             "状态栏点击不能再依赖 SwiftUI MenuBarExtra；0.1.8 在真实安装后出现点击无响应"
         )
+        XCTAssertFalse(
+            appSource.contains("Window(AppVersion.settingsWindowTitle"),
+            "设置界面应该只由状态栏 popover 承载，不能保留启动即打开的独立 Window"
+        )
         XCTAssertFalse(appSource.contains(".menuBarExtraStyle(.window)"))
         XCTAssertTrue(statusBarSource.contains("NSStatusBar.system.statusItem"))
-        XCTAssertTrue(statusBarSource.contains("NSHostingView(rootView: SettingsView"))
-        XCTAssertTrue(statusBarSource.contains("toggleSettingsWindow"))
+        XCTAssertTrue(statusBarSource.contains("NSPopover()"))
+        XCTAssertTrue(statusBarSource.contains("NSMenuDelegate"))
+        XCTAssertTrue(statusBarSource.contains("popover.contentSize = NSSize(width: 180, height: 220)"))
+        XCTAssertTrue(statusBarSource.contains("statusItem.menu = statusMenu"))
+        XCTAssertTrue(statusBarSource.contains("statusMenu.delegate = self"))
+        XCTAssertTrue(statusBarSource.contains("func menuWillOpen(_ menu: NSMenu)"))
+        XCTAssertTrue(statusBarSource.contains("menu.cancelTrackingWithoutAnimation()"))
+        XCTAssertTrue(statusBarSource.contains("popover.show(relativeTo: button.bounds"))
+        XCTAssertFalse(statusBarSource.contains("button.action ="))
+        XCTAssertFalse(
+            statusBarSource.contains("button.sendAction(on:"),
+            "状态栏按钮不能覆盖默认事件掩码，否则 Accessibility 的 AXPress 可能无法触发设置浮窗"
+        )
+        XCTAssertFalse(
+            statusBarSource.contains("NSPanel("),
+            "状态栏设置界面不能是普通 NSPanel，否则会显示成带标题栏的大窗口"
+        )
     }
 
     func testMacUpdateVersionComparisonHandlesSemanticVersions() throws {
