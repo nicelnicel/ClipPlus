@@ -25,6 +25,7 @@ public sealed class UdpTextSyncService : IDisposable
     private readonly ClipPlusLogger logger;
     private readonly Dispatcher dispatcher;
     private readonly RemoteFileTransferGate remoteFileTransfers = new();
+    private readonly RemoteClipboardReceiveGuard remoteClipboardReceiveGuard = new();
     private readonly DispatcherTimer timer;
     private readonly string deviceId;
     private readonly string deviceName;
@@ -393,6 +394,7 @@ public sealed class UdpTextSyncService : IDisposable
                 lastLocalImageHash = message.ImageContentHash;
                 clipboard.WritePngImageData(imageData);
                 lastLocalImageHash = LocalImageHashAfterClipboardWrite() ?? lastLocalImageHash;
+                remoteClipboardReceiveGuard.RecordRemoteImage(message.SenderDeviceId);
                 state.LastStatusMessage = "已接收远端图片剪贴板";
                 logger.Info($"received image clipboard byte_count={imageData.Length}");
                 break;
@@ -411,6 +413,7 @@ public sealed class UdpTextSyncService : IDisposable
                 }
 
                 _ = Task.Run(async () => await DownloadRemoteImageOfferAsync(
+                    message.SenderDeviceId,
                     sourceHost,
                     message.TransferId,
                     message.ImageByteSize.Value,
@@ -427,6 +430,15 @@ public sealed class UdpTextSyncService : IDisposable
                     || !remoteFileTransfers.CanAcceptOffer(message.TransferId))
                 {
                     return;
+                }
+
+                if (remoteClipboardReceiveGuard.ShouldSuppressFileOfferAfterRecentImage(
+                    message.SenderDeviceId,
+                    message.Files))
+                {
+                    remoteFileTransfers.Complete(message.TransferId);
+                    logger.Info($"ignored file offer after recent image clipboard file_count={message.Files.Count}");
+                    break;
                 }
 
                 var totalBytes = message.Files.Sum(file => file.ByteSize);
@@ -596,6 +608,7 @@ public sealed class UdpTextSyncService : IDisposable
     }
 
     private async Task DownloadRemoteImageOfferAsync(
+        string senderDeviceId,
         string sourceHost,
         string transferId,
         int expectedByteSize,
@@ -642,6 +655,7 @@ public sealed class UdpTextSyncService : IDisposable
                 lastLocalImageHash = expectedHash;
                 clipboard.WritePngImageData(imageData);
                 lastLocalImageHash = LocalImageHashAfterClipboardWrite() ?? lastLocalImageHash;
+                remoteClipboardReceiveGuard.RecordRemoteImage(senderDeviceId);
                 state.LastStatusMessage = "已接收远端图片剪贴板";
                 remoteFileTransfers.Complete(transferId);
             });

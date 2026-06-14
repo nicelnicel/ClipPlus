@@ -1,6 +1,9 @@
 import AppKit
 
 struct NativeClipboard {
+    private static let applePngPasteboardType = NSPasteboard.PasteboardType("Apple PNG pasteboard type")
+    private static let nextTiffPasteboardType = NSPasteboard.PasteboardType("NeXT TIFF v4.0 pasteboard type")
+
     func readFileURLs() -> [URL] {
         let urls = NSPasteboard.general.readObjects(
             forClasses: [NSURL.self],
@@ -34,7 +37,7 @@ struct NativeClipboard {
         NSPasteboard.general.clearContents()
         let wroteFiles = NSPasteboard.general.writeObjects(fileURLs as [NSURL])
         if let pngData {
-            NSPasteboard.general.setData(pngData, forType: .png)
+            writeImageRepresentations(pngData, to: NSPasteboard.general)
         }
         return wroteFiles
     }
@@ -54,7 +57,28 @@ struct NativeClipboard {
 
     func writePngImageData(_ pngData: Data) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setData(pngData, forType: .png)
+        writeImageRepresentations(pngData, to: NSPasteboard.general)
+    }
+
+    private func writeImageRepresentations(_ pngData: Data, to pasteboard: NSPasteboard) {
+        pasteboard.setData(pngData, forType: .png)
+        pasteboard.setData(pngData, forType: Self.applePngPasteboardType)
+
+        guard let tiffData = tiffData(fromPNGData: pngData) else {
+            return
+        }
+
+        pasteboard.setData(tiffData, forType: .tiff)
+        pasteboard.setData(tiffData, forType: Self.nextTiffPasteboardType)
+    }
+
+    private func tiffData(fromPNGData pngData: Data) -> Data? {
+        if let image = NSImage(data: pngData),
+           let tiffData = image.tiffRepresentation {
+            return tiffData
+        }
+
+        return NSBitmapImageRep(data: pngData)?.representation(using: .tiff, properties: [:])
     }
 
     private func pngImageDataForSingleImageFile(_ urls: [URL]) -> Data? {

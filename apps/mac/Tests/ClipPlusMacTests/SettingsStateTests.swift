@@ -1218,6 +1218,36 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(gate.begin("transfer-a"))
     }
 
+    func testRemoteClipboardReceiveGuardSuppressesSingleImageFileAfterRecentImageFromSameDevice() {
+        let guardWindow: TimeInterval = 15
+        let guardState = RemoteClipboardReceiveGuard(imageFileSuppressionInterval: guardWindow)
+        let imageTime = Date(timeIntervalSince1970: 1_000)
+        let imageFile = FileTransferItem(relativePath: "wechat-image.png", byteSize: 12_881, isDirectory: false)
+
+        guardState.recordRemoteImage(senderDeviceId: "windows-device", now: imageTime)
+
+        XCTAssertTrue(guardState.shouldSuppressFileOfferAfterRecentImage(
+            senderDeviceId: "windows-device",
+            files: [imageFile],
+            now: imageTime.addingTimeInterval(9)
+        ))
+        XCTAssertFalse(guardState.shouldSuppressFileOfferAfterRecentImage(
+            senderDeviceId: "other-device",
+            files: [imageFile],
+            now: imageTime.addingTimeInterval(9)
+        ))
+        XCTAssertFalse(guardState.shouldSuppressFileOfferAfterRecentImage(
+            senderDeviceId: "windows-device",
+            files: [FileTransferItem(relativePath: "note.txt", byteSize: 42, isDirectory: false)],
+            now: imageTime.addingTimeInterval(9)
+        ))
+        XCTAssertFalse(guardState.shouldSuppressFileOfferAfterRecentImage(
+            senderDeviceId: "windows-device",
+            files: [imageFile],
+            now: imageTime.addingTimeInterval(guardWindow + 1)
+        ))
+    }
+
     func testRemoteFileOfferCanRequestReceive() {
         let state = SettingsState(
             sharedKeyConfigured: true,
@@ -1701,6 +1731,51 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(NativeClipboard().readPngImageData(), pngData)
     }
 
+    func testNativeClipboardWritesPngImageAsMacCompatiblePasteboardTypes() throws {
+        let originalPasteboard = PasteboardSnapshot.capture()
+        defer {
+            originalPasteboard.restore()
+        }
+
+        let pngData = try makeTestPNGData(width: 24, height: 18)
+
+        NativeClipboard().writePngImageData(pngData)
+
+        let pasteboard = NSPasteboard.general
+        XCTAssertEqual(pasteboard.data(forType: .png), pngData)
+        XCTAssertNotNil(pasteboard.data(forType: .tiff))
+        XCTAssertNotNil(pasteboard.data(forType: NSPasteboard.PasteboardType("Apple PNG pasteboard type")))
+        XCTAssertNotNil(pasteboard.data(forType: NSPasteboard.PasteboardType("NeXT TIFF v4.0 pasteboard type")))
+        XCTAssertNotNil(NSImage(pasteboard: pasteboard))
+    }
+
+    func testNativeClipboardReadsWeChatScreenshotPublicTiffPasteboardWithoutTreatingItAsFile() throws {
+        let originalPasteboard = PasteboardSnapshot.capture()
+        defer {
+            originalPasteboard.restore()
+        }
+
+        try writeWeChatScreenshotLikePasteboard(tiffType: .tiff, width: 32, height: 20)
+
+        XCTAssertTrue(NativeClipboard().readFileURLs().isEmpty)
+        XCTAssertPngDimensions(NativeClipboard().readPngImageData(), width: 32, height: 20)
+    }
+
+    func testNativeClipboardReadsApplePngPasteboardTypeWithoutPublicPng() throws {
+        let originalPasteboard = PasteboardSnapshot.capture()
+        defer {
+            originalPasteboard.restore()
+        }
+
+        let pngData = try makeTestPNGData(width: 24, height: 18)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(pngData, forType: NSPasteboard.PasteboardType("Apple PNG pasteboard type"))
+        NSPasteboard.general.setData(Data([1]), forType: NSPasteboard.PasteboardType("com.trolltech.anymime.WeChatScreenshotFormat"))
+
+        XCTAssertTrue(NativeClipboard().readFileURLs().isEmpty)
+        XCTAssertPngDimensions(NativeClipboard().readPngImageData(), width: 24, height: 18)
+    }
+
     func testMacFileRuntimeNoLongerUsesDownloadsZip() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1944,21 +2019,85 @@ private func XCTAssertContainsVisibleControl(
 }
 
 private func makeTestPNGData(width: Int, height: Int) throws -> Data {
-    let image = NSImage(size: NSSize(width: width, height: height))
-    image.lockFocus()
-    NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.83, alpha: 1).setFill()
-    NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
-    NSColor.white.setFill()
-    NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: max(4, width / 2), height: max(4, height / 2))).fill()
-    image.unlockFocus()
+    guard let imageRep = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: width * 4,
+        bitsPerPixel: 32
+    ), let bitmapData = imageRep.bitmapData else {
+        throw NSError(domain: "ClipPlusMacTests", code: 1)
+    }
 
-    guard let tiffData = image.tiffRepresentation,
-          let imageRep = NSBitmapImageRep(data: tiffData),
-          let pngData = imageRep.representation(using: .png, properties: [:]) else {
+    for y in 0..<height {
+        for x in 0..<width {
+            let offset = (y * imageRep.bytesPerRow) + (x * 4)
+            bitmapData[offset] = UInt8(30 + (x % 120))
+            bitmapData[offset + 1] = UInt8(80 + (y % 120))
+            bitmapData[offset + 2] = 190
+            bitmapData[offset + 3] = 255
+        }
+    }
+
+    guard let pngData = imageRep.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "ClipPlusMacTests", code: 1)
     }
 
     return pngData
+}
+
+private func makeTestTIFFData(width: Int, height: Int) throws -> Data {
+    let pngData = try makeTestPNGData(width: width, height: height)
+    guard let image = NSImage(data: pngData),
+          let tiffData = image.tiffRepresentation else {
+        throw NSError(domain: "ClipPlusMacTests", code: 2)
+    }
+
+    return tiffData
+}
+
+private func writeWeChatScreenshotLikePasteboard(
+    tiffType: NSPasteboard.PasteboardType,
+    width: Int,
+    height: Int
+) throws {
+    let item = NSPasteboardItem()
+    item.setData(try makeTestTIFFData(width: width, height: height), forType: tiffType)
+    item.setData(Data(), forType: NSPasteboard.PasteboardType("com.trolltech.anymime.application--x-qt-image"))
+    item.setData(Data([1]), forType: NSPasteboard.PasteboardType("com.trolltech.anymime.application--x-capturer-status"))
+    item.setData(Data([1]), forType: NSPasteboard.PasteboardType("com.trolltech.anymime.WeChatScreenshotFormat"))
+
+    NSPasteboard.general.clearContents()
+    XCTAssertTrue(NSPasteboard.general.writeObjects([item]))
+}
+
+private func XCTAssertPngDimensions(
+    _ pngData: Data?,
+    width expectedWidth: Int,
+    height expectedHeight: Int,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    guard let pngData else {
+        XCTFail("Expected PNG data", file: file, line: line)
+        return
+    }
+
+    let pngSignature = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    XCTAssertEqual(Data(pngData.prefix(pngSignature.count)), pngSignature, file: file, line: line)
+
+    guard let imageRep = NSBitmapImageRep(data: pngData) else {
+        XCTFail("Expected decodable PNG data", file: file, line: line)
+        return
+    }
+
+    XCTAssertEqual(imageRep.pixelsWide, expectedWidth, file: file, line: line)
+    XCTAssertEqual(imageRep.pixelsHigh, expectedHeight, file: file, line: line)
 }
 
 private struct PasteboardSnapshot {

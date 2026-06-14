@@ -66,6 +66,7 @@ final class UdpTextSyncService {
     private let clipboard = NativeClipboard()
     private let logger: ClipPlusLogger
     private let remoteFileTransfers = RemoteFileTransferGate()
+    private let remoteClipboardReceiveGuard = RemoteClipboardReceiveGuard()
     private let receiveQueue = DispatchQueue(label: "clipplus.mac.udp.receive")
     private let clipboardQueue = DispatchQueue(label: "clipplus.mac.clipboard.poll")
     private let fileQueue = DispatchQueue(label: "clipplus.mac.file.transfer", attributes: .concurrent)
@@ -362,6 +363,7 @@ final class UdpTextSyncService {
             if let writtenImageHash = localImageHashAfterClipboardWrite() {
                 lastLocalImageHash = writtenImageHash
             }
+            remoteClipboardReceiveGuard.recordRemoteImage(senderDeviceId: message.senderDeviceId)
             state.lastStatusMessage = "已接收远端图片剪贴板"
             logger.info("received image clipboard byte_count=\(imageData.count)")
         case .imageOffer:
@@ -379,6 +381,7 @@ final class UdpTextSyncService {
 
             fileQueue.async { [weak self] in
                 self?.downloadRemoteImageOffer(
+                    senderDeviceId: message.senderDeviceId,
                     sourceHost: sourceHost,
                     transferId: transferId,
                     expectedByteSize: expectedByteSize,
@@ -394,6 +397,15 @@ final class UdpTextSyncService {
                   let files = message.files,
                   !files.isEmpty,
                   remoteFileTransfers.canAcceptOffer(transferId) else {
+                return
+            }
+
+            if remoteClipboardReceiveGuard.shouldSuppressFileOfferAfterRecentImage(
+                senderDeviceId: message.senderDeviceId,
+                files: files
+            ) {
+                remoteFileTransfers.complete(transferId)
+                logger.info("ignored file offer after recent image clipboard file_count=\(files.count)")
                 return
             }
 
@@ -616,6 +628,7 @@ final class UdpTextSyncService {
     }
 
     private func downloadRemoteImageOffer(
+        senderDeviceId: String,
         sourceHost: String,
         transferId: String,
         expectedByteSize: Int,
@@ -688,6 +701,7 @@ final class UdpTextSyncService {
             if let writtenImageHash = localImageHashAfterClipboardWrite() {
                 lastLocalImageHash = writtenImageHash
             }
+            remoteClipboardReceiveGuard.recordRemoteImage(senderDeviceId: senderDeviceId)
             state.lastStatusMessage = "已接收远端图片剪贴板"
             remoteFileTransfers.complete(transferId)
         }

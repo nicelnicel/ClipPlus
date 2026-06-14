@@ -1111,6 +1111,37 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void RemoteClipboardReceiveGuardSuppressesSingleImageFileAfterRecentImageFromSameDevice()
+    {
+        var guardState = new ClipPlus.Windows.Sync.RemoteClipboardReceiveGuard(TimeSpan.FromSeconds(15));
+        var imageTime = DateTimeOffset.FromUnixTimeSeconds(1_000);
+        var imageFile = new ClipPlus.Windows.Sync.FileTransferItem("wechat-image.png", 12_881, false);
+
+        guardState.RecordRemoteImage("windows-device", imageTime);
+
+        Assert.True(guardState.ShouldSuppressFileOfferAfterRecentImage(
+            "windows-device",
+            new[] { imageFile },
+            imageTime.AddSeconds(9)
+        ));
+        Assert.False(guardState.ShouldSuppressFileOfferAfterRecentImage(
+            "other-device",
+            new[] { imageFile },
+            imageTime.AddSeconds(9)
+        ));
+        Assert.False(guardState.ShouldSuppressFileOfferAfterRecentImage(
+            "windows-device",
+            new[] { new ClipPlus.Windows.Sync.FileTransferItem("note.txt", 42, false) },
+            imageTime.AddSeconds(9)
+        ));
+        Assert.False(guardState.ShouldSuppressFileOfferAfterRecentImage(
+            "windows-device",
+            new[] { imageFile },
+            imageTime.AddSeconds(16)
+        ));
+    }
+
+    [Fact]
     public void RemoteFileOfferCanRequestReceive()
     {
         var state = new SettingsState(
@@ -1430,6 +1461,14 @@ public sealed class SettingsStateTests
                     Assert.True(System.Windows.Clipboard.ContainsFileDropList());
                     Assert.True(System.Windows.Clipboard.ContainsImage());
                     Assert.Equal(imagePath, Assert.Single(System.Windows.Clipboard.GetFileDropList().Cast<string>()));
+                    var dataObject = Assert.IsAssignableFrom<System.Windows.IDataObject>(
+                        System.Windows.Clipboard.GetDataObject()
+                    );
+                    Assert.Contains("PNG", dataObject.GetFormats(autoConvert: false));
+                    Assert.Contains("image/png", dataObject.GetFormats(autoConvert: false));
+                    var sourcePngData = File.ReadAllBytes(imagePath);
+                    Assert.Equal(sourcePngData, ReadPngBytes(dataObject.GetData("PNG", autoConvert: false)));
+                    Assert.Equal(sourcePngData, ReadPngBytes(dataObject.GetData("image/png", autoConvert: false)));
                 }
                 finally
                 {
@@ -1466,6 +1505,56 @@ public sealed class SettingsStateTests
             {
                 Assert.False(System.Windows.Clipboard.ContainsImage());
                 Assert.Equal(pngData, new NativeClipboard().ReadPngImageData());
+            }
+            finally
+            {
+                System.Windows.Clipboard.Clear();
+            }
+        });
+    }
+
+    [Fact]
+    public void NativeClipboardPrefersRegisteredPngWhenClipboardAlsoContainsImage()
+    {
+        RunStaClipboardTest(() =>
+        {
+            var pngData = CreateTestPngData();
+            var dataObject = new System.Windows.DataObject();
+            dataObject.SetImage(CreateBitmapSourceFromPng(pngData));
+            dataObject.SetData("PNG", new MemoryStream(pngData));
+
+            System.Windows.Clipboard.SetDataObject(dataObject, true);
+            try
+            {
+                Assert.True(System.Windows.Clipboard.ContainsImage());
+                Assert.Equal(pngData, new NativeClipboard().ReadPngImageData());
+            }
+            finally
+            {
+                System.Windows.Clipboard.Clear();
+            }
+        });
+    }
+
+    [Fact]
+    public void NativeClipboardWritesPngImageAsImageAndRegisteredPngFormats()
+    {
+        RunStaClipboardTest(() =>
+        {
+            var pngData = CreateTestPngData();
+
+            new NativeClipboard().WritePngImageData(pngData);
+            try
+            {
+                var dataObject = Assert.IsAssignableFrom<System.Windows.IDataObject>(
+                    System.Windows.Clipboard.GetDataObject()
+                );
+
+                Assert.True(System.Windows.Clipboard.ContainsImage());
+                Assert.Contains("PNG", dataObject.GetFormats(autoConvert: false));
+                Assert.Contains("image/png", dataObject.GetFormats(autoConvert: false));
+                Assert.Equal(pngData, ReadPngBytes(dataObject.GetData("PNG", autoConvert: false)));
+                Assert.Equal(pngData, ReadPngBytes(dataObject.GetData("image/png", autoConvert: false)));
             }
             finally
             {
@@ -1864,6 +1953,47 @@ public sealed class SettingsStateTests
         using var stream = new MemoryStream();
         encoder.Save(stream);
         return stream.ToArray();
+    }
+
+    private static BitmapSource CreateBitmapSourceFromPng(byte[] pngData)
+    {
+        using var stream = new MemoryStream(pngData);
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.StreamSource = stream;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static byte[] ReadPngBytes(object? payload)
+    {
+        return payload switch
+        {
+            byte[] bytes => bytes,
+            MemoryStream stream => stream.ToArray(),
+            Stream stream => ReadAllBytes(stream),
+            _ => throw new InvalidOperationException("PNG clipboard payload type is unsupported.")
+        };
+    }
+
+    private static byte[] ReadAllBytes(Stream stream)
+    {
+        var originalPosition = stream.CanSeek ? stream.Position : 0;
+        if (stream.CanSeek)
+        {
+            stream.Position = 0;
+        }
+
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        if (stream.CanSeek)
+        {
+            stream.Position = originalPosition;
+        }
+
+        return copy.ToArray();
     }
 
     private static byte[] CreateTestDibPayload()

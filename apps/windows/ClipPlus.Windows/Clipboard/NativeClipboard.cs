@@ -48,6 +48,7 @@ public sealed class NativeClipboard
             if (image is not null)
             {
                 dataObject.SetImage(image);
+                SetPngFormats(dataObject, ClipboardImageFormats.EncodeBitmapSourceToPng(image));
             }
 
             System.Windows.Clipboard.SetDataObject(dataObject, true);
@@ -73,10 +74,10 @@ public sealed class NativeClipboard
 
     public byte[]? ReadPngImageData()
     {
-        return ReadWpfImageAsPng()
-            ?? ReadClipboardDataObjectPng()
+        return ReadClipboardDataObjectPng()
             ?? ClipboardImageFormats.ReadNativePngFormat("PNG")
             ?? ClipboardImageFormats.ReadNativePngFormat("image/png")
+            ?? ReadWpfImageAsPng()
             ?? ClipboardImageFormats.ReadNativeDib()
             ?? ClipboardImageFormats.ReadNativeBitmap()
             ?? ReadWinFormsImageAsPng();
@@ -91,7 +92,22 @@ public sealed class NativeClipboard
         bitmap.StreamSource = stream;
         bitmap.EndInit();
         bitmap.Freeze();
-        System.Windows.Clipboard.SetImage(bitmap);
+
+        var dataObject = new System.Windows.DataObject();
+        dataObject.SetImage(bitmap);
+        SetPngFormats(dataObject, pngData);
+        System.Windows.Clipboard.SetDataObject(dataObject, true);
+    }
+
+    private static void SetPngFormats(System.Windows.DataObject dataObject, byte[]? pngData)
+    {
+        if (pngData is null)
+        {
+            return;
+        }
+
+        dataObject.SetData("PNG", new MemoryStream(pngData));
+        dataObject.SetData("image/png", new MemoryStream(pngData));
     }
 
     private static BitmapSource? LoadImageForSingleImageFile(IReadOnlyList<string> paths)
