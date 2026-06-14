@@ -78,6 +78,7 @@ public sealed class NativeClipboard
             ?? ClipboardImageFormats.ReadNativePngFormat("PNG")
             ?? ClipboardImageFormats.ReadNativePngFormat("image/png")
             ?? ClipboardImageFormats.ReadNativeDib()
+            ?? ClipboardImageFormats.ReadNativeBitmap()
             ?? ReadWinFormsImageAsPng();
     }
 

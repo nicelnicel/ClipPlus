@@ -600,8 +600,11 @@ public sealed class SettingsStateTests
 
         Assert.Contains("检查更新", settingsXaml);
         Assert.Contains("CheckUpdate_Click", settingsXaml);
+        Assert.Contains("UpdateStatusText", settingsXaml);
         Assert.Contains("检查中...", settingsCode);
         Assert.Contains("下载中", settingsCode);
+        Assert.Contains("已是最新版本", settingsCode);
+        Assert.DoesNotContain("MessageBox.Show(\r\n                    this,\r\n                    \"已是最新版本\"", settingsCode);
         Assert.Contains("UpdateService", settingsCode);
         Assert.DoesNotContain("自动检查更新", settingsXaml);
     }
@@ -1505,6 +1508,78 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void NativeClipboardReadsNativeBitmapClipboardFormat()
+    {
+        RunStaClipboardTest(() =>
+        {
+            using var bitmap = new System.Drawing.Bitmap(
+                5,
+                4,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb
+            );
+            using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+            {
+                graphics.Clear(System.Drawing.Color.FromArgb(255, 20, 120, 220));
+            }
+
+            var hBitmap = bitmap.GetHbitmap();
+            Assert.True(SetRawClipboardHandle(format: 2, hBitmap));
+            try
+            {
+                AssertPngDimensions(new NativeClipboard().ReadPngImageData(), 5, 4);
+            }
+            finally
+            {
+                System.Windows.Clipboard.Clear();
+            }
+        });
+    }
+
+    [Fact]
+    public void ClipboardImageFormatsReportsAvailableClipboardFormatsForDiagnostics()
+    {
+        RunStaClipboardTest(() =>
+        {
+            var pngData = CreateTestPngData();
+            var dataObject = new System.Windows.DataObject();
+            dataObject.SetData("WeChatPrivateFormat", "opaque");
+            dataObject.SetData("PNG", new MemoryStream(pngData));
+
+            System.Windows.Clipboard.SetDataObject(dataObject, true);
+            try
+            {
+                var summary = ClipboardImageFormats.AvailableClipboardFormatsSummary();
+
+                Assert.Contains("PNG", summary);
+                Assert.Contains("WeChatPrivateFormat", summary);
+                Assert.DoesNotContain("opaque", summary);
+            }
+            finally
+            {
+                System.Windows.Clipboard.Clear();
+            }
+        });
+    }
+
+    [Fact]
+    public void UdpTextSyncServiceLogsClipboardFormatsWhenImageLikeClipboardCannotBeRead()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+
+        Assert.Contains("AvailableClipboardFormatsSummary", source, StringComparison.Ordinal);
+        Assert.Contains("clipboard image read skipped formats=", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UdpTextSyncServiceUsesDirectImageTransferForOversizedImages()
     {
         var source = File.ReadAllText(Path.Combine(
@@ -1953,6 +2028,36 @@ public sealed class SettingsStateTests
         }
     }
 
+    private static bool SetRawClipboardHandle(uint format, IntPtr handle)
+    {
+        if (!OpenClipboard(IntPtr.Zero))
+        {
+            _ = DeleteObject(handle);
+            return false;
+        }
+
+        try
+        {
+            if (!EmptyClipboard())
+            {
+                _ = DeleteObject(handle);
+                return false;
+            }
+
+            if (SetClipboardData(format, handle) == IntPtr.Zero)
+            {
+                _ = DeleteObject(handle);
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            _ = CloseClipboard();
+        }
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool OpenClipboard(IntPtr hWndNewOwner);
 
@@ -1976,6 +2081,9 @@ public sealed class SettingsStateTests
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GlobalFree(IntPtr hMem);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool DeleteObject(IntPtr hObject);
 
     private static string FindRepositoryRoot()
     {

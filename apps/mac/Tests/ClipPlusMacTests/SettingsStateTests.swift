@@ -595,6 +595,9 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(settingsSource.contains("检查更新"))
         XCTAssertTrue(settingsSource.contains("检查中..."))
         XCTAssertTrue(settingsSource.contains("下载中"))
+        XCTAssertTrue(settingsSource.contains("updateStatusMessage"))
+        XCTAssertTrue(settingsSource.contains("已是最新版本"))
+        XCTAssertFalse(settingsSource.contains("get: { updateAlertMessage != nil }"))
         XCTAssertFalse(settingsSource.contains("自动检查更新"))
     }
 
@@ -701,6 +704,15 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 full exe"))
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 runtime-dependent exe"))
         XCTAssertTrue(workflowSource.contains("./scripts/dev/check-release-version.sh \"$tag\""))
+        XCTAssertFalse(
+            workflowSource.contains("tags:\n      - \"v*\""),
+            "Release 产物由本地发版脚本上传，tag push 不应再触发 CI 覆盖 Release assets"
+        )
+        XCTAssertFalse(
+            workflowSource.contains("startsWith(github.ref, 'refs/tags/v')"),
+            "Release job 只能由手动 workflow_dispatch 触发，避免覆盖本地上传产物"
+        )
+        XCTAssertTrue(workflowSource.contains("github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''"))
 
         let readmeSource = try String(contentsOf: readmeURL, encoding: .utf8)
         XCTAssertTrue(readmeSource.contains("ClipPlus-macOS.dmg"))

@@ -39,6 +39,7 @@ public sealed class UdpTextSyncService : IDisposable
     private string? lastRemoteText;
     private string? lastLocalImageHash;
     private string? lastRemoteImageHash;
+    private string? lastImageReadFailureFormatSummary;
     private string? lastLocalFileSignature;
     private string? lastRemoteFileSignature;
     private int tickCount;
@@ -247,9 +248,11 @@ public sealed class UdpTextSyncService : IDisposable
         var pngData = clipboard.ReadPngImageData();
         if (pngData is null)
         {
+            LogClipboardImageReadSkippedIfUseful();
             return;
         }
 
+        lastImageReadFailureFormatSummary = null;
         var imageHash = ImageContentHasher.Sha256Hex(pngData);
         if (string.Equals(imageHash, lastLocalImageHash, StringComparison.Ordinal)
             || string.Equals(imageHash, lastRemoteImageHash, StringComparison.Ordinal))
@@ -284,6 +287,36 @@ public sealed class UdpTextSyncService : IDisposable
         {
             lastLocalImageHash = null;
         }
+    }
+
+    private void LogClipboardImageReadSkippedIfUseful()
+    {
+        var formatSummary = ClipboardImageFormats.AvailableClipboardFormatsSummary();
+        if (string.IsNullOrWhiteSpace(formatSummary) || !LooksImageRelatedClipboardFormat(formatSummary))
+        {
+            return;
+        }
+
+        if (string.Equals(formatSummary, lastImageReadFailureFormatSummary, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lastImageReadFailureFormatSummary = formatSummary;
+        logger.Info($"clipboard image read skipped formats={formatSummary}");
+    }
+
+    private static bool LooksImageRelatedClipboardFormat(string formatSummary)
+    {
+        return formatSummary.Contains("PNG", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("image", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("bitmap", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("DIB", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("FileGroupDescriptor", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("FileContents", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("WeChat", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("Tencent", StringComparison.OrdinalIgnoreCase)
+            || formatSummary.Contains("QQ", StringComparison.OrdinalIgnoreCase);
     }
 
     private string? LocalImageHashAfterClipboardWrite()

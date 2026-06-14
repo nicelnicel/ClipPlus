@@ -3,10 +3,12 @@ namespace ClipPlus.Windows.Clipboard;
 using System.Buffers.Binary;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Media.Imaging;
 
 public static class ClipboardImageFormats
 {
+    private const uint CfBitmap = 2;
     private const uint CfDib = 8;
     private const uint CfDibV5 = 17;
     private const uint BiBitFields = 3;
@@ -18,6 +20,34 @@ public static class ClipboardImageFormats
     {
         return data.Length >= PngSignature.Length
             && data.AsSpan(0, PngSignature.Length).SequenceEqual(PngSignature);
+    }
+
+    public static string AvailableClipboardFormatsSummary()
+    {
+        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            var dataObject = System.Windows.Clipboard.GetDataObject();
+            if (dataObject is not null)
+            {
+                foreach (var format in dataObject.GetFormats(autoConvert: false))
+                {
+                    AddFormatName(names, format);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Clipboard owners may deny or delay format rendering; native enumeration below is best effort.
+        }
+
+        foreach (var formatName in NativeClipboardFormats.EnumerateFormatNames())
+        {
+            AddFormatName(names, formatName);
+        }
+
+        return string.Join(", ", names.Take(32));
     }
 
     public static byte[]? ConvertDibToPng(byte[] dibData)
@@ -126,6 +156,27 @@ public static class ClipboardImageFormats
         return null;
     }
 
+    internal static byte[]? ReadNativeBitmap()
+    {
+        var handle = NativeClipboardFormats.ReadHandle(CfBitmap);
+        if (handle == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var image = System.Drawing.Image.FromHbitmap(handle);
+            using var stream = new MemoryStream();
+            image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+            return stream.ToArray();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     internal static byte[]? EncodeBitmapSourceToPng(BitmapSource image)
     {
         try
@@ -215,6 +266,31 @@ public static class ClipboardImageFormats
         return checked(headerSize + maskBytes + ((int)paletteEntryCount * 4));
     }
 
+    private static void AddFormatName(ISet<string> names, string? formatName)
+    {
+        if (string.IsNullOrWhiteSpace(formatName))
+        {
+            return;
+        }
+
+        var sanitized = formatName
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Replace('\t', ' ')
+            .Trim();
+        if (sanitized.Length == 0)
+        {
+            return;
+        }
+
+        if (sanitized.Length > 80)
+        {
+            sanitized = sanitized[..77] + "...";
+        }
+
+        names.Add(sanitized);
+    }
+
     private static class NativeClipboardFormats
     {
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -232,6 +308,12 @@ public static class ClipboardImageFormats
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetClipboardData(uint uFormat);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint EnumClipboardFormats(uint format);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern int GetClipboardFormatName(uint format, StringBuilder lpszFormatName, int cchMaxCount);
+
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr GlobalLock(IntPtr hMem);
 
@@ -241,6 +323,58 @@ public static class ClipboardImageFormats
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern UIntPtr GlobalSize(IntPtr hMem);
 
+        internal static IReadOnlyList<string> EnumerateFormatNames()
+        {
+            if (!TryOpenClipboard())
+            {
+                return Array.Empty<string>();
+            }
+
+            try
+            {
+                var names = new List<string>();
+                var format = 0u;
+                while (names.Count < 64)
+                {
+                    format = EnumClipboardFormats(format);
+                    if (format == 0)
+                    {
+                        break;
+                    }
+
+                    names.Add(FormatName(format));
+                }
+
+                return names;
+            }
+            finally
+            {
+                _ = CloseClipboard();
+            }
+        }
+
+        internal static IntPtr ReadHandle(uint format)
+        {
+            if (format == 0 || !TryOpenClipboard())
+            {
+                return IntPtr.Zero;
+            }
+
+            try
+            {
+                if (!IsClipboardFormatAvailable(format))
+                {
+                    return IntPtr.Zero;
+                }
+
+                return GetClipboardData(format);
+            }
+            finally
+            {
+                _ = CloseClipboard();
+            }
+        }
+
         internal static byte[]? ReadBytes(uint format)
         {
             if (format == 0)
@@ -248,19 +382,7 @@ public static class ClipboardImageFormats
                 return null;
             }
 
-            var opened = false;
-            for (var attempt = 0; attempt < 3; attempt++)
-            {
-                if (OpenClipboard(IntPtr.Zero))
-                {
-                    opened = true;
-                    break;
-                }
-
-                Thread.Sleep(10);
-            }
-
-            if (!opened)
+            if (!TryOpenClipboard())
             {
                 return null;
             }
@@ -305,6 +427,59 @@ public static class ClipboardImageFormats
             {
                 _ = CloseClipboard();
             }
+        }
+
+        private static bool TryOpenClipboard()
+        {
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                if (OpenClipboard(IntPtr.Zero))
+                {
+                    return true;
+                }
+
+                Thread.Sleep(10);
+            }
+
+            return false;
+        }
+
+        private static string FormatName(uint format)
+        {
+            var standardName = StandardFormatName(format);
+            if (standardName is not null)
+            {
+                return standardName;
+            }
+
+            var builder = new StringBuilder(128);
+            if (GetClipboardFormatName(format, builder, builder.Capacity) > 0)
+            {
+                return builder.ToString();
+            }
+
+            return $"FORMAT_{format}";
+        }
+
+        private static string? StandardFormatName(uint format)
+        {
+            return format switch
+            {
+                1 => "CF_TEXT",
+                2 => "CF_BITMAP",
+                3 => "CF_METAFILEPICT",
+                4 => "CF_SYLK",
+                5 => "CF_DIF",
+                6 => "CF_TIFF",
+                7 => "CF_OEMTEXT",
+                8 => "CF_DIB",
+                13 => "CF_UNICODETEXT",
+                14 => "CF_ENHMETAFILE",
+                15 => "CF_HDROP",
+                16 => "CF_LOCALE",
+                17 => "CF_DIBV5",
+                _ => null
+            };
         }
     }
 }

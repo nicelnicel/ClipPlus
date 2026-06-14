@@ -15,6 +15,7 @@ public partial class SettingsWindow : Window
     private readonly UpdateService updateService;
     private bool isSharedKeyVisible;
     private bool syncingPasswordBox;
+    private DownloadedUpdate? pendingDownloadedUpdate;
 
     public SettingsWindow(SettingsState state)
         : this(state, new UpdateService())
@@ -62,51 +63,38 @@ public partial class SettingsWindow : Window
     {
         CheckUpdateButton.IsEnabled = false;
         CheckUpdateButton.Content = "检查中...";
+        pendingDownloadedUpdate = null;
+        InstallUpdateButton.Visibility = Visibility.Collapsed;
+        SetUpdateStatus("正在检查更新...");
         try
         {
             var result = await updateService.CheckAndDownloadLatestAsync(progress =>
             {
                 Dispatcher.Invoke(() =>
                 {
-                    CheckUpdateButton.Content = $"下载中 {(int)(progress * 100)}%";
+                    var percent = (int)(progress * 100);
+                    CheckUpdateButton.Content = $"下载中 {percent}%";
+                    SetUpdateStatus($"正在下载更新 {percent}%");
                 });
             });
 
             if (result.Status == UpdateCheckStatus.UpToDate)
             {
-                System.Windows.MessageBox.Show(
-                    this,
-                    "已是最新版本",
-                    "ClipPlus",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
-                );
+                SetUpdateStatus("已是最新版本");
                 return;
             }
 
             var downloadedUpdate = result.DownloadedUpdate
                 ?? throw new UpdateException(UpdateErrorKind.DownloadFailed);
-            var response = System.Windows.MessageBox.Show(
-                this,
-                $"新版本 v{downloadedUpdate.Version} 已下载完成。ClipPlus 将退出并自动安装，然后重新启动。",
-                "ClipPlus",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information
-            );
-            if (response == MessageBoxResult.Yes)
-            {
-                updateService.InstallAndRelaunch(downloadedUpdate);
-            }
+            pendingDownloadedUpdate = downloadedUpdate;
+            InstallUpdateButton.Visibility = Visibility.Visible;
+            SetUpdateStatus($"新版本 v{downloadedUpdate.Version} 已下载完成");
         }
         catch (Exception error)
         {
-            System.Windows.MessageBox.Show(
-                this,
-                error.Message,
-                "ClipPlus",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
-            );
+            pendingDownloadedUpdate = null;
+            InstallUpdateButton.Visibility = Visibility.Collapsed;
+            SetUpdateStatus(error.Message, isError: true);
         }
         finally
         {
@@ -116,6 +104,36 @@ public partial class SettingsWindow : Window
                 CheckUpdateButton.IsEnabled = true;
             }
         }
+    }
+
+    private void InstallUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (pendingDownloadedUpdate is null)
+        {
+            return;
+        }
+
+        try
+        {
+            updateService.InstallAndRelaunch(pendingDownloadedUpdate);
+        }
+        catch (Exception error)
+        {
+            pendingDownloadedUpdate = null;
+            InstallUpdateButton.Visibility = Visibility.Collapsed;
+            SetUpdateStatus(error.Message, isError: true);
+        }
+    }
+
+    private void SetUpdateStatus(string message, bool isError = false)
+    {
+        UpdateStatusText.Text = message;
+        UpdateStatusText.Foreground = isError
+            ? System.Windows.Media.Brushes.Firebrick
+            : System.Windows.Media.Brushes.DimGray;
+        UpdateStatusText.Visibility = string.IsNullOrWhiteSpace(message)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void SharedKeyPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)

@@ -387,7 +387,8 @@ struct SettingsView: View {
     @State private var isConnectedPeersInfoVisible = false
     @State private var isCheckingUpdate = false
     @State private var updateButtonTitle = "检查更新"
-    @State private var updateAlertMessage: String?
+    @State private var updateStatusMessage: String?
+    @State private var updateStatusIsError = false
     @State private var pendingDownloadedUpdate: DownloadedUpdate?
 
     private let authorHomepageURL = URL(string: "https://github.com/nicelnicel")!
@@ -420,30 +421,6 @@ struct SettingsView: View {
         } message: {
             Text(keySaveErrorMessage ?? "")
         }
-        .alert(
-            "ClipPlus",
-            isPresented: Binding(
-                get: { updateAlertMessage != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        updateAlertMessage = nil
-                        pendingDownloadedUpdate = nil
-                    }
-                }
-            )
-        ) {
-            if pendingDownloadedUpdate != nil {
-                Button("安装并重启") {
-                    installPendingUpdate()
-                }
-            }
-            Button(pendingDownloadedUpdate == nil ? "确定" : "稍后", role: .cancel) {
-                updateAlertMessage = nil
-                pendingDownloadedUpdate = nil
-            }
-        } message: {
-            Text(updateAlertMessage ?? "")
-        }
     }
 
     private var mainSettingsColumn: some View {
@@ -467,6 +444,26 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .disabled(isCheckingUpdate)
             .accessibilityLabel("检查更新")
+
+            if let updateStatusMessage {
+                Text(updateStatusMessage)
+                    .font(.caption2)
+                    .foregroundStyle(updateStatusIsError ? Color.red : .secondary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if pendingDownloadedUpdate != nil {
+                Button {
+                    installPendingUpdate()
+                } label: {
+                    Label("安装并重启", systemImage: "arrow.down.app")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("安装并重启")
+            }
 
             Button {
                 NSApplication.shared.terminate(nil)
@@ -627,6 +624,9 @@ struct SettingsView: View {
     private func runUpdateCheck() async {
         isCheckingUpdate = true
         updateButtonTitle = "检查中..."
+        pendingDownloadedUpdate = nil
+        updateStatusIsError = false
+        updateStatusMessage = "正在检查更新..."
         defer {
             isCheckingUpdate = false
             updateButtonTitle = "检查更新"
@@ -634,17 +634,21 @@ struct SettingsView: View {
 
         do {
             let result = try await updateService.checkAndDownloadLatest { progress in
-                updateButtonTitle = "下载中 \(Int(progress * 100))%"
+                let percent = Int(progress * 100)
+                updateButtonTitle = "下载中 \(percent)%"
+                updateStatusMessage = "正在下载更新 \(percent)%"
             }
             switch result {
             case .upToDate:
-                updateAlertMessage = "已是最新版本"
+                updateStatusMessage = "已是最新版本"
             case .downloaded(let downloadedUpdate):
                 pendingDownloadedUpdate = downloadedUpdate
-                updateAlertMessage = "新版本 v\(downloadedUpdate.version.description) 已下载完成。ClipPlus 将退出并自动安装，然后重新启动。"
+                updateStatusMessage = "新版本 v\(downloadedUpdate.version.description) 已下载完成"
             }
         } catch {
-            updateAlertMessage = error.localizedDescription
+            pendingDownloadedUpdate = nil
+            updateStatusIsError = true
+            updateStatusMessage = error.localizedDescription
         }
     }
 
@@ -657,7 +661,8 @@ struct SettingsView: View {
             try updateService.installAndRelaunch(pendingDownloadedUpdate)
         } catch {
             self.pendingDownloadedUpdate = nil
-            updateAlertMessage = error.localizedDescription
+            updateStatusIsError = true
+            updateStatusMessage = error.localizedDescription
         }
     }
 }
