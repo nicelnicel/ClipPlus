@@ -1,7 +1,7 @@
 import Foundation
 
 struct GitHubReleaseClient {
-    static let latestReleaseURL = URL(string: "https://api.github.com/repos/nicelnicel/ClipPlus/releases/latest")!
+    static let latestReleaseURL = URL(string: "https://github.com/nicelnicel/ClipPlus/releases/latest/download/clipplus-update.json")!
 
     static func decodeRelease(from data: Data) throws -> GitHubRelease {
         try JSONDecoder().decode(GitHubRelease.self, from: data)
@@ -36,7 +36,7 @@ struct GitHubReleaseClient {
 
     func fetchLatestRelease() async throws -> GitHubRelease {
         var request = URLRequest(url: Self.latestReleaseURL)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("ClipPlus", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,

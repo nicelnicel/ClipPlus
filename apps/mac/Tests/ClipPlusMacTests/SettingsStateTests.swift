@@ -476,6 +476,14 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertNil(UpdateVersion("dev"))
     }
 
+    func testMacUpdateFetchesStaticReleaseManifestWithoutGitHubApiRateLimit() {
+        XCTAssertEqual(
+            GitHubReleaseClient.latestReleaseURL.absoluteString,
+            "https://github.com/nicelnicel/ClipPlus/releases/latest/download/clipplus-update.json"
+        )
+        XCTAssertFalse(GitHubReleaseClient.latestReleaseURL.absoluteString.contains("api.github.com"))
+    }
+
     func testMacUpdateSelectsDmgReleaseAssetAndRequiresDigest() throws {
         let releaseJSON = Data(
             """
@@ -606,6 +614,7 @@ final class SettingsStateTests: XCTestCase {
         let versionURL = repositoryRoot.appendingPathComponent("VERSION")
         let bumpVersionScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/bump-version.sh")
         let checkReleaseVersionScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/check-release-version.sh")
+        let updateManifestScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/generate-update-manifest.sh")
         let windowsRuntimeDependentScriptURL = repositoryRoot
             .appendingPathComponent("scripts/dev/publish-windows-runtime-dependent.ps1")
         let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
@@ -619,6 +628,7 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: versionURL.path), "Release 版本号必须有唯一 VERSION 文件")
         XCTAssertTrue(FileManager.default.fileExists(atPath: bumpVersionScriptURL.path), "Release 前必须有版本递增脚本")
         XCTAssertTrue(FileManager.default.fileExists(atPath: checkReleaseVersionScriptURL.path), "Release 上传前必须校验 tag 和 VERSION")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: updateManifestScriptURL.path), "Release 必须生成静态更新清单")
         XCTAssertTrue(FileManager.default.fileExists(atPath: dmgScriptURL.path), "macOS 发布产物应该提供 DMG 打包脚本")
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: windowsRuntimeDependentScriptURL.path),
@@ -667,6 +677,14 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(checkReleaseVersionScript.contains("VERSION"))
         XCTAssertTrue(checkReleaseVersionScript.contains("Cargo.lock"))
 
+        let updateManifestScript = try String(contentsOf: updateManifestScriptURL, encoding: .utf8)
+        XCTAssertTrue(updateManifestScript.contains("clipplus-update.json"))
+        XCTAssertTrue(updateManifestScript.contains("ClipPlus-macOS.dmg"))
+        XCTAssertTrue(updateManifestScript.contains("ClipPlus-Windows-x64-full.exe"))
+        XCTAssertTrue(updateManifestScript.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
+        XCTAssertTrue(updateManifestScript.contains("browser_download_url"))
+        XCTAssertTrue(updateManifestScript.contains("sha256:"))
+
         let windowsRuntimeDependentScript = try String(contentsOf: windowsRuntimeDependentScriptURL, encoding: .utf8)
         XCTAssertTrue(windowsRuntimeDependentScript.contains("--self-contained false"))
         XCTAssertTrue(windowsRuntimeDependentScript.contains("/p:PublishSingleFile=true"))
@@ -678,6 +696,8 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(workflowSource.contains("path: target/macos/ClipPlus-macOS.dmg"))
         XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-full.exe"))
         XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
+        XCTAssertTrue(workflowSource.contains("./scripts/dev/generate-update-manifest.sh"))
+        XCTAssertTrue(workflowSource.contains("clipplus-update.json"))
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 full exe"))
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 runtime-dependent exe"))
         XCTAssertTrue(workflowSource.contains("./scripts/dev/check-release-version.sh \"$tag\""))

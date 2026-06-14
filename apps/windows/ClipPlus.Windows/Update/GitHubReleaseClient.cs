@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 
 public sealed class GitHubReleaseClient
 {
-    public static readonly Uri LatestReleaseUri = new("https://api.github.com/repos/nicelnicel/ClipPlus/releases/latest");
+    public static readonly Uri LatestReleaseUri = new("https://github.com/nicelnicel/ClipPlus/releases/latest/download/clipplus-update.json");
 
     private readonly HttpClient httpClient;
 
@@ -50,7 +50,7 @@ public sealed class GitHubReleaseClient
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUri);
         request.Headers.UserAgent.ParseAdd("ClipPlus");
-        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        request.Headers.Accept.ParseAdd("application/json");
         using var response = await httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {

@@ -196,7 +196,9 @@ jobs:
             exit 2
           fi
 
-          mapfile -t assets < <(find target/github-release -type f \( -name 'ClipPlus-macOS.dmg' -o -name 'ClipPlus-Windows-*.exe' \) | sort)
+          ./scripts/dev/generate-update-manifest.sh target/github-release target/github-release/clipplus-update.json
+
+          mapfile -t assets < <(find target/github-release -type f \( -name 'ClipPlus-macOS.dmg' -o -name 'ClipPlus-Windows-*.exe' -o -name 'clipplus-update.json' \) | sort)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "No release assets found." >&2
             exit 1

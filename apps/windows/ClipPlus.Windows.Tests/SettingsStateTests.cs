@@ -395,6 +395,12 @@ public sealed class SettingsStateTests
             "dev",
             "check-release-version.sh"
         );
+        var updateManifestScriptPath = Path.Combine(
+            repositoryRoot,
+            "scripts",
+            "dev",
+            "generate-update-manifest.sh"
+        );
         var trayControllerPath = Path.Combine(
             repositoryRoot,
             "apps",
@@ -410,6 +416,10 @@ public sealed class SettingsStateTests
         Assert.True(
             File.Exists(checkReleaseVersionScriptPath),
             $"Missing release version check script: {checkReleaseVersionScriptPath}"
+        );
+        Assert.True(
+            File.Exists(updateManifestScriptPath),
+            $"Missing update manifest script: {updateManifestScriptPath}"
         );
         var releaseVersion = File.ReadAllText(versionPath).Trim();
         Assert.Matches(@"^\d+\.\d+\.\d+$", releaseVersion);
@@ -436,6 +446,13 @@ public sealed class SettingsStateTests
         Assert.Contains("Release tag", checkReleaseVersionScript);
         Assert.Contains("VERSION", checkReleaseVersionScript);
         Assert.Contains("Cargo.lock", checkReleaseVersionScript);
+        var updateManifestScript = File.ReadAllText(updateManifestScriptPath);
+        Assert.Contains("clipplus-update.json", updateManifestScript);
+        Assert.Contains("ClipPlus-macOS.dmg", updateManifestScript);
+        Assert.Contains("ClipPlus-Windows-x64-full.exe", updateManifestScript);
+        Assert.Contains("ClipPlus-Windows-x64-runtime-dependent.exe", updateManifestScript);
+        Assert.Contains("browser_download_url", updateManifestScript);
+        Assert.Contains("sha256:", updateManifestScript);
     }
 
     [Fact]
@@ -445,6 +462,16 @@ public sealed class SettingsStateTests
         Assert.True(UpdateVersion.Parse("0.1.10").CompareTo(UpdateVersion.Parse("0.1.9")) > 0);
         Assert.Equal("0.1.4", UpdateVersion.Parse("v0.1.4").ToString());
         Assert.False(UpdateVersion.TryParse("dev", out _));
+    }
+
+    [Fact]
+    public void WindowsUpdateFetchesStaticReleaseManifestWithoutGitHubApiRateLimit()
+    {
+        Assert.Equal(
+            "https://github.com/nicelnicel/ClipPlus/releases/latest/download/clipplus-update.json",
+            GitHubReleaseClient.LatestReleaseUri.ToString()
+        );
+        Assert.DoesNotContain("api.github.com", GitHubReleaseClient.LatestReleaseUri.ToString());
     }
 
     [Fact]
