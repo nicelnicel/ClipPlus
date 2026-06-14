@@ -463,6 +463,29 @@ final class SettingsStateTests: XCTestCase {
         )
     }
 
+    func testMacStatusItemUsesAppKitControllerForReliableMenuBarClick() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSourceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/App/ClipPlusApp.swift")
+        let statusBarControllerURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/MenuBar/StatusBarController.swift")
+        let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
+        let statusBarSource = try String(contentsOf: statusBarControllerURL, encoding: .utf8)
+
+        XCTAssertTrue(appSource.contains("StatusBarController(state: state)"))
+        XCTAssertFalse(
+            appSource.contains("MenuBarExtra {"),
+            "状态栏点击不能再依赖 SwiftUI MenuBarExtra；0.1.8 在真实安装后出现点击无响应"
+        )
+        XCTAssertFalse(appSource.contains(".menuBarExtraStyle(.window)"))
+        XCTAssertTrue(statusBarSource.contains("NSStatusBar.system.statusItem"))
+        XCTAssertTrue(statusBarSource.contains("NSHostingView(rootView: SettingsView"))
+        XCTAssertTrue(statusBarSource.contains("toggleSettingsWindow"))
+    }
+
     func testMacUpdateVersionComparisonHandlesSemanticVersions() throws {
         XCTAssertLessThan(
             try XCTUnwrap(UpdateVersion("0.1.4")),

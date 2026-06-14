@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 final class ClipPlusAppModel: ObservableObject {
     let settingsState: SettingsState
     private let loginItemManager: LoginItemManager
     private let syncService: UdpTextSyncService
+    private let statusBarController: StatusBarController
 
     init() {
         CoreBridgeSmokeTest.runIfRequested()
@@ -24,6 +26,7 @@ final class ClipPlusAppModel: ObservableObject {
         self.loginItemManager = loginItemManager
         settingsState = state
         syncService = UdpTextSyncService(state: state, logger: logger)
+        statusBarController = StatusBarController(state: state)
         settingsState.sharedKeyChanged = { [settingsStore] sharedKey, sharedGroupId in
             try settingsStore.saveSharedKey(sharedKey, sharedGroupId: sharedGroupId)
         }
@@ -56,14 +59,6 @@ struct ClipPlusApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarController(state: appModel.settingsState)
-        } label: {
-            Image(nsImage: ClipPlusAppIcon.menuBarImage)
-                .accessibilityLabel("ClipPlus")
-        }
-        .menuBarExtraStyle(.window)
-
         Window(AppVersion.settingsWindowTitle, id: "settings") {
             SettingsView(state: appModel.settingsState)
         }
@@ -74,7 +69,7 @@ struct ClipPlusApp: App {
     }
 }
 
-private enum ClipPlusAppIcon {
+enum ClipPlusAppIcon {
     static var menuBarImage: NSImage {
         if let resourceURL = Bundle.main.url(forResource: "ClipPlusMenuBar", withExtension: "png"),
            let image = NSImage(contentsOf: resourceURL) {
