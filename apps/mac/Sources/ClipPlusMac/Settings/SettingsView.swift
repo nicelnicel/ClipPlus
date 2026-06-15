@@ -52,6 +52,11 @@ struct RemoteFileOfferSummary: Equatable {
     }
 }
 
+struct PreparedSharedKeyUpdate: Equatable {
+    let sharedKey: String
+    let sharedGroupId: String
+}
+
 final class SettingsState: ObservableObject, Equatable {
     @Published var sharedKeyConfigured: Bool {
         didSet {
@@ -179,7 +184,7 @@ final class SettingsState: ObservableObject, Equatable {
             && lhs.remoteFileOffer == rhs.remoteFileOffer
     }
 
-    func updateSharedKey(_ rawKey: String, confirmation: String) throws {
+    static func prepareSharedKeyUpdate(_ rawKey: String, confirmation: String) throws -> PreparedSharedKeyUpdate {
         let normalizedKey = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedConfirmation = confirmation.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -191,9 +196,18 @@ final class SettingsState: ObservableObject, Equatable {
         }
 
         let derivedSharedGroupId = try SharedKeyHasher.groupId(for: normalizedKey)
-        try sharedKeyChanged?(normalizedKey, derivedSharedGroupId)
+        return PreparedSharedKeyUpdate(sharedKey: normalizedKey, sharedGroupId: derivedSharedGroupId)
+    }
 
-        sharedGroupId = derivedSharedGroupId
+    func updateSharedKey(_ rawKey: String, confirmation: String) throws {
+        try applySharedKeyUpdate(Self.prepareSharedKeyUpdate(rawKey, confirmation: confirmation))
+    }
+
+    func applySharedKeyUpdate(_ update: PreparedSharedKeyUpdate) throws {
+        try sharedKeyChanged?(update.sharedKey, update.sharedGroupId)
+
+        sharedKeyInput = update.sharedKey
+        sharedGroupId = update.sharedGroupId
         sharedKeyConfigured = true
         sharedKeyConfirmationInput = ""
         lastStatusMessage = "共享 Key 已设置"
@@ -318,6 +332,13 @@ final class SettingsState: ObservableObject, Equatable {
         remoteFileOffer = nil
     }
 
+    func resetPeerDiscovery() {
+        pendingPeers.removeAll()
+        connectedPeers.removeAll()
+        remoteFileOffer = nil
+        refreshConnectedPeerDisplay()
+    }
+
     func requestRemoteFileReceive() {
         guard let transferId = remoteFileOffer?.transferId else {
             return
@@ -383,6 +404,7 @@ struct SettingsView: View {
     @ObservedObject var state: SettingsState
     @State private var isSharedKeyVisible = false
     @State private var sharedKeyDismissRequest = 0
+    @State private var sharedKeySaveGeneration = 0
     @State private var keySaveErrorMessage: String?
     @State private var isConnectedPeersInfoVisible = false
     @State private var isCheckingUpdate = false
@@ -595,18 +617,38 @@ struct SettingsView: View {
     }
 
     private func saveSharedKeyIfNeeded() {
-        guard !state.sharedKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let candidateKey = state.sharedKeyInput
+        guard !candidateKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
 
-        do {
-            try state.updateSharedKey(
-                state.sharedKeyInput,
-                confirmation: state.sharedKeyInput
-            )
-            keySaveErrorMessage = nil
-        } catch {
-            keySaveErrorMessage = error.localizedDescription
+        sharedKeySaveGeneration += 1
+        let currentGeneration = sharedKeySaveGeneration
+        Task { @MainActor in
+            let result = await Task.detached(priority: .utility) {
+                Result {
+                    try SettingsState.prepareSharedKeyUpdate(
+                        candidateKey,
+                        confirmation: candidateKey
+                    )
+                }
+            }.value
+
+            guard currentGeneration == sharedKeySaveGeneration else {
+                return
+            }
+
+            switch result {
+            case .success(let preparedUpdate):
+                do {
+                    try state.applySharedKeyUpdate(preparedUpdate)
+                    keySaveErrorMessage = nil
+                } catch {
+                    keySaveErrorMessage = error.localizedDescription
+                }
+            case .failure(let error):
+                keySaveErrorMessage = error.localizedDescription
+            }
         }
     }
 

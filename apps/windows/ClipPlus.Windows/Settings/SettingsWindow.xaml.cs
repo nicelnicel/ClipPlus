@@ -1,6 +1,7 @@
 using System.Windows;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Threading;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Navigation;
@@ -15,6 +16,7 @@ public partial class SettingsWindow : Window
     private readonly UpdateService updateService;
     private bool isSharedKeyVisible;
     private bool syncingPasswordBox;
+    private int sharedKeySaveGeneration;
     private DownloadedUpdate? pendingDownloadedUpdate;
 
     public SettingsWindow(SettingsState state)
@@ -210,27 +212,41 @@ public partial class SettingsWindow : Window
 
     private void SaveSharedKeyIfNeeded()
     {
-        if (string.IsNullOrWhiteSpace(state.SharedKeyInput))
+        var candidateKey = state.SharedKeyInput;
+        if (string.IsNullOrWhiteSpace(candidateKey))
         {
             return;
         }
 
-        try
-        {
-            state.UpdateSharedKey(state.SharedKeyInput, state.SharedKeyInput);
-            SyncPasswordBoxFromState();
-            UpdateSharedKeyPlaceholder();
-        }
-        catch (Exception error)
-        {
-            System.Windows.MessageBox.Show(
-                this,
-                error.Message,
-                "ClipPlus",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
-            );
-        }
+        var generation = Interlocked.Increment(ref sharedKeySaveGeneration);
+        _ = Task.Run(() => SettingsState.PrepareSharedKeyUpdate(candidateKey, candidateKey))
+            .ContinueWith(task =>
+            {
+                _ = Dispatcher.InvokeAsync(() =>
+                {
+                    if (generation != Volatile.Read(ref sharedKeySaveGeneration))
+                    {
+                        return;
+                    }
+
+                    if (task.IsFaulted)
+                    {
+                        var error = task.Exception?.GetBaseException() ?? new InvalidOperationException("共享 Key 保存失败");
+                        System.Windows.MessageBox.Show(
+                            this,
+                            error.Message,
+                            "ClipPlus",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning
+                        );
+                        return;
+                    }
+
+                    state.ApplySharedKeyUpdate(task.Result);
+                    SyncPasswordBoxFromState();
+                    UpdateSharedKeyPlaceholder();
+                }, DispatcherPriority.Background);
+            }, TaskScheduler.Default);
     }
 
     private void SyncPasswordBoxFromState()

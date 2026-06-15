@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Windows.Threading;
 using ClipPlus.Windows.Clipboard;
 using ClipPlus.Windows.CoreBridge;
@@ -44,6 +45,7 @@ public sealed class UdpTextSyncService : IDisposable
     private string? lastLocalFileSignature;
     private string? lastRemoteFileSignature;
     private int tickCount;
+    private int discoveryRefreshGeneration;
 
     private static readonly Regex SafeTransferIdPattern = new("^[A-Za-z0-9-]+$", RegexOptions.Compiled);
 
@@ -119,6 +121,39 @@ public sealed class UdpTextSyncService : IDisposable
 
         socketToDispose?.Dispose();
         cancellation?.Dispose();
+    }
+
+    public void ScheduleDiscoveryRefresh()
+    {
+        var generation = Interlocked.Increment(ref discoveryRefreshGeneration);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+            if (generation != Volatile.Read(ref discoveryRefreshGeneration))
+            {
+                return;
+            }
+
+            string? groupId = null;
+            IReadOnlyCollection<string> trustedPeerIds = Array.Empty<string>();
+            await dispatcher.InvokeAsync(() =>
+            {
+                state.ResetPeerDiscovery();
+                if (state.SharedKeyConfigured && state.SharingEnabled)
+                {
+                    groupId = state.SharedGroupId;
+                    trustedPeerIds = state.TrustedPeerIds;
+                }
+            }, DispatcherPriority.Background);
+
+            if (string.IsNullOrEmpty(groupId))
+            {
+                return;
+            }
+
+            SendHello(groupId, trustedPeerIds);
+            logger.Info("scheduled discovery refresh after configuration change");
+        });
     }
 
     private void ApplyEnvironmentKeyIfNeeded()
@@ -895,15 +930,25 @@ public sealed class UdpTextSyncService : IDisposable
             return;
         }
 
+        SendHello(state.SharedGroupId, state.TrustedPeerIds);
+    }
+
+    private void SendHello(string groupId, IReadOnlyCollection<string> trustedPeerIds)
+    {
         Send(ClipPlusMessage.CreateHello(
-            state.SharedGroupId,
+            groupId,
             deviceId,
             deviceName
         ));
 
-        foreach (var trustedPeerId in state.TrustedPeerIds)
+        foreach (var trustedPeerId in trustedPeerIds)
         {
-            SendTrust(trustedPeerId);
+            Send(ClipPlusMessage.CreateTrust(
+                groupId,
+                deviceId,
+                deviceName,
+                trustedPeerId
+            ));
         }
     }
 

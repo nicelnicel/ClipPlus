@@ -768,6 +768,57 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void WindowsSharedKeySaveUsesBackgroundPreparationAndDiscoveryRefresh()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var settingsWindowSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsWindow.xaml.cs"
+        ));
+        var settingsStateSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Settings",
+            "SettingsState.cs"
+        ));
+        var syncServiceSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+        var appSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "App.xaml.cs"
+        ));
+        var saveMethod = settingsWindowSource[
+            settingsWindowSource.IndexOf("private void SaveSharedKeyIfNeeded", StringComparison.Ordinal)..];
+        saveMethod = saveMethod[..saveMethod.IndexOf("private void SyncPasswordBoxFromState", StringComparison.Ordinal)];
+
+        Assert.Contains("PrepareSharedKeyUpdate", settingsStateSource);
+        Assert.Contains("ApplySharedKeyUpdate", settingsStateSource);
+        Assert.Contains("Task.Run", saveMethod);
+        Assert.Contains("Dispatcher.InvokeAsync", saveMethod);
+        Assert.DoesNotContain("state.UpdateSharedKey", saveMethod);
+        Assert.Contains("ScheduleDiscoveryRefresh", syncServiceSource);
+        Assert.Contains("Task.Delay", syncServiceSource);
+        Assert.Contains("Interlocked.Increment", syncServiceSource);
+        Assert.Contains("ResetPeerDiscovery", settingsStateSource);
+        Assert.Contains("ScheduleDiscoveryRefresh", appSource);
+    }
+
+    [Fact]
     public void CoreBridgeDerivesGroupIdWhenFfiLibraryIsAvailable()
     {
         var ffiLibraryPath = Environment.GetEnvironmentVariable("CLIPPLUS_FFI_LIBRARY_PATH");

@@ -51,6 +51,12 @@ public partial class App : System.Windows.Application
             {
                 settingsStore.Save(settings);
             }
+
+            if (args.PropertyName == nameof(SettingsState.SharedGroupId)
+                || args.PropertyName == nameof(SettingsState.SharingEnabled))
+            {
+                syncService?.ScheduleDiscoveryRefresh();
+            }
         };
         trayController = new TrayController(settings);
         syncService = new UdpTextSyncService(settings, new ClipPlusLogger(), Dispatcher);

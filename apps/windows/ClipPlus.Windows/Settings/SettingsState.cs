@@ -4,6 +4,8 @@ using ClipPlus.Windows.Sync;
 
 namespace ClipPlus.Windows.Settings;
 
+public sealed record PreparedSharedKeyUpdate(string SharedKey, string SharedGroupId);
+
 public sealed class SettingsState : INotifyPropertyChanged
 {
     private bool sharedKeyConfigured;
@@ -134,7 +136,7 @@ public sealed class SettingsState : INotifyPropertyChanged
         .ThenBy(peer => peer.DeviceId, StringComparer.Ordinal)
         .ToArray();
 
-    public void UpdateSharedKey(string rawKey, string confirmation)
+    public static PreparedSharedKeyUpdate PrepareSharedKeyUpdate(string rawKey, string confirmation)
     {
         var normalizedKey = rawKey.Trim();
         var normalizedConfirmation = confirmation.Trim();
@@ -149,8 +151,18 @@ public sealed class SettingsState : INotifyPropertyChanged
             throw new ArgumentException("两次输入的共享 Key 不一致", nameof(confirmation));
         }
 
-        SharedKeyInput = normalizedKey;
-        SharedGroupId = SharedKeyHasher.GroupIdFor(normalizedKey);
+        return new PreparedSharedKeyUpdate(normalizedKey, SharedKeyHasher.GroupIdFor(normalizedKey));
+    }
+
+    public void UpdateSharedKey(string rawKey, string confirmation)
+    {
+        ApplySharedKeyUpdate(PrepareSharedKeyUpdate(rawKey, confirmation));
+    }
+
+    public void ApplySharedKeyUpdate(PreparedSharedKeyUpdate update)
+    {
+        SharedKeyInput = update.SharedKey;
+        SharedGroupId = update.SharedGroupId;
         SharedKeyConfigured = true;
         SharedKeyConfirmationInput = string.Empty;
         LastStatusMessage = "共享 Key 已设置";
@@ -312,6 +324,16 @@ public sealed class SettingsState : INotifyPropertyChanged
         }
 
         RemoteFileOffer = null;
+    }
+
+    public void ResetPeerDiscovery()
+    {
+        pendingPeers.Clear();
+        connectedPeers.Clear();
+        RemoteFileOffer = null;
+        OnPropertyChanged(nameof(PendingPeerCount));
+        OnPropertyChanged(nameof(PendingPeerSummaries));
+        RefreshConnectedPeerDisplay(DateTimeOffset.UtcNow);
     }
 
     public void RequestRemoteFileReceive()

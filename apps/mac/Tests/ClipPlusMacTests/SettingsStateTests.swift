@@ -838,6 +838,40 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertEqual(persistedGroupId, expectedGroupId(for: "clipplus-test-key"))
     }
 
+    func testMacSharedKeySaveUsesBackgroundPreparationAndDiscoveryRefresh() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsViewSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/Settings/SettingsView.swift"),
+            encoding: .utf8
+        )
+        let syncServiceSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/Sync/UdpTextSyncService.swift"),
+            encoding: .utf8
+        )
+        let appSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift"),
+            encoding: .utf8
+        )
+        let saveStart = try XCTUnwrap(settingsViewSource.range(of: "private func saveSharedKeyIfNeeded()")?.lowerBound)
+        let saveEnd = try XCTUnwrap(settingsViewSource.range(of: "private func checkForUpdates()")?.lowerBound)
+        let saveSource = String(settingsViewSource[saveStart..<saveEnd])
+
+        XCTAssertTrue(settingsViewSource.contains("PreparedSharedKeyUpdate"))
+        XCTAssertTrue(settingsViewSource.contains("prepareSharedKeyUpdate"))
+        XCTAssertTrue(settingsViewSource.contains("applySharedKeyUpdate"))
+        XCTAssertTrue(saveSource.contains("Task.detached(priority: .utility)"))
+        XCTAssertFalse(saveSource.contains("try state.updateSharedKey("))
+        XCTAssertTrue(syncServiceSource.contains("scheduleDiscoveryRefresh"))
+        XCTAssertTrue(syncServiceSource.contains("asyncAfter"))
+        XCTAssertTrue(syncServiceSource.contains("resetPeerDiscovery"))
+        XCTAssertTrue(appSource.contains("scheduleDiscoveryRefresh"))
+    }
+
     func testCoreBridgeDerivesGroupIdWhenFFILibraryIsAvailable() {
         let ffiLibraryPath = ProcessInfo.processInfo.environment["CLIPPLUS_FFI_LIBRARY_PATH"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)

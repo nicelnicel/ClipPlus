@@ -69,6 +69,7 @@ final class UdpTextSyncService {
     private let remoteClipboardReceiveGuard = RemoteClipboardReceiveGuard()
     private let receiveQueue = DispatchQueue(label: "clipplus.mac.udp.receive")
     private let clipboardQueue = DispatchQueue(label: "clipplus.mac.clipboard.poll")
+    private let discoveryRefreshQueue = DispatchQueue(label: "clipplus.mac.discovery.refresh")
     private let fileQueue = DispatchQueue(label: "clipplus.mac.file.transfer", attributes: .concurrent)
     private let deviceId: String
     private let deviceName: String
@@ -86,6 +87,7 @@ final class UdpTextSyncService {
     private var lastLocalFileSignature: String?
     private var lastRemoteFileSignature: String?
     private var tickCount = 0
+    private var discoveryRefreshGeneration = 0
 
     init(state: SettingsState, logger: ClipPlusLogger) {
         self.state = state
@@ -150,6 +152,40 @@ final class UdpTextSyncService {
         wakeFileServer()
         fileServer?.close()
         fileServer = nil
+    }
+
+    func scheduleDiscoveryRefresh() {
+        discoveryRefreshQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.discoveryRefreshGeneration += 1
+            let generation = self.discoveryRefreshGeneration
+            discoveryRefreshQueue.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+                guard let self, generation == self.discoveryRefreshGeneration else {
+                    return
+                }
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else {
+                        return
+                    }
+
+                    state.resetPeerDiscovery()
+                    guard state.sharedKeyConfigured, state.sharingEnabled else {
+                        return
+                    }
+
+                    let groupId = state.sharedGroupId
+                    let trustedPeerIds = Array(state.trustedPeerIds)
+                    discoveryRefreshQueue.async { [weak self] in
+                        self?.sendHello(groupId: groupId, trustedPeerIds: trustedPeerIds)
+                        self?.logger.info("scheduled discovery refresh after configuration change")
+                    }
+                }
+            }
+        }
     }
 
     private func applyEnvironmentKeyIfNeeded() {

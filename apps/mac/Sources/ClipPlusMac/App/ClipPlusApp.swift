@@ -27,11 +27,16 @@ final class ClipPlusAppModel: ObservableObject {
         settingsState = state
         syncService = UdpTextSyncService(state: state, logger: logger)
         statusBarController = StatusBarController(state: state)
+        let syncService = self.syncService
         settingsState.sharedKeyChanged = { [settingsStore] sharedKey, sharedGroupId in
             try settingsStore.saveSharedKey(sharedKey, sharedGroupId: sharedGroupId)
         }
-        settingsState.sharingEnabledChanged = { [settingsStore] enabled in
+        settingsState.sharedGroupIdChanged = { [weak syncService] _ in
+            syncService?.scheduleDiscoveryRefresh()
+        }
+        settingsState.sharingEnabledChanged = { [settingsStore, weak syncService] enabled in
             settingsStore.saveSharingEnabled(enabled)
+            syncService?.scheduleDiscoveryRefresh()
         }
         settingsState.startupEnabledChanged = { [loginItemManager, weak state] enabled in
             do {
