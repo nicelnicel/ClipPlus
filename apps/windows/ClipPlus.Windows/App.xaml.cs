@@ -10,12 +10,20 @@ namespace ClipPlus.Windows;
 
 public partial class App : System.Windows.Application
 {
+    private SingleInstanceLock? singleInstanceLock;
     private TrayController? trayController;
     private UdpTextSyncService? syncService;
     private StartupManager? startupManager;
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        singleInstanceLock = SingleInstanceLock.AcquireDefault();
+        if (singleInstanceLock is null)
+        {
+            Shutdown();
+            return;
+        }
+
         base.OnStartup(e);
 
         CoreBridgeSmokeTest.RunIfRequested();
@@ -65,6 +73,7 @@ public partial class App : System.Windows.Application
     {
         syncService?.Dispose();
         trayController?.Dispose();
+        singleInstanceLock?.Dispose();
         base.OnExit(e);
     }
 }

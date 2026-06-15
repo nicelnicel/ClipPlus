@@ -87,6 +87,17 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void WindowsSingleInstanceLockRejectsSecondRunningCopy()
+    {
+        var lockName = $"ClipPlus.Tests.{Guid.NewGuid():N}";
+        using var firstLock = ClipPlus.Windows.SingleInstanceLock.Acquire(lockName);
+        using var secondLock = ClipPlus.Windows.SingleInstanceLock.Acquire(lockName);
+
+        Assert.NotNull(firstLock);
+        Assert.Null(secondLock);
+    }
+
+    [Fact]
     public void SettingsStorePersistsInstallSafeConfiguration()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusTests-{Guid.NewGuid():N}");
@@ -196,6 +207,27 @@ public sealed class SettingsStateTests
                 "clipplus-test-key",
                 File.ReadAllText(Path.Combine(directory, "clipplus.shared-key")).Trim()
             );
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileSharedKeyVaultMigratesLegacyProcessDirectoryKeyToStableUserPath()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusTests-{Guid.NewGuid():N}");
+        var stableKeyPath = Path.Combine(directory, "stable", "clipplus.shared-key");
+        var legacyKeyPath = Path.Combine(directory, "legacy", "clipplus.shared-key");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyKeyPath)!);
+        File.WriteAllText(legacyKeyPath, "clipplus-test-key");
+        try
+        {
+            var vault = new FileSharedKeyVault(stableKeyPath, legacyKeyPath);
+
+            Assert.Equal("clipplus-test-key", vault.LoadSharedKey());
+            Assert.Equal("clipplus-test-key", File.ReadAllText(stableKeyPath));
         }
         finally
         {

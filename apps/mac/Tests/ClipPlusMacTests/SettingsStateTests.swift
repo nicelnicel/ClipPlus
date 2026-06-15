@@ -177,6 +177,31 @@ final class SettingsStateTests: XCTestCase {
         )
     }
 
+    func testSharedKeyVaultMigratesLegacyExecutableDirectoryKeyToStableUserPath() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let stableKeyFileURL = temporaryDirectory
+            .appendingPathComponent("Stable", isDirectory: true)
+            .appendingPathComponent("clipplus.shared-key")
+        let legacyKeyFileURL = temporaryDirectory
+            .appendingPathComponent("Legacy", isDirectory: true)
+            .appendingPathComponent("clipplus.shared-key")
+        try FileManager.default.createDirectory(
+            at: legacyKeyFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "clipplus-test-key".write(to: legacyKeyFileURL, atomically: true, encoding: .utf8)
+        let vault = FileSharedKeyVault(fileURL: stableKeyFileURL, legacyFileURL: legacyKeyFileURL)
+
+        XCTAssertEqual(vault.loadSharedKey(), "clipplus-test-key")
+        XCTAssertEqual(
+            try String(contentsOf: stableKeyFileURL, encoding: .utf8),
+            "clipplus-test-key"
+        )
+    }
+
     func testSettingsUIOnlyShowsKeySharingAndStartupControls() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
