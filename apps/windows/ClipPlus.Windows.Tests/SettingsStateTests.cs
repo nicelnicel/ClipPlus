@@ -420,6 +420,13 @@ public sealed class SettingsStateTests
             "dev",
             "publish-windows-single-exe.ps1"
         );
+        var installerScriptPath = Path.Combine(
+            repositoryRoot,
+            "scripts",
+            "dev",
+            "package-windows-installer.ps1"
+        );
+        var readmePath = Path.Combine(repositoryRoot, "README.md");
         var versionPath = Path.Combine(repositoryRoot, "VERSION");
         var bumpVersionScriptPath = Path.Combine(repositoryRoot, "scripts", "dev", "bump-version.sh");
         var checkReleaseVersionScriptPath = Path.Combine(
@@ -454,6 +461,10 @@ public sealed class SettingsStateTests
             File.Exists(updateManifestScriptPath),
             $"Missing update manifest script: {updateManifestScriptPath}"
         );
+        Assert.True(
+            File.Exists(installerScriptPath),
+            $"Missing Windows installer package script: {installerScriptPath}"
+        );
         var releaseVersion = File.ReadAllText(versionPath).Trim();
         Assert.Matches(@"^\d+\.\d+\.\d+$", releaseVersion);
         var project = File.ReadAllText(projectPath);
@@ -468,6 +479,41 @@ public sealed class SettingsStateTests
         var publishScript = File.ReadAllText(publishScriptPath);
         Assert.Contains("clipplus.shared-key", publishScript);
         Assert.Contains("$preservedSharedKey", publishScript);
+        var installerScript = File.ReadAllText(installerScriptPath);
+        Assert.Contains("ClipPlus-Windows-x64-Setup.exe", installerScript);
+        Assert.Contains("ClipPlus.Installer.csproj", installerScript);
+        Assert.Contains("dotnet.exe", installerScript);
+        Assert.Contains("ClipPlusPayloadPath", installerScript);
+        Assert.Contains("ClipPlus-Windows-x64-full.exe", installerScript);
+        var installerProjectPath = Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Installer",
+            "ClipPlus.Installer.csproj"
+        );
+        var installerProgramPath = Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Installer",
+            "Program.cs"
+        );
+        Assert.True(File.Exists(installerProjectPath), $"Missing Windows installer project: {installerProjectPath}");
+        Assert.True(File.Exists(installerProgramPath), $"Missing Windows installer entry point: {installerProgramPath}");
+        var installerProject = File.ReadAllText(installerProjectPath);
+        Assert.Contains("<OutputType>WinExe</OutputType>", installerProject);
+        Assert.Contains("<PublishAot>true</PublishAot>", installerProject);
+        Assert.Contains("EmbeddedResource", installerProject);
+        var installerProgram = File.ReadAllText(installerProgramPath);
+        Assert.Contains("LocalApplicationData", installerProgram);
+        Assert.Contains("Programs", installerProgram);
+        Assert.Contains("ClipPlus.lnk", installerProgram);
+        Assert.Contains("Uninstall.cmd", installerProgram);
+        Assert.Contains("Uninstall.ps1", installerProgram);
+        Assert.Contains(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus", installerProgram);
+        var readme = File.ReadAllText(readmePath);
+        Assert.Contains("ClipPlus-Windows-x64-Setup.exe", readme);
         var bumpVersionScript = File.ReadAllText(bumpVersionScriptPath);
         Assert.Contains("VERSION", bumpVersionScript);
         Assert.Contains("Cargo.toml", bumpVersionScript);

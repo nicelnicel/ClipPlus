@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClipPlus.Windows", "ClipPlu
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClipPlus.Windows.Tests", "ClipPlus.Windows.Tests\ClipPlus.Windows.Tests.csproj", "{B4703D98-4DF4-4D02-877E-90C9008C3AE8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClipPlus.Installer", "ClipPlus.Installer\ClipPlus.Installer.csproj", "{445A62E6-EC30-47E9-A47C-88F4717AEC95}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,6 +22,10 @@ Global
 		{B4703D98-4DF4-4D02-877E-90C9008C3AE8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B4703D98-4DF4-4D02-877E-90C9008C3AE8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B4703D98-4DF4-4D02-877E-90C9008C3AE8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{445A62E6-EC30-47E9-A47C-88F4717AEC95}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{445A62E6-EC30-47E9-A47C-88F4717AEC95}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{445A62E6-EC30-47E9-A47C-88F4717AEC95}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{445A62E6-EC30-47E9-A47C-88F4717AEC95}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
