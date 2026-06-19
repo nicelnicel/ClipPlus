@@ -48,6 +48,7 @@ public sealed class GitHubReleaseClient
 
         var assetName = packageKind switch
         {
+            WindowsUpdatePackageKind.Installed => "ClipPlus-Windows-x64-runtime-dependent.exe",
             WindowsUpdatePackageKind.RuntimeDependent => "ClipPlus-Windows-x64-runtime-dependent.exe",
             _ => "ClipPlus-Windows-x64-full.exe"
         };

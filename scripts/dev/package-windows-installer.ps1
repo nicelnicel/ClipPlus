@@ -1,5 +1,6 @@
 param(
-    [string]$FullExePath = "",
+    [Alias("FullExePath")]
+    [string]$PayloadExePath = "",
     [string]$OutputPath = "",
     [string]$RuntimeIdentifier = "win-x64"
 )
@@ -10,8 +11,8 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $versionPath = Join-Path $repoRoot "VERSION"
 $installerProject = Join-Path $repoRoot "apps\windows\ClipPlus.Installer\ClipPlus.Installer.csproj"
-$defaultFullExePath = Join-Path $repoRoot "target\windows-release\ClipPlus-Windows-x64-full.exe"
-$fallbackFullExePath = Join-Path $repoRoot "target\windows-single-exe\ClipPlus.Windows.exe"
+$defaultPayloadExePath = Join-Path $repoRoot "target\windows-release\ClipPlus-Windows-x64-runtime-dependent.exe"
+$fallbackPayloadExePath = Join-Path $repoRoot "target\windows-runtime-dependent\ClipPlus.Windows.exe"
 $installerRoot = Join-Path $repoRoot "target\windows-installer"
 $publishDir = Join-Path $installerRoot "publish"
 $dotnetPath = "C:\dotnet\dotnet.exe"
@@ -25,12 +26,12 @@ if (!(Test-Path $dotnetPath)) {
     $dotnetPath = $dotnetCommand.Source
 }
 
-if ([string]::IsNullOrWhiteSpace($FullExePath)) {
-    $FullExePath = $defaultFullExePath
+if ([string]::IsNullOrWhiteSpace($PayloadExePath)) {
+    $PayloadExePath = $defaultPayloadExePath
 }
 
-if (!(Test-Path $FullExePath) -and (Test-Path $fallbackFullExePath)) {
-    $FullExePath = $fallbackFullExePath
+if (!(Test-Path $PayloadExePath) -and (Test-Path $fallbackPayloadExePath)) {
+    $PayloadExePath = $fallbackPayloadExePath
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -46,8 +47,8 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
     throw "VERSION must be MAJOR.MINOR.PATCH, got: $version"
 }
 
-if (!(Test-Path $FullExePath)) {
-    throw "Missing full Windows exe: $FullExePath"
+if (!(Test-Path $PayloadExePath)) {
+    throw "Missing Windows installer payload exe: $PayloadExePath"
 }
 
 if (!(Test-Path $installerProject)) {
@@ -64,7 +65,7 @@ try {
         -r $RuntimeIdentifier `
         --self-contained true `
         -o $publishDir `
-        /p:ClipPlusPayloadPath="$FullExePath" `
+        /p:ClipPlusPayloadPath="$PayloadExePath" `
         /p:Version="$version" `
         /p:AssemblyVersion="$version.0" `
         /p:FileVersion="$version.0" `

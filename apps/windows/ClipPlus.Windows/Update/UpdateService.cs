@@ -30,6 +30,13 @@ public sealed class UpdateService
         {
             var release = await releaseClient.FetchLatestReleaseAsync(cancellationToken);
             var packageKind = WindowsUpdatePackageKindDetector.DetectCurrent();
+            if (packageKind == WindowsUpdatePackageKind.Installed
+                && !DotNetDesktopRuntimeDetector.HasDotNet8DesktopRuntime())
+            {
+                logger.Error("installed update blocked because .NET 8 Desktop Runtime is missing");
+                throw new UpdateException(UpdateErrorKind.UnsupportedRuntime);
+            }
+
             var asset = GitHubReleaseClient.SelectWindowsAsset(release, currentVersion, packageKind);
             logger.Info($"update available version={asset.Version} asset={asset.Name} package_kind={packageKind}");
             var downloadedUpdate = await downloader.DownloadAsync(asset, progress, cancellationToken);

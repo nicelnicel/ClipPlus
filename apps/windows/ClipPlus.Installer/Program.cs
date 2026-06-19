@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
 internal static class Program
@@ -7,11 +8,16 @@ internal static class Program
     private const string AppName = "ClipPlus";
     private const string PayloadResourceName = "ClipPlus.exe";
     private const string InstalledExeName = "ClipPlus.exe";
+    private const string PackageMarkerFileName = "clipplus-package.json";
+    private const string InstalledRuntimeDependentMarker = "installed-runtime-dependent";
     private const string UninstallScriptName = "Uninstall.cmd";
     private const string UninstallPowerShellScriptName = "Uninstall.ps1";
     private const string ShortcutName = "ClipPlus.lnk";
     private const string RunValueName = "ClipPlus";
     private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus";
+    private const string WindowsDesktopSharedFxKeyPath =
+        @"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App";
+    private const uint MessageBoxIconError = 0x00000010;
 
     private static int Main(string[] args)
     {
@@ -40,6 +46,7 @@ internal static class Program
                 // Best-effort diagnostic only.
             }
 
+            TryShowError(exception.Message);
             return 1;
         }
     }
@@ -58,6 +65,7 @@ internal static class Program
         var uninstallScriptPath = Path.Combine(installDirectory, UninstallScriptName);
         var uninstallPowerShellScriptPath = Path.Combine(installDirectory, UninstallPowerShellScriptName);
 
+        EnsureDotNet8DesktopRuntime();
         Directory.CreateDirectory(installDirectory);
         StopClipPlusProcesses();
 
@@ -73,6 +81,7 @@ internal static class Program
         }
 
         WriteUninstallScripts(uninstallScriptPath, uninstallPowerShellScriptPath);
+        WritePackageMarker(installDirectory);
         CreateShortcut(installedExePath);
         WriteUninstallRegistry(installedExePath, uninstallPowerShellScriptPath);
 
@@ -194,6 +203,32 @@ exit 1
         File.WriteAllText(powerShellScriptPath, powerShellScript);
     }
 
+    private static void WritePackageMarker(string installDirectory)
+    {
+        var marker = $$"""
+{
+  "package_kind": "{{InstalledRuntimeDependentMarker}}"
+}
+""";
+        File.WriteAllText(Path.Combine(installDirectory, PackageMarkerFileName), marker);
+    }
+
+    private static void EnsureDotNet8DesktopRuntime()
+    {
+        if (!HasDotNet8DesktopRuntime())
+        {
+            throw new InvalidOperationException(
+                "ClipPlus 需要先安装 .NET 8 Desktop Runtime；也可以下载 ClipPlus-Windows-x64-full.exe。"
+            );
+        }
+    }
+
+    private static bool HasDotNet8DesktopRuntime()
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(WindowsDesktopSharedFxKeyPath);
+        return key?.GetValueNames().Any(name => name.StartsWith("8.", StringComparison.Ordinal)) == true;
+    }
+
     private static void CreateShortcut(string installedExePath)
     {
         var shortcutPath = ShortcutPath();
@@ -304,4 +339,19 @@ exit 1
     {
         return value.Replace("`", "``", StringComparison.Ordinal).Replace("\"", "`\"", StringComparison.Ordinal);
     }
+
+    private static void TryShowError(string message)
+    {
+        try
+        {
+            _ = MessageBoxW(IntPtr.Zero, message, "ClipPlus Setup", MessageBoxIconError);
+        }
+        catch
+        {
+            // Error reporting must not mask the original installer failure.
+        }
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 }

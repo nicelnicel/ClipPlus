@@ -484,7 +484,8 @@ public sealed class SettingsStateTests
         Assert.Contains("ClipPlus.Installer.csproj", installerScript);
         Assert.Contains("dotnet.exe", installerScript);
         Assert.Contains("ClipPlusPayloadPath", installerScript);
-        Assert.Contains("ClipPlus-Windows-x64-full.exe", installerScript);
+        Assert.Contains("ClipPlus-Windows-x64-runtime-dependent.exe", installerScript);
+        Assert.DoesNotContain("defaultFullExePath", installerScript);
         var installerProjectPath = Path.Combine(
             repositoryRoot,
             "apps",
@@ -512,8 +513,16 @@ public sealed class SettingsStateTests
         Assert.Contains("Uninstall.cmd", installerProgram);
         Assert.Contains("Uninstall.ps1", installerProgram);
         Assert.Contains(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus", installerProgram);
+        Assert.Contains("clipplus-package.json", installerProgram);
+        Assert.Contains("installed-runtime-dependent", installerProgram);
+        Assert.Contains("Microsoft.WindowsDesktop.App", installerProgram);
+        Assert.Contains("HasDotNet8DesktopRuntime", installerProgram);
         var readme = File.ReadAllText(readmePath);
-        Assert.Contains("ClipPlus-Windows-x64-Setup.exe", readme);
+        var installerReadmeLine = readme
+            .Split('\n')
+            .First(line => line.Contains("ClipPlus-Windows-x64-Setup.exe", StringComparison.Ordinal));
+        Assert.Contains(".NET 8 Desktop Runtime", installerReadmeLine);
+        Assert.DoesNotContain("内置 .NET 运行环境", installerReadmeLine);
         var bumpVersionScript = File.ReadAllText(bumpVersionScriptPath);
         Assert.Contains("VERSION", bumpVersionScript);
         Assert.Contains("Cargo.toml", bumpVersionScript);
@@ -652,6 +661,15 @@ public sealed class SettingsStateTests
         Assert.Equal("https://example.com/runtime.exe", asset.DownloadUrl.ToString());
         Assert.Equal(new string('a', 64), asset.Sha256Hex);
         Assert.Equal(10, asset.Size);
+
+        var installedAsset = GitHubReleaseClient.SelectWindowsAsset(
+            release,
+            UpdateVersion.Parse("0.1.4"),
+            WindowsUpdatePackageKind.Installed
+        );
+
+        Assert.Equal("ClipPlus-Windows-x64-runtime-dependent.exe", installedAsset.Name);
+        Assert.Equal("https://example.com/runtime.exe", installedAsset.DownloadUrl.ToString());
     }
 
     [Fact]
@@ -675,6 +693,70 @@ public sealed class SettingsStateTests
                 @"C:\Users\YJY\Downloads\ClipPlus.Windows.exe"
             )
         );
+        Assert.Equal(
+            WindowsUpdatePackageKind.Installed,
+            WindowsUpdatePackageKindDetector.DetectFromExecutablePath(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs",
+                "ClipPlus",
+                "ClipPlus.exe"
+            ))
+        );
+    }
+
+    [Fact]
+    public void WindowsUpdatePackageKindDetectsInstalledMarker()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ClipPlusInstalled-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(directory, WindowsUpdatePackageKindDetector.PackageMarkerFileName),
+                """
+                {
+                  "package_kind": "installed-runtime-dependent"
+                }
+                """
+            );
+
+            Assert.Equal(
+                WindowsUpdatePackageKind.Installed,
+                WindowsUpdatePackageKindDetector.DetectFromExecutablePath(Path.Combine(directory, "ClipPlus.exe"))
+            );
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WindowsInstalledUpdateChecksDesktopRuntimeBeforeDownload()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var updateServiceSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Update",
+            "UpdateService.cs"
+        ));
+        var runtimeDetectorSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "apps",
+            "windows",
+            "ClipPlus.Windows",
+            "Update",
+            "DotNetDesktopRuntimeDetector.cs"
+        ));
+
+        Assert.Contains("WindowsUpdatePackageKind.Installed", updateServiceSource);
+        Assert.Contains("DotNetDesktopRuntimeDetector.HasDotNet8DesktopRuntime", updateServiceSource);
+        Assert.Contains("UpdateErrorKind.UnsupportedRuntime", updateServiceSource);
+        Assert.Contains("Microsoft.WindowsDesktop.App", runtimeDetectorSource);
+        Assert.Contains("StartsWith(\"8.\"", runtimeDetectorSource);
     }
 
     [Fact]

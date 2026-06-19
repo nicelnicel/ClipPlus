@@ -7,7 +7,7 @@ ClipPlus 是一个面向局域网的跨设备剪贴板工具。它支持 macOS �
 最新版本在 [GitHub Releases](https://github.com/nicelnicel/ClipPlus/releases/latest) 下载。
 
 - macOS：下载 `ClipPlus-macOS.dmg`，打开后运行 `ClipPlus.app`。
-- Windows x64 安装版：下载 `ClipPlus-Windows-x64-Setup.exe`，安装到当前用户目录，内置 .NET 运行环境，适合普通用户双击安装。
+- Windows x64 安装版：下载 `ClipPlus-Windows-x64-Setup.exe`，安装到当前用户目录，需要系统已安装 `.NET 8 Desktop Runtime`，后续更新只下载主程序小包。
 - Windows x64 full：下载 `ClipPlus-Windows-x64-full.exe`，内置 .NET 运行环境，体积较大，适合不确定电脑环境时使用。
 - Windows x64 runtime-dependent：下载 `ClipPlus-Windows-x64-runtime-dependent.exe`，体积较小，需要电脑已安装 .NET 8 Desktop Runtime。
 
