@@ -756,6 +756,7 @@ public sealed class SettingsStateTests
         Assert.Contains("DotNetDesktopRuntimeDetector.HasDotNet8DesktopRuntime", updateServiceSource);
         Assert.Contains("UpdateErrorKind.UnsupportedRuntime", updateServiceSource);
         Assert.Contains("Microsoft.WindowsDesktop.App", runtimeDetectorSource);
+        Assert.Contains("WOW6432Node", runtimeDetectorSource);
         Assert.Contains("StartsWith(\"8.\"", runtimeDetectorSource);
     }
 

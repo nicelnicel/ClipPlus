@@ -4,8 +4,11 @@ using Microsoft.Win32;
 
 public static class DotNetDesktopRuntimeDetector
 {
-    private const string WindowsDesktopSharedFxKeyPath =
-        @"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App";
+    private static readonly string[] WindowsDesktopSharedFxKeyPaths =
+    [
+        @"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App",
+        @"SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App",
+    ];
 
     public static bool HasDotNet8DesktopRuntime()
     {
@@ -14,7 +17,12 @@ public static class DotNetDesktopRuntimeDetector
             return false;
         }
 
-        using var key = Registry.LocalMachine.OpenSubKey(WindowsDesktopSharedFxKeyPath);
+        return WindowsDesktopSharedFxKeyPaths.Any(HasDotNet8DesktopRuntime);
+    }
+
+    private static bool HasDotNet8DesktopRuntime(string keyPath)
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(keyPath);
         return key?.GetValueNames().Any(name => name.StartsWith("8.", StringComparison.Ordinal)) == true;
     }
 }

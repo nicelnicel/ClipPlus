@@ -15,8 +15,11 @@ internal static class Program
     private const string ShortcutName = "ClipPlus.lnk";
     private const string RunValueName = "ClipPlus";
     private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus";
-    private const string WindowsDesktopSharedFxKeyPath =
-        @"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App";
+    private static readonly string[] WindowsDesktopSharedFxKeyPaths =
+    [
+        @"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App",
+        @"SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App",
+    ];
     private const uint MessageBoxIconError = 0x00000010;
 
     private static int Main(string[] args)
@@ -225,7 +228,12 @@ exit 1
 
     private static bool HasDotNet8DesktopRuntime()
     {
-        using var key = Registry.LocalMachine.OpenSubKey(WindowsDesktopSharedFxKeyPath);
+        return WindowsDesktopSharedFxKeyPaths.Any(HasDotNet8DesktopRuntime);
+    }
+
+    private static bool HasDotNet8DesktopRuntime(string keyPath)
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(keyPath);
         return key?.GetValueNames().Any(name => name.StartsWith("8.", StringComparison.Ordinal)) == true;
     }
 
