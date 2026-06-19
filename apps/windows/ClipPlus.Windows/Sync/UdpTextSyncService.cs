@@ -219,6 +219,18 @@ public sealed class UdpTextSyncService : IDisposable
 
     private void PollClipboardAndBroadcast()
     {
+        try
+        {
+            PollClipboardAndBroadcastCore();
+        }
+        catch (Exception error)
+        {
+            logger.Error($"clipboard poll skipped error_type={error.GetType().Name}");
+        }
+    }
+
+    private void PollClipboardAndBroadcastCore()
+    {
         state.PurgeExpiredConnectedPeers();
         if (!state.SharedKeyConfigured || !state.SharingEnabled)
         {

@@ -1635,6 +1635,25 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void UdpTextSyncServicePollDoesNotCrashWhenClipboardIsTemporarilyUnavailable()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+
+        Assert.Contains("private void PollClipboardAndBroadcast()", source, StringComparison.Ordinal);
+        Assert.Contains("private void PollClipboardAndBroadcastCore()", source, StringComparison.Ordinal);
+        Assert.Contains("clipboard poll skipped error_type=", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NativeClipboardWritesSingleImageFileAsFileDropAndImage()
     {
         Exception? failure = null;
