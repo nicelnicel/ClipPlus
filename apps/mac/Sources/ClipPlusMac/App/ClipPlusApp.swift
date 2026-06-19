@@ -7,6 +7,7 @@ final class ClipPlusAppModel: ObservableObject {
     private let loginItemManager: LoginItemManager
     private let syncService: UdpTextSyncService
     private let statusBarController: StatusBarController
+    private let settingsWindowController: SettingsWindowController
 
     init() {
         CoreBridgeSmokeTest.runIfRequested()
@@ -27,6 +28,7 @@ final class ClipPlusAppModel: ObservableObject {
         settingsState = state
         syncService = UdpTextSyncService(state: state, logger: logger)
         statusBarController = StatusBarController(state: state)
+        settingsWindowController = SettingsWindowController(state: state)
         let syncService = self.syncService
         settingsState.sharedKeyChanged = { [settingsStore] sharedKey, sharedGroupId in
             try settingsStore.saveSharedKey(sharedKey, sharedGroupId: sharedGroupId)
@@ -47,10 +49,15 @@ final class ClipPlusAppModel: ObservableObject {
         }
         syncService.start()
     }
+
+    func showSettingsWindow() {
+        settingsWindowController.showSettingsWindow()
+    }
 }
 
 @main
 struct ClipPlusApp: App {
+    @NSApplicationDelegateAdaptor(ClipPlusAppDelegate.self) private var appDelegate
     @StateObject private var appModel: ClipPlusAppModel
     private let singleInstanceLock: SingleInstanceLock
 
@@ -60,7 +67,9 @@ struct ClipPlusApp: App {
         }
 
         self.singleInstanceLock = singleInstanceLock
-        _appModel = StateObject(wrappedValue: ClipPlusAppModel())
+        let appModel = ClipPlusAppModel()
+        _appModel = StateObject(wrappedValue: appModel)
+        appDelegate.configure(appModel: appModel)
     }
 
     var body: some Scene {
@@ -72,15 +81,22 @@ struct ClipPlusApp: App {
 
 enum ClipPlusAppIcon {
     static var menuBarImage: NSImage {
-        if let resourceURL = Bundle.main.url(forResource: "ClipPlusMenuBar", withExtension: "png"),
-           let image = NSImage(contentsOf: resourceURL) {
+        if let image = NSImage(
+            systemSymbolName: "doc.on.clipboard",
+            accessibilityDescription: "ClipPlus"
+        ) {
             image.size = NSSize(width: 18, height: 18)
+            image.isTemplate = true
             return image
         }
 
-        return NSImage(
-            systemSymbolName: "doc.on.clipboard",
-            accessibilityDescription: "ClipPlus"
-        ) ?? NSImage()
+        if let resourceURL = Bundle.main.url(forResource: "ClipPlusMenuBar", withExtension: "png"),
+           let image = NSImage(contentsOf: resourceURL) {
+            image.size = NSSize(width: 18, height: 18)
+            image.isTemplate = true
+            return image
+        }
+
+        return NSImage()
     }
 }

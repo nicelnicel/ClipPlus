@@ -103,8 +103,6 @@ cat > "$plist_path" <<PLIST
     <string>${app_version}</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>ClipPlus 需要访问局域网以同步剪贴板。</string>
 </dict>

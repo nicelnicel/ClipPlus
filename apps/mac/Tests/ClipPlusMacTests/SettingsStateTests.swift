@@ -507,7 +507,7 @@ final class SettingsStateTests: XCTestCase {
         )
         XCTAssertFalse(
             appSource.contains("Window(AppVersion.settingsWindowTitle"),
-            "设置界面应该只由状态栏 popover 承载，不能保留启动即打开的独立 Window"
+            "设置窗口应该由显式窗口控制器承载，避免 SwiftUI 默认 Window 影响后台启动行为"
         )
         XCTAssertFalse(appSource.contains(".menuBarExtraStyle(.window)"))
         XCTAssertTrue(statusBarSource.contains("NSStatusBar.system.statusItem"))
@@ -668,6 +668,78 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(settingsSource.contains("已是最新版本"))
         XCTAssertFalse(settingsSource.contains("get: { updateAlertMessage != nil }"))
         XCTAssertFalse(settingsSource.contains("自动检查更新"))
+    }
+
+    func testMacMenuBarIconUsesAdaptiveTemplateImage() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
+        let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
+        let systemIconRange = try XCTUnwrap(
+            appSource.range(of: #"systemSymbolName: "doc.on.clipboard""#)
+        )
+        let bitmapIconRange = try XCTUnwrap(appSource.range(of: #"ClipPlusMenuBar"#))
+
+        XCTAssertTrue(
+            appSource.contains("image.isTemplate = true"),
+            "macOS 菜单栏图标必须是 template 图标，才能在浅色/深色菜单栏背景上自动反色显示"
+        )
+        XCTAssertLessThan(
+            systemIconRange.lowerBound,
+            bitmapIconRange.lowerBound,
+            "菜单栏小图标应优先使用系统 template 图标，深色 PNG 只能作为兜底资源"
+        )
+    }
+
+    func testMacPackageCreatesRegularDockVisibleApp() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let packageScriptURL = repositoryRoot.appendingPathComponent("scripts/dev/package-mac-app.sh")
+        let packageScript = try String(contentsOf: packageScriptURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            packageScript.contains("<key>LSUIElement</key>"),
+            "ClipPlus 需要作为普通 Dock 可见应用运行，避免菜单栏图标被系统隐藏后用户找不到入口"
+        )
+    }
+
+    func testDockReopenShowsSettingsWindow() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSourceURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusApp.swift")
+        let appDelegateURL = repositoryRoot.appendingPathComponent("apps/mac/Sources/ClipPlusMac/App/ClipPlusAppDelegate.swift")
+        let settingsWindowControllerURL = repositoryRoot
+            .appendingPathComponent("apps/mac/Sources/ClipPlusMac/Settings/SettingsWindowController.swift")
+        let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
+        let appDelegateSource = (try? String(contentsOf: appDelegateURL, encoding: .utf8)) ?? ""
+        let settingsWindowControllerSource = (try? String(contentsOf: settingsWindowControllerURL, encoding: .utf8)) ?? ""
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: appDelegateURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: settingsWindowControllerURL.path))
+        XCTAssertTrue(appSource.contains("@NSApplicationDelegateAdaptor(ClipPlusAppDelegate.self)"))
+        XCTAssertTrue(appSource.contains("settingsWindowController = SettingsWindowController(state: state)"))
+        XCTAssertTrue(appSource.contains("func showSettingsWindow()"))
+        XCTAssertTrue(appSource.contains("appDelegate.configure(appModel: appModel)"))
+        XCTAssertTrue(appDelegateSource.contains("applicationDidFinishLaunching"))
+        XCTAssertTrue(appDelegateSource.contains("applicationShouldHandleReopen"))
+        XCTAssertTrue(appDelegateSource.contains("appModel?.showSettingsWindow()"))
+        XCTAssertTrue(settingsWindowControllerSource.contains("NSHostingController(rootView: SettingsView(state: state))"))
+        XCTAssertTrue(settingsWindowControllerSource.contains("NSWindow(contentViewController: hostingController)"))
+        XCTAssertTrue(settingsWindowControllerSource.contains("NSApp.activate(ignoringOtherApps: true)"))
+        XCTAssertTrue(settingsWindowControllerSource.contains("window.makeKeyAndOrderFront(nil)"))
+        XCTAssertTrue(settingsWindowControllerSource.contains("window.isReleasedWhenClosed = false"))
     }
 
     func testSharedAppIconAssetsAreConfiguredForPackaging() throws {
