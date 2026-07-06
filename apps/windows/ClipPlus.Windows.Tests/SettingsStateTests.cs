@@ -537,7 +537,7 @@ public sealed class SettingsStateTests
         var updateManifestScript = File.ReadAllText(updateManifestScriptPath);
         Assert.Contains("clipplus-update.json", updateManifestScript);
         Assert.Contains("ClipPlus-macOS.dmg", updateManifestScript);
-        Assert.Contains("ClipPlus-Windows-x64-full.exe", updateManifestScript);
+        Assert.DoesNotContain("ClipPlus-Windows-x64-full.exe", updateManifestScript);
         Assert.Contains("ClipPlus-Windows-x64-runtime-dependent.exe", updateManifestScript);
         Assert.Contains("browser_download_url", updateManifestScript);
         Assert.Contains("sha256:", updateManifestScript);
@@ -563,7 +563,7 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
-    public void WindowsUpdateSelectsFullExeReleaseAssetAndRequiresDigest()
+    public void WindowsUpdateSelectsRuntimeDependentAssetForAllPackageKindsAndRequiresDigest()
     {
         var releaseJson = """
             {
@@ -576,12 +576,6 @@ public sealed class SettingsStateTests
                   "browser_download_url": "https://example.com/runtime.exe",
                   "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "size": 10
-                },
-                {
-                  "name": "ClipPlus-Windows-x64-full.exe",
-                  "browser_download_url": "https://example.com/full.exe",
-                  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                  "size": 20
                 }
               ]
             }
@@ -595,10 +589,10 @@ public sealed class SettingsStateTests
         );
 
         Assert.Equal("0.1.5", asset.Version.ToString());
-        Assert.Equal("ClipPlus-Windows-x64-full.exe", asset.Name);
-        Assert.Equal("https://example.com/full.exe", asset.DownloadUrl.ToString());
-        Assert.Equal(new string('b', 64), asset.Sha256Hex);
-        Assert.Equal(20, asset.Size);
+        Assert.Equal("ClipPlus-Windows-x64-runtime-dependent.exe", asset.Name);
+        Assert.Equal("https://example.com/runtime.exe", asset.DownloadUrl.ToString());
+        Assert.Equal(new string('a', 64), asset.Sha256Hex);
+        Assert.Equal(10, asset.Size);
 
         var missingDigestJson = """
             {
@@ -607,9 +601,9 @@ public sealed class SettingsStateTests
               "prerelease": false,
               "assets": [
                 {
-                  "name": "ClipPlus-Windows-x64-full.exe",
-                  "browser_download_url": "https://example.com/full.exe",
-                  "size": 20
+                  "name": "ClipPlus-Windows-x64-runtime-dependent.exe",
+                  "browser_download_url": "https://example.com/runtime.exe",
+                  "size": 10
                 }
               ]
             }
@@ -633,12 +627,6 @@ public sealed class SettingsStateTests
               "draft": false,
               "prerelease": false,
               "assets": [
-                {
-                  "name": "ClipPlus-Windows-x64-full.exe",
-                  "browser_download_url": "https://example.com/full.exe",
-                  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                  "size": 20
-                },
                 {
                   "name": "ClipPlus-Windows-x64-runtime-dependent.exe",
                   "browser_download_url": "https://example.com/runtime.exe",
@@ -752,7 +740,7 @@ public sealed class SettingsStateTests
             "DotNetDesktopRuntimeDetector.cs"
         ));
 
-        Assert.Contains("WindowsUpdatePackageKind.Installed", updateServiceSource);
+        Assert.Contains("packageKind != WindowsUpdatePackageKind.RuntimeDependent", updateServiceSource);
         Assert.Contains("DotNetDesktopRuntimeDetector.HasDotNet8DesktopRuntime", updateServiceSource);
         Assert.Contains("UpdateErrorKind.UnsupportedRuntime", updateServiceSource);
         Assert.Contains("Microsoft.WindowsDesktop.App", runtimeDetectorSource);
@@ -791,7 +779,7 @@ public sealed class SettingsStateTests
     {
         var script = WindowsUpdateInstaller.CreateUpdaterScript(
             currentExePath: @"C:\ClipPlus\ClipPlus.Windows.exe",
-            newExePath: @"C:\Users\YJY\AppData\Local\ClipPlus\Updates\v0.1.5\ClipPlus-Windows-x64-full.exe",
+            newExePath: @"C:\Users\YJY\AppData\Local\ClipPlus\Updates\v0.1.5\ClipPlus-Windows-x64-runtime-dependent.exe",
             currentProcessId: 12345
         );
 

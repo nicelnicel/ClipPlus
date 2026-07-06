@@ -112,7 +112,7 @@ public sealed class UpdateException : Exception
             UpdateErrorKind.MissingDigest => "更新包缺少校验信息",
             UpdateErrorKind.InvalidDigest => "更新包校验信息无效",
             UpdateErrorKind.Sha256Mismatch => "更新包校验失败",
-            UpdateErrorKind.UnsupportedRuntime => "缺少 .NET 8 Desktop Runtime，安装版无法自动更新",
+            UpdateErrorKind.UnsupportedRuntime => "缺少 .NET 8 Desktop Runtime，Windows 普通版无法自动更新",
             UpdateErrorKind.DownloadFailed => "更新包下载失败",
             _ => "更新失败"
         };

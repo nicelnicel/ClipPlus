@@ -30,10 +30,10 @@ public sealed class UpdateService
         {
             var release = await releaseClient.FetchLatestReleaseAsync(cancellationToken);
             var packageKind = WindowsUpdatePackageKindDetector.DetectCurrent();
-            if (packageKind == WindowsUpdatePackageKind.Installed
+            if (packageKind != WindowsUpdatePackageKind.RuntimeDependent
                 && !DotNetDesktopRuntimeDetector.HasDotNet8DesktopRuntime())
             {
-                logger.Error("installed update blocked because .NET 8 Desktop Runtime is missing");
+                logger.Error($"windows update blocked because .NET 8 Desktop Runtime is missing package_kind={packageKind}");
                 throw new UpdateException(UpdateErrorKind.UnsupportedRuntime);
             }
 

@@ -38,7 +38,6 @@ tag = f"v{version}"
 repo = "nicelnicel/ClipPlus"
 required_names = [
     "ClipPlus-macOS.dmg",
-    "ClipPlus-Windows-x64-full.exe",
     "ClipPlus-Windows-x64-runtime-dependent.exe",
 ]
 

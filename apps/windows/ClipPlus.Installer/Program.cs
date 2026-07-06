@@ -221,7 +221,7 @@ exit 1
         if (!HasDotNet8DesktopRuntime())
         {
             throw new InvalidOperationException(
-                "ClipPlus 需要先安装 .NET 8 Desktop Runtime；也可以下载 ClipPlus-Windows-x64-full.exe。"
+                "ClipPlus 需要先安装 .NET 8 Desktop Runtime。"
             );
         }
     }

@@ -46,12 +46,7 @@ public sealed class GitHubReleaseClient
             throw new UpdateException(UpdateErrorKind.UpToDate);
         }
 
-        var assetName = packageKind switch
-        {
-            WindowsUpdatePackageKind.Installed => "ClipPlus-Windows-x64-runtime-dependent.exe",
-            WindowsUpdatePackageKind.RuntimeDependent => "ClipPlus-Windows-x64-runtime-dependent.exe",
-            _ => "ClipPlus-Windows-x64-full.exe"
-        };
+        var assetName = "ClipPlus-Windows-x64-runtime-dependent.exe";
         var asset = release.Assets.FirstOrDefault(asset => asset.Name == assetName)
             ?? throw new UpdateException(UpdateErrorKind.MissingAsset);
         var digest = NormalizedSha256Digest(asset.Digest);

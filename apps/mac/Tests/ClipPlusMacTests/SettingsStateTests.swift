@@ -560,7 +560,7 @@ final class SettingsStateTests: XCTestCase {
               "prerelease": false,
               "assets": [
                 {
-                  "name": "ClipPlus-Windows-x64-full.exe",
+                  "name": "ClipPlus-Windows-x64-runtime-dependent.exe",
                   "browser_download_url": "https://example.com/windows.exe",
                   "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "size": 10
@@ -826,7 +826,7 @@ final class SettingsStateTests: XCTestCase {
         let updateManifestScript = try String(contentsOf: updateManifestScriptURL, encoding: .utf8)
         XCTAssertTrue(updateManifestScript.contains("clipplus-update.json"))
         XCTAssertTrue(updateManifestScript.contains("ClipPlus-macOS.dmg"))
-        XCTAssertTrue(updateManifestScript.contains("ClipPlus-Windows-x64-full.exe"))
+        XCTAssertFalse(updateManifestScript.contains("ClipPlus-Windows-x64-full.exe"))
         XCTAssertTrue(updateManifestScript.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
         XCTAssertTrue(updateManifestScript.contains("browser_download_url"))
         XCTAssertTrue(updateManifestScript.contains("sha256:"))
@@ -840,11 +840,11 @@ final class SettingsStateTests: XCTestCase {
         let workflowSource = try String(contentsOf: workflowURL, encoding: .utf8)
         XCTAssertTrue(workflowSource.contains("./scripts/dev/package-mac-dmg.sh"))
         XCTAssertTrue(workflowSource.contains("path: target/macos/ClipPlus-macOS.dmg"))
-        XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-full.exe"))
+        XCTAssertFalse(workflowSource.contains("ClipPlus-Windows-x64-full.exe"))
         XCTAssertTrue(workflowSource.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
         XCTAssertTrue(workflowSource.contains("./scripts/dev/generate-update-manifest.sh"))
         XCTAssertTrue(workflowSource.contains("clipplus-update.json"))
-        XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 full exe"))
+        XCTAssertFalse(workflowSource.contains("Smoke test Windows x64 full exe"))
         XCTAssertTrue(workflowSource.contains("Smoke test Windows x64 runtime-dependent exe"))
         XCTAssertTrue(workflowSource.contains("./scripts/dev/check-release-version.sh \"$tag\""))
         XCTAssertFalse(
@@ -859,7 +859,7 @@ final class SettingsStateTests: XCTestCase {
 
         let readmeSource = try String(contentsOf: readmeURL, encoding: .utf8)
         XCTAssertTrue(readmeSource.contains("ClipPlus-macOS.dmg"))
-        XCTAssertTrue(readmeSource.contains("ClipPlus-Windows-x64-full.exe"))
+        XCTAssertFalse(readmeSource.contains("ClipPlus-Windows-x64-full.exe"))
         XCTAssertTrue(readmeSource.contains("ClipPlus-Windows-x64-runtime-dependent.exe"))
         XCTAssertTrue(readmeSource.contains(".NET 8 Desktop Runtime"))
 

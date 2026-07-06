@@ -97,31 +97,11 @@ jobs:
           Set-Location apps/windows
           dotnet test ClipPlus.Windows.sln --nologo
 
-      - name: Publish Windows x64 full exe
-        shell: pwsh
-        run: |
-          ./scripts/dev/publish-windows-single-exe.ps1 -RuntimeIdentifier win-x64
-          New-Item -ItemType Directory -Force target/windows-release | Out-Null
-          Copy-Item target/windows-single-exe/ClipPlus.Windows.exe target/windows-release/ClipPlus-Windows-x64-full.exe
-
-      - name: Smoke test Windows x64 full exe
-        shell: pwsh
-        run: |
-          $output = "target/windows-release/full-smoke.txt"
-          Remove-Item $output -ErrorAction SilentlyContinue
-          $env:CLIPPLUS_COREBRIDGE_SMOKE_TEST = "1"
-          $env:CLIPPLUS_COREBRIDGE_SMOKE_TEST_OUTPUT = $output
-          Remove-Item Env:CLIPPLUS_FFI_LIBRARY_PATH -ErrorAction SilentlyContinue
-          $process = Start-Process -FilePath "target/windows-release/ClipPlus-Windows-x64-full.exe" -PassThru -Wait
-          if ($process.ExitCode -ne 0) {
-            throw "Full Windows exe smoke test failed with exit code $($process.ExitCode)"
-          }
-          Get-Content $output
-
       - name: Publish Windows x64 runtime-dependent exe
         shell: pwsh
         run: |
           ./scripts/dev/publish-windows-runtime-dependent.ps1 -RuntimeIdentifier win-x64
+          New-Item -ItemType Directory -Force target/windows-release | Out-Null
           Copy-Item target/windows-runtime-dependent/ClipPlus.Windows.exe target/windows-release/ClipPlus-Windows-x64-runtime-dependent.exe
 
       - name: Smoke test Windows x64 runtime-dependent exe
@@ -137,12 +117,6 @@ jobs:
             throw "Runtime-dependent Windows exe smoke test failed with exit code $($process.ExitCode)"
           }
           Get-Content $output
-
-      - name: Upload Windows full exe artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ClipPlus-Windows-x64-full
-          path: target/windows-release/ClipPlus-Windows-x64-full.exe
 
       - name: Upload Windows runtime-dependent exe artifact
         uses: actions/upload-artifact@v4
