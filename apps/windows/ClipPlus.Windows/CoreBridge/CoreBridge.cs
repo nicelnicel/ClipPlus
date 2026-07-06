@@ -10,7 +10,7 @@ public sealed class CoreBridge
 {
     public string StatusJson()
     {
-        return "{\"core_version\":\"0.1.20\"}";
+        return "{\"core_version\":\"0.1.21\"}";
     }
 
     public string? DeriveGroupId(string rawKey)
