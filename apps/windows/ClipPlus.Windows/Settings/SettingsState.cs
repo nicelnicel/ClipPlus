@@ -448,7 +448,8 @@ public sealed record RemoteFileOfferSummary(
     string SourceDeviceName,
     string SourceHost,
     int FileCount,
-    long TotalBytes)
+    long TotalBytes,
+    int ClipboardGeneration = 0)
 {
     public string DisplayTitle => $"{SourceDeviceName}：{FileCount} 个文件可接收";
 }

@@ -67,6 +67,7 @@ final class UdpTextSyncService {
     private let logger: ClipPlusLogger
     private let remoteFileTransfers = RemoteFileTransferGate()
     private let remoteClipboardReceiveGuard = RemoteClipboardReceiveGuard()
+    private let remoteClipboardGenerationLock = NSLock()
     private let receiveQueue = DispatchQueue(label: "clipplus.mac.udp.receive")
     private let clipboardQueue = DispatchQueue(label: "clipplus.mac.clipboard.poll")
     private let discoveryRefreshQueue = DispatchQueue(label: "clipplus.mac.discovery.refresh")
@@ -86,6 +87,7 @@ final class UdpTextSyncService {
     private let fileSignatureLock = NSLock()
     private var lastLocalFileSignature: String?
     private var lastRemoteFileSignature: String?
+    private var remoteClipboardGeneration = 0
     private var tickCount = 0
     private var discoveryRefreshGeneration = 0
 
@@ -322,6 +324,20 @@ final class UdpTextSyncService {
         return ImageContentHasher.sha256Hex(writtenPngData)
     }
 
+    @discardableResult
+    private func advanceRemoteClipboardGeneration() -> Int {
+        remoteClipboardGenerationLock.lock()
+        defer { remoteClipboardGenerationLock.unlock() }
+        remoteClipboardGeneration += 1
+        return remoteClipboardGeneration
+    }
+
+    private func isCurrentRemoteClipboardGeneration(_ generation: Int) -> Bool {
+        remoteClipboardGenerationLock.lock()
+        defer { remoteClipboardGenerationLock.unlock() }
+        return remoteClipboardGeneration == generation
+    }
+
     private func syncSnapshot() -> SyncSnapshot {
         DispatchQueue.main.sync {
             state.purgeExpiredConnectedPeers()
@@ -386,6 +402,7 @@ final class UdpTextSyncService {
                 return
             }
 
+            advanceRemoteClipboardGeneration()
             lastRemoteText = text
             lastLocalText = text
             clipboard.writeText(text)
@@ -399,6 +416,7 @@ final class UdpTextSyncService {
                 return
             }
 
+            advanceRemoteClipboardGeneration()
             lastRemoteImageHash = imageHash
             lastLocalImageHash = imageHash
             clipboard.writePngImageData(imageData)
@@ -421,6 +439,7 @@ final class UdpTextSyncService {
                 return
             }
 
+            let expectedClipboardGeneration = advanceRemoteClipboardGeneration()
             fileQueue.async { [weak self] in
                 self?.downloadRemoteImageOffer(
                     senderDeviceId: message.senderDeviceId,
@@ -428,6 +447,7 @@ final class UdpTextSyncService {
                     transferId: transferId,
                     expectedByteSize: expectedByteSize,
                     expectedHash: expectedHash,
+                    expectedClipboardGeneration: expectedClipboardGeneration,
                     port: imagePort
                 )
             }
@@ -451,6 +471,7 @@ final class UdpTextSyncService {
                 return
             }
 
+            let expectedClipboardGeneration = advanceRemoteClipboardGeneration()
             let totalBytes = files.reduce(Int64(0)) { $0 + $1.byteSize }
             state.updateRemoteFileOffer(RemoteFileOfferSummary(
                 transferId: transferId,
@@ -458,7 +479,8 @@ final class UdpTextSyncService {
                 sourceDeviceName: message.senderDeviceName,
                 sourceHost: sourceHost,
                 fileCount: files.count,
-                totalBytes: totalBytes
+                totalBytes: totalBytes,
+                clipboardGeneration: expectedClipboardGeneration
             ))
             logger.info("received file offer file_count=\(files.count) byte_count=\(totalBytes)")
         }
@@ -657,6 +679,13 @@ final class UdpTextSyncService {
                 return
             }
 
+            guard isCurrentRemoteClipboardGeneration(offer.clipboardGeneration) else {
+                state.clearRemoteFileOffer(transferId: offer.transferId)
+                remoteFileTransfers.complete(offer.transferId)
+                logger.info("ignored stale file transfer transfer_id_prefix=\(offer.transferId.prefix(8))")
+                return
+            }
+
             recordRemoteFileSignature(remoteSignature)
             guard clipboard.writeFileURLs(urls) else {
                 clearRemoteFileSignature(ifMatching: remoteSignature)
@@ -685,6 +714,7 @@ final class UdpTextSyncService {
         transferId: String,
         expectedByteSize: Int,
         expectedHash: String,
+        expectedClipboardGeneration: Int,
         port: Int
     ) {
         guard let stagingURL = stagingDirectoryURL(for: transferId) else {
@@ -744,6 +774,12 @@ final class UdpTextSyncService {
 
         DispatchQueue.main.async { [weak self] in
             guard let self else {
+                return
+            }
+
+            guard isCurrentRemoteClipboardGeneration(expectedClipboardGeneration) else {
+                remoteFileTransfers.complete(transferId)
+                logger.info("ignored stale image transfer transfer_id_prefix=\(transferId.prefix(8))")
                 return
             }
 

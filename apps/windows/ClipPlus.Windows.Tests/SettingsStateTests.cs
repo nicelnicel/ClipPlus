@@ -1767,6 +1767,50 @@ public sealed class SettingsStateTests
     }
 
     [Fact]
+    public void UdpTextSyncServiceRemoteFileDownloadCannotOverwriteNewerRemoteClipboard()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+
+        Assert.Contains("private int remoteClipboardGeneration;", source, StringComparison.Ordinal);
+        Assert.Contains("AdvanceRemoteClipboardGeneration()", source, StringComparison.Ordinal);
+        Assert.Contains("IsCurrentRemoteClipboardGeneration(", source, StringComparison.Ordinal);
+
+        var textStart = source.IndexOf("case ClipPlusMessageKind.Text:", StringComparison.Ordinal);
+        var imageOfferStart = source.IndexOf("case ClipPlusMessageKind.ImageOffer:", StringComparison.Ordinal);
+        Assert.True(textStart >= 0);
+        Assert.True(imageOfferStart > textStart);
+        var textAndImageSource = source[textStart..imageOfferStart];
+        Assert.Contains("AdvanceRemoteClipboardGeneration()", textAndImageSource, StringComparison.Ordinal);
+
+        var fileOfferStart = source.IndexOf("case ClipPlusMessageKind.FileOffer:", StringComparison.Ordinal);
+        var publishFileStart = source.IndexOf("private void PublishFileOffer", StringComparison.Ordinal);
+        Assert.True(fileOfferStart >= 0);
+        Assert.True(publishFileStart > fileOfferStart);
+        var fileOfferSource = source[fileOfferStart..publishFileStart];
+        Assert.Contains("var expectedClipboardGeneration = AdvanceRemoteClipboardGeneration();", fileOfferSource, StringComparison.Ordinal);
+        Assert.Contains("ClipboardGeneration: expectedClipboardGeneration", fileOfferSource, StringComparison.Ordinal);
+
+        var fileDownloadStart = source.IndexOf("private async Task DownloadRemoteFileOfferAsync(RemoteFileOfferSummary offer)", StringComparison.Ordinal);
+        var safeTransferStart = source.IndexOf("private static string SafeTransferIdOrThrow", StringComparison.Ordinal);
+        Assert.True(fileDownloadStart >= 0);
+        Assert.True(safeTransferStart > fileDownloadStart);
+        var fileDownloadSource = source[fileDownloadStart..safeTransferStart];
+        Assert.Contains("if (!IsCurrentRemoteClipboardGeneration(offer.ClipboardGeneration))", fileDownloadSource, StringComparison.Ordinal);
+        Assert.Contains("ignored stale file transfer", fileDownloadSource, StringComparison.Ordinal);
+        Assert.Contains("remoteFileTransfers.Complete(offer.TransferId)", fileDownloadSource, StringComparison.Ordinal);
+        Assert.Contains("state.ClearRemoteFileOffer(offer.TransferId)", fileDownloadSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NativeClipboardWritesSingleImageFileAsFileDropAndImage()
     {
         Exception? failure = null;

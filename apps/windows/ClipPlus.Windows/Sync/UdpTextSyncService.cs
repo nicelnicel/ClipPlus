@@ -44,6 +44,7 @@ public sealed class UdpTextSyncService : IDisposable
     private string? lastImageReadFailureFormatSummary;
     private string? lastLocalFileSignature;
     private string? lastRemoteFileSignature;
+    private int remoteClipboardGeneration;
     private int tickCount;
     private int discoveryRefreshGeneration;
 
@@ -397,6 +398,16 @@ public sealed class UdpTextSyncService : IDisposable
         return ImageContentHasher.Sha256Hex(writtenPngData);
     }
 
+    private int AdvanceRemoteClipboardGeneration()
+    {
+        return Interlocked.Increment(ref remoteClipboardGeneration);
+    }
+
+    private bool IsCurrentRemoteClipboardGeneration(int generation)
+    {
+        return Volatile.Read(ref remoteClipboardGeneration) == generation;
+    }
+
     private void Handle(ClipPlusMessage message, string sourceHost)
     {
         if (!state.SharedKeyConfigured
@@ -440,6 +451,7 @@ public sealed class UdpTextSyncService : IDisposable
                     return;
                 }
 
+                AdvanceRemoteClipboardGeneration();
                 lastRemoteText = message.Text;
                 lastLocalText = message.Text;
                 clipboard.WriteText(message.Text);
@@ -456,6 +468,7 @@ public sealed class UdpTextSyncService : IDisposable
                     return;
                 }
 
+                AdvanceRemoteClipboardGeneration();
                 lastRemoteImageHash = message.ImageContentHash;
                 lastLocalImageHash = message.ImageContentHash;
                 clipboard.WritePngImageData(imageData);
@@ -478,12 +491,14 @@ public sealed class UdpTextSyncService : IDisposable
                     return;
                 }
 
+                var expectedImageClipboardGeneration = AdvanceRemoteClipboardGeneration();
                 _ = Task.Run(async () => await DownloadRemoteImageOfferAsync(
                     message.SenderDeviceId,
                     sourceHost,
                     message.TransferId,
                     message.ImageByteSize.Value,
                     message.ImageContentHash,
+                    expectedImageClipboardGeneration,
                     message.ArchivePort.Value));
                 logger.Info($"received image offer byte_count={message.ImageByteSize.Value}");
                 break;
@@ -507,6 +522,7 @@ public sealed class UdpTextSyncService : IDisposable
                     break;
                 }
 
+                var expectedClipboardGeneration = AdvanceRemoteClipboardGeneration();
                 var totalBytes = message.Files.Sum(file => file.ByteSize);
                 state.UpdateRemoteFileOffer(new RemoteFileOfferSummary(
                     TransferId: message.TransferId,
@@ -514,7 +530,8 @@ public sealed class UdpTextSyncService : IDisposable
                     SourceDeviceName: message.SenderDeviceName,
                     SourceHost: sourceHost,
                     FileCount: message.Files.Count,
-                    TotalBytes: totalBytes
+                    TotalBytes: totalBytes,
+                    ClipboardGeneration: expectedClipboardGeneration
                 ));
                 logger.Info($"received file offer file_count={message.Files.Count} byte_count={totalBytes}");
                 break;
@@ -693,6 +710,7 @@ public sealed class UdpTextSyncService : IDisposable
         string transferId,
         int expectedByteSize,
         string expectedHash,
+        int expectedClipboardGeneration,
         int port)
     {
         try
@@ -731,6 +749,13 @@ public sealed class UdpTextSyncService : IDisposable
 
             await dispatcher.InvokeAsync(() =>
             {
+                if (!IsCurrentRemoteClipboardGeneration(expectedClipboardGeneration))
+                {
+                    remoteFileTransfers.Complete(transferId);
+                    logger.Info($"ignored stale image transfer transfer_id_prefix={transferId[..Math.Min(8, transferId.Length)]}");
+                    return;
+                }
+
                 lastRemoteImageHash = expectedHash;
                 lastLocalImageHash = expectedHash;
                 clipboard.WritePngImageData(imageData);
@@ -790,6 +815,14 @@ public sealed class UdpTextSyncService : IDisposable
             var topLevelPaths = result.TopLevelPaths.ToArray();
             await dispatcher.InvokeAsync(() =>
             {
+                if (!IsCurrentRemoteClipboardGeneration(offer.ClipboardGeneration))
+                {
+                    state.ClearRemoteFileOffer(offer.TransferId);
+                    remoteFileTransfers.Complete(offer.TransferId);
+                    logger.Info($"ignored stale file transfer transfer_id_prefix={offer.TransferId[..Math.Min(8, offer.TransferId.Length)]}");
+                    return;
+                }
+
                 var signature = BuildFileSignature(topLevelPaths);
                 if (!clipboard.WriteFilePaths(topLevelPaths))
                 {

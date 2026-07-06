@@ -1988,6 +1988,39 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertTrue(pollSource.contains("return\n        }\n\n        let fileURLs = clipboard.readFileURLs()"))
     }
 
+    func testMacRemoteFileDownloadCannotOverwriteNewerRemoteClipboard() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(syncServiceSource.contains("private var remoteClipboardGeneration = 0"))
+        XCTAssertTrue(syncServiceSource.contains("advanceRemoteClipboardGeneration()"))
+        XCTAssertTrue(syncServiceSource.contains("isCurrentRemoteClipboardGeneration("))
+
+        let textStart = try XCTUnwrap(syncServiceSource.range(of: "case .text:")?.lowerBound)
+        let imageOfferStart = try XCTUnwrap(syncServiceSource.range(of: "case .imageOffer:")?.lowerBound)
+        let textAndImageSource = String(syncServiceSource[textStart..<imageOfferStart])
+        XCTAssertTrue(textAndImageSource.contains("advanceRemoteClipboardGeneration()"))
+
+        let fileOfferStart = try XCTUnwrap(syncServiceSource.range(of: "case .fileOffer:")?.lowerBound)
+        let publishFileStart = try XCTUnwrap(syncServiceSource.range(of: "private func publishFileOffer")?.lowerBound)
+        let fileOfferSource = String(syncServiceSource[fileOfferStart..<publishFileStart])
+        XCTAssertTrue(fileOfferSource.contains("let expectedClipboardGeneration = advanceRemoteClipboardGeneration()"))
+        XCTAssertTrue(fileOfferSource.contains("clipboardGeneration: expectedClipboardGeneration"))
+
+        let fileDownloadStart = try XCTUnwrap(syncServiceSource.range(of: "private func downloadRemoteFileOffer(_ offer: RemoteFileOfferSummary)")?.lowerBound)
+        let imageDownloadStart = try XCTUnwrap(syncServiceSource.range(of: "private func downloadRemoteImageOffer(")?.lowerBound)
+        let fileDownloadSource = String(syncServiceSource[fileDownloadStart..<imageDownloadStart])
+        XCTAssertTrue(fileDownloadSource.contains("guard isCurrentRemoteClipboardGeneration(offer.clipboardGeneration) else"))
+        XCTAssertTrue(fileDownloadSource.contains("ignored stale file transfer"))
+        XCTAssertTrue(fileDownloadSource.contains("remoteFileTransfers.complete(offer.transferId)"))
+        XCTAssertTrue(fileDownloadSource.contains("state.clearRemoteFileOffer(transferId: offer.transferId)"))
+    }
+
     func testMacFileRuntimeUsesCollisionFreeFileSignaturesAndSafeTransferIds() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

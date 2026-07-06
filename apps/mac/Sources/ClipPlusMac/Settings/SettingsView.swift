@@ -46,6 +46,25 @@ struct RemoteFileOfferSummary: Equatable {
     let sourceHost: String
     let fileCount: Int
     let totalBytes: Int64
+    let clipboardGeneration: Int
+
+    init(
+        transferId: String,
+        sourceDeviceId: String,
+        sourceDeviceName: String,
+        sourceHost: String,
+        fileCount: Int,
+        totalBytes: Int64,
+        clipboardGeneration: Int = 0
+    ) {
+        self.transferId = transferId
+        self.sourceDeviceId = sourceDeviceId
+        self.sourceDeviceName = sourceDeviceName
+        self.sourceHost = sourceHost
+        self.fileCount = fileCount
+        self.totalBytes = totalBytes
+        self.clipboardGeneration = clipboardGeneration
+    }
 
     var displayTitle: String {
         "\(sourceDeviceName)：\(fileCount) 个文件可接收"
