@@ -1073,12 +1073,12 @@ final class SettingsStateTests: XCTestCase {
     }
 
     func testClipPlusMessageRoundTripsTextPayload() throws {
-        let message = ClipPlusMessage.text(
+        let message = try XCTUnwrap(ClipPlusMessage.text(
             groupId: "group-1",
             senderDeviceId: "mac-device",
             senderDeviceName: "Mac",
             text: "hello from mac"
-        )
+        ))
 
         let data = try JSONEncoder().encode(message)
         let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
@@ -1165,14 +1165,14 @@ final class SettingsStateTests: XCTestCase {
 
     func testClipPlusMessageRoundTripsDirectImageOfferPayloadWithoutInlineData() throws {
         let pngData = Data(repeating: 0xAB, count: ClipPlusMessage.maxInlineImageBytes + 16)
-        let message = ClipPlusMessage.imageOffer(
+        let message = try XCTUnwrap(ClipPlusMessage.imageOffer(
             groupId: "group-1",
             senderDeviceId: "mac-device",
             senderDeviceName: "Mac",
             transferId: "image-transfer-1",
             pngData: pngData,
             archivePort: 47_632
-        )
+        ))
 
         let data = try JSONEncoder().encode(message)
         let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
@@ -1252,12 +1252,12 @@ final class SettingsStateTests: XCTestCase {
     }
 
     func testClipPlusMessageRoundTripsTrustPayload() throws {
-        let message = ClipPlusMessage.trust(
+        let message = try XCTUnwrap(ClipPlusMessage.trust(
             groupId: "group-1",
             senderDeviceId: "mac-device",
             senderDeviceName: "Mac",
             approvedDeviceId: "windows-device"
-        )
+        ))
 
         let data = try JSONEncoder().encode(message)
         let decoded = try JSONDecoder().decode(ClipPlusMessage.self, from: data)
@@ -1275,14 +1275,14 @@ final class SettingsStateTests: XCTestCase {
             byteSize: 12,
             isDirectory: false
         )
-        let message = ClipPlusMessage.fileOffer(
+        let message = try XCTUnwrap(ClipPlusMessage.fileOffer(
             groupId: "group-1",
             senderDeviceId: "mac-device",
             senderDeviceName: "Mac",
             transferId: "transfer-1",
             files: [item],
             archivePort: 47_632
-        )
+        ))
 
         let data = try JSONEncoder().encode(message)
         let json = String(data: data, encoding: .utf8) ?? ""
@@ -1967,6 +1967,25 @@ final class SettingsStateTests: XCTestCase {
         XCTAssertFalse(syncServiceSource.contains("lastRemoteFileSignature = remoteSignature"))
         XCTAssertFalse(syncServiceSource.contains("lastLocalFileSignature = pasteboardSignature"))
         XCTAssertFalse(syncServiceSource.contains("lastRemoteFileSignature = pasteboardSignature"))
+    }
+
+    func testMacClipboardPollLetsTextReplaceStaleFileClipboard() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let syncServiceURL = packageRoot
+            .appendingPathComponent("Sources/ClipPlusMac/Sync/UdpTextSyncService.swift")
+        let syncServiceSource = try String(contentsOf: syncServiceURL, encoding: .utf8)
+
+        let pollStart = try XCTUnwrap(syncServiceSource.range(of: "private func pollClipboardAndBroadcast()")?.lowerBound)
+        let imageStart = try XCTUnwrap(syncServiceSource.range(of: "guard let pngData = clipboard.readPngImageData()")?.lowerBound)
+        let pollSource = String(syncServiceSource[pollStart..<imageStart])
+        let textRead = try XCTUnwrap(pollSource.range(of: "clipboard.readText()")?.lowerBound)
+        let fileRead = try XCTUnwrap(pollSource.range(of: "clipboard.readFileURLs()")?.lowerBound)
+
+        XCTAssertLessThan(textRead, fileRead)
+        XCTAssertTrue(pollSource.contains("return\n        }\n\n        let fileURLs = clipboard.readFileURLs()"))
     }
 
     func testMacFileRuntimeUsesCollisionFreeFileSignaturesAndSafeTransferIds() throws {

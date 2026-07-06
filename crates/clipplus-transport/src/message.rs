@@ -194,6 +194,13 @@ impl NativeClipboardMessage {
         files: Vec<NativeFileTransferItem>,
         archive_port: u16,
     ) -> Result<Self, NativeClipboardMessageError> {
+        let files = files
+            .into_iter()
+            .map(|mut item| {
+                item.relative_path = sanitize_file_offer_path(&item.relative_path);
+                item
+            })
+            .collect::<Vec<_>>();
         let message = Self {
             kind: NativeClipboardMessageKind::FileOffer,
             protocol_version: 1,
@@ -403,6 +410,16 @@ fn is_safe_relative_file_offer_path(value: &str) -> bool {
 
     path.split('/')
         .all(|component| !component.is_empty() && component != "." && component != "..")
+}
+
+fn sanitize_file_offer_path(value: &str) -> String {
+    value
+        .replace('\\', "/")
+        .replace(':', "_")
+        .split('/')
+        .map(|component| component.trim())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

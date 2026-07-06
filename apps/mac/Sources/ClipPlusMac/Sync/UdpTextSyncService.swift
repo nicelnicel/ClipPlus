@@ -253,6 +253,27 @@ final class UdpTextSyncService {
             return
         }
 
+        if let text = clipboard.readText(), !text.isEmpty {
+            if text != lastLocalText,
+               text != lastRemoteText {
+                lastLocalText = text
+                if let message = ClipPlusMessage.text(
+                    groupId: snapshot.sharedGroupId,
+                    senderDeviceId: deviceId,
+                    senderDeviceName: deviceName,
+                    text: text
+                ) {
+                    send(message)
+                    updateStatus("已广播文本剪贴板")
+                    logger.info("published text clipboard byte_count=\(text.utf8.count)")
+                } else {
+                    updateStatus("文本广播失败")
+                    logger.error("text message creation failed")
+                }
+            }
+            return
+        }
+
         let fileURLs = clipboard.readFileURLs()
         if !fileURLs.isEmpty {
             let signature = fileSignature(fileURLs.map(\.path))
@@ -262,21 +283,6 @@ final class UdpTextSyncService {
 
             publishFileOffer(fileURLs: fileURLs, groupId: snapshot.sharedGroupId)
             return
-        }
-
-        if let text = clipboard.readText(),
-           !text.isEmpty,
-           text != lastLocalText,
-           text != lastRemoteText {
-            lastLocalText = text
-            send(.text(
-                groupId: snapshot.sharedGroupId,
-                senderDeviceId: deviceId,
-                senderDeviceName: deviceName,
-                text: text
-            ))
-            updateStatus("已广播文本剪贴板")
-            logger.info("published text clipboard byte_count=\(text.utf8.count)")
         }
 
         guard let pngData = clipboard.readPngImageData() else {
@@ -468,14 +474,19 @@ final class UdpTextSyncService {
         }
 
         let items = fileURLs.map { fileTransferItem(for: $0) }
-        send(.fileOffer(
+        guard let message = ClipPlusMessage.fileOffer(
             groupId: groupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,
             transferId: transferId,
             files: items,
             archivePort: Int(archivePort)
-        ))
+        ) else {
+            updateStatus("文件广播失败：文件名包含不支持的字符")
+            logger.error("file offer message creation failed file_count=\(items.count)")
+            return
+        }
+        send(message)
         updateStatus("已广播文件剪贴板")
         logger.info("published file offer file_count=\(items.count)")
     }
@@ -509,14 +520,19 @@ final class UdpTextSyncService {
             return false
         }
 
-        let message = ClipPlusMessage.imageOffer(
+        guard let message = ClipPlusMessage.imageOffer(
             groupId: groupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,
             transferId: transferId,
             pngData: pngData,
             archivePort: Int(archivePort)
-        )
+        ) else {
+            try? FileManager.default.removeItem(at: transferDirectoryURL)
+            updateStatus("图片广播失败")
+            logger.error("image offer message creation failed")
+            return false
+        }
         guard message.imageContentHash == imageHash else {
             try? FileManager.default.removeItem(at: transferDirectoryURL)
             updateStatus("图片广播失败")
@@ -889,19 +905,27 @@ final class UdpTextSyncService {
     }
 
     private func sendHello(groupId: String, trustedPeerIds: [String]) {
-        send(.hello(
+        if let helloMessage = ClipPlusMessage.hello(
             groupId: groupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName
-        ))
+        ) {
+            send(helloMessage)
+        } else {
+            logger.error("hello message creation failed")
+        }
 
         for trustedPeerId in trustedPeerIds {
-            send(.trust(
+            if let trustMessage = ClipPlusMessage.trust(
                 groupId: groupId,
                 senderDeviceId: deviceId,
                 senderDeviceName: deviceName,
                 approvedDeviceId: trustedPeerId
-            ))
+            ) {
+                send(trustMessage)
+            } else {
+                logger.error("trust message creation failed")
+            }
         }
     }
 
@@ -910,12 +934,16 @@ final class UdpTextSyncService {
             return
         }
 
-        send(.trust(
+        if let message = ClipPlusMessage.trust(
             groupId: state.sharedGroupId,
             senderDeviceId: deviceId,
             senderDeviceName: deviceName,
             approvedDeviceId: approvedDeviceId
-        ))
+        ) {
+            send(message)
+        } else {
+            logger.error("trust message creation failed")
+        }
     }
 
     private func send(_ message: ClipPlusMessage) {

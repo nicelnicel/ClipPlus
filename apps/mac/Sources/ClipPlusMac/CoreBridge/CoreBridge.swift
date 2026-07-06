@@ -9,7 +9,7 @@ struct FileTreeDownloadResult: Decodable, Equatable {
 
 struct CoreBridge {
     func statusJSON() -> String {
-        #"{"core_version":"0.1.19"}"#
+        #"{"core_version":"0.1.20"}"#
     }
 
     func deriveGroupId(for rawKey: String) -> String? {
@@ -162,6 +162,7 @@ final class RustUdpSocket {
     private let bridge: ClipPlusFFIBridge
     private let lock = NSLock()
     private var handle: UnsafeMutableRawPointer?
+    private var inFlightReceive = false
 
     fileprivate init(bridge: ClipPlusFFIBridge, handle: UnsafeMutableRawPointer) {
         self.bridge = bridge
@@ -190,18 +191,31 @@ final class RustUdpSocket {
 
     func receive() -> RustUdpDatagram? {
         lock.lock()
-        defer { lock.unlock() }
         guard let handle else {
+            lock.unlock()
             return nil
         }
+        inFlightReceive = true
+        lock.unlock()
 
-        return bridge.udpSocketReceive(handle)
+        let result = bridge.udpSocketReceive(handle)
+
+        lock.lock()
+        inFlightReceive = false
+        lock.unlock()
+
+        return result
     }
 
     func close() {
         lock.lock()
         let handleToClose = handle
         handle = nil
+        while inFlightReceive {
+            lock.unlock()
+            Thread.sleep(forTimeInterval: 0.002)
+            lock.lock()
+        }
         lock.unlock()
 
         if let handleToClose {

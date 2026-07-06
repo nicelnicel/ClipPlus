@@ -1088,10 +1088,12 @@ public sealed class SettingsStateTests
             text: "hello from windows"
         );
 
-        var json = message.ToJson();
+        Assert.NotNull(message);
+        var json = message!.ToJson();
         var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
 
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Text, decoded.Kind);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Text, decoded!.Kind);
         Assert.Equal(1, decoded.ProtocolVersion);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
@@ -1109,8 +1111,9 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(json);
-        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Text, decoded.Kind);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json!);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Text, decoded!.Kind);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("Windows", decoded.SenderDeviceName);
@@ -1127,8 +1130,9 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(json);
-        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Hello, decoded.Kind);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json!);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Hello, decoded!.Kind);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("Windows", decoded.SenderDeviceName);
@@ -1145,8 +1149,9 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(json);
-        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Trust, decoded.Kind);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json!);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Trust, decoded!.Kind);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("mac-device", decoded.ApprovedDeviceId);
@@ -1164,10 +1169,11 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(message);
-        var json = message.ToJson();
+        var json = message!.ToJson();
         var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
 
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Image, decoded.Kind);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Image, decoded!.Kind);
         Assert.Equal(1, decoded.ProtocolVersion);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
@@ -1194,10 +1200,12 @@ public sealed class SettingsStateTests
             archivePort: 47_632
         );
 
-        var json = message.ToJson();
+        Assert.NotNull(message);
+        var json = message!.ToJson();
         var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
 
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.ImageOffer, decoded.Kind);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.ImageOffer, decoded!.Kind);
         Assert.Equal(1, decoded.ProtocolVersion);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
@@ -1225,8 +1233,9 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(json);
-        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Image, decoded.Kind);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json!);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Image, decoded!.Kind);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal(pngData.Length, decoded.ImageByteSize);
@@ -1252,8 +1261,9 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(json);
-        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.ImageOffer, decoded.Kind);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json!);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.ImageOffer, decoded!.Kind);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("image-transfer-1", decoded.TransferId);
@@ -1289,10 +1299,12 @@ public sealed class SettingsStateTests
             approvedDeviceId: "mac-device"
         );
 
-        var json = message.ToJson();
+        Assert.NotNull(message);
+        var json = message!.ToJson();
         var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
 
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Trust, decoded.Kind);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.Trust, decoded!.Kind);
         Assert.Equal(1, decoded.ProtocolVersion);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
@@ -1316,10 +1328,12 @@ public sealed class SettingsStateTests
             archivePort: 47_632
         );
 
-        var json = message.ToJson();
+        Assert.NotNull(message);
+        var json = message!.ToJson();
         var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
 
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded.Kind);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded!.Kind);
         Assert.Equal("transfer-1", decoded.TransferId);
         Assert.Equal(ClipPlus.Windows.Sync.FileTransferFormat.DirectTree, decoded.TransferFormat);
         Assert.Equal(47_632, decoded.ArchivePort);
@@ -1346,8 +1360,9 @@ public sealed class SettingsStateTests
         );
 
         Assert.NotNull(json);
-        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json);
-        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded.Kind);
+        var decoded = ClipPlus.Windows.Sync.ClipPlusMessage.FromJson(json!);
+        Assert.NotNull(decoded);
+        Assert.Equal(ClipPlus.Windows.Sync.ClipPlusMessageKind.FileOffer, decoded!.Kind);
         Assert.Equal("group-1", decoded.GroupId);
         Assert.Equal("windows-device", decoded.SenderDeviceId);
         Assert.Equal("transfer-1", decoded.TransferId);
@@ -1734,6 +1749,33 @@ public sealed class SettingsStateTests
         Assert.Contains("private void PollClipboardAndBroadcast()", source, StringComparison.Ordinal);
         Assert.Contains("private void PollClipboardAndBroadcastCore()", source, StringComparison.Ordinal);
         Assert.Contains("clipboard poll skipped error_type=", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UdpTextSyncServicePollLetsTextReplaceStaleFileClipboard()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "ClipPlus.Windows",
+            "Sync",
+            "UdpTextSyncService.cs"
+        ));
+        var pollStart = source.IndexOf("private void PollClipboardAndBroadcastCore()", StringComparison.Ordinal);
+        var imageStart = source.IndexOf("var pngData = clipboard.ReadPngImageData()", StringComparison.Ordinal);
+        Assert.True(pollStart >= 0);
+        Assert.True(imageStart > pollStart);
+        var pollSource = source[pollStart..imageStart];
+        var textRead = pollSource.IndexOf("clipboard.ReadText()", StringComparison.Ordinal);
+        var fileRead = pollSource.IndexOf("clipboard.ReadFilePaths()", StringComparison.Ordinal);
+
+        Assert.True(textRead >= 0);
+        Assert.True(fileRead >= 0);
+        Assert.True(textRead < fileRead);
+        Assert.Contains("return;\n        }\n\n        var filePaths = clipboard.ReadFilePaths();", pollSource, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -50,7 +50,7 @@ public sealed class ClipPlusMessage
     [JsonIgnore]
     public byte[]? DecodedImageData => ImageBase64 is null ? null : Convert.FromBase64String(ImageBase64);
 
-    public static ClipPlusMessage CreateHello(
+    public static ClipPlusMessage? CreateHello(
         string groupId,
         string senderDeviceId,
         string senderDeviceName)
@@ -59,12 +59,12 @@ public sealed class ClipPlusMessage
             groupId,
             senderDeviceId,
             senderDeviceName
-        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create hello message.");
+        );
 
-        return FromJson(json);
+        return json is null ? null : FromJson(json);
     }
 
-    public static ClipPlusMessage CreateTrust(
+    public static ClipPlusMessage? CreateTrust(
         string groupId,
         string senderDeviceId,
         string senderDeviceName,
@@ -75,12 +75,12 @@ public sealed class ClipPlusMessage
             senderDeviceId,
             senderDeviceName,
             approvedDeviceId
-        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create trust message.");
+        );
 
-        return FromJson(json);
+        return json is null ? null : FromJson(json);
     }
 
-    public static ClipPlusMessage CreateFileOffer(
+    public static ClipPlusMessage? CreateFileOffer(
         string groupId,
         string senderDeviceId,
         string senderDeviceName,
@@ -95,12 +95,12 @@ public sealed class ClipPlusMessage
             transferId,
             files,
             archivePort
-        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create file offer message.");
+        );
 
-        return FromJson(json);
+        return json is null ? null : FromJson(json);
     }
 
-    public static ClipPlusMessage CreateImageOffer(
+    public static ClipPlusMessage? CreateImageOffer(
         string groupId,
         string senderDeviceId,
         string senderDeviceName,
@@ -115,9 +115,9 @@ public sealed class ClipPlusMessage
             transferId,
             pngData,
             archivePort
-        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create image offer message.");
+        );
 
-        return FromJson(json);
+        return json is null ? null : FromJson(json);
     }
 
     public static ClipPlusMessage? CreateImage(
@@ -136,12 +136,12 @@ public sealed class ClipPlusMessage
             senderDeviceId,
             senderDeviceName,
             pngData
-        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create image clipboard message.");
+        );
 
-        return FromJson(json);
+        return json is null ? null : FromJson(json);
     }
 
-    public static ClipPlusMessage CreateText(
+    public static ClipPlusMessage? CreateText(
         string groupId,
         string senderDeviceId,
         string senderDeviceName,
@@ -152,9 +152,9 @@ public sealed class ClipPlusMessage
             senderDeviceId,
             senderDeviceName,
             text
-        ) ?? throw new InvalidOperationException("Rust core library is unavailable; cannot create text clipboard message.");
+        );
 
-        return FromJson(json);
+        return json is null ? null : FromJson(json);
     }
 
     public string ToJson()
@@ -162,9 +162,8 @@ public sealed class ClipPlusMessage
         return JsonSerializer.Serialize(this, JsonOptions);
     }
 
-    public static ClipPlusMessage FromJson(string json)
+    public static ClipPlusMessage? FromJson(string json)
     {
-        return JsonSerializer.Deserialize<ClipPlusMessage>(json, JsonOptions)
-            ?? throw new InvalidOperationException("ClipPlus message JSON is empty");
+        return JsonSerializer.Deserialize<ClipPlusMessage>(json, JsonOptions);
     }
 }

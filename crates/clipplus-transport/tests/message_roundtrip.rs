@@ -431,7 +431,7 @@ fn native_clipboard_file_offer_message_rejects_invalid_values() {
         }],
         47_632,
     )
-    .unwrap_err();
+    .unwrap();
 
     assert!(matches!(
         blank_transfer,
@@ -453,10 +453,42 @@ fn native_clipboard_file_offer_message_rejects_invalid_values() {
         traversal_path,
         NativeClipboardMessageError::InvalidField("relative_path")
     ));
-    assert!(matches!(
-        windows_path,
-        NativeClipboardMessageError::InvalidField("relative_path")
-    ));
+    assert_eq!(
+        windows_path.files.as_deref().unwrap()[0].relative_path,
+        "C_/Users/cc/private.txt"
+    );
+}
+
+#[test]
+fn native_clipboard_file_offer_message_sanitizes_unsafe_filenames() {
+    let files = vec![
+        NativeFileTransferItem {
+            relative_path: "Reports/2024-01-15: Notes.txt".to_string(),
+            byte_size: 12,
+            is_directory: false,
+        },
+        NativeFileTransferItem {
+            relative_path: "  Screenshots / final.png  ".to_string(),
+            byte_size: 34,
+            is_directory: false,
+        },
+    ];
+    let message = NativeClipboardMessage::file_offer(
+        "group-1",
+        "mac-device",
+        "Mac",
+        "transfer-1",
+        files,
+        47_632,
+    )
+    .unwrap();
+    let decoded_files = message.files.as_deref().unwrap();
+
+    assert_eq!(
+        decoded_files[0].relative_path,
+        "Reports/2024-01-15_ Notes.txt"
+    );
+    assert_eq!(decoded_files[1].relative_path, "Screenshots/final.png");
 }
 
 #[test]

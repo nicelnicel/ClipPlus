@@ -248,6 +248,35 @@ public sealed class UdpTextSyncService : IDisposable
             return;
         }
 
+        var text = clipboard.ReadText();
+        if (!string.IsNullOrEmpty(text))
+        {
+            if (!string.Equals(text, lastLocalText, StringComparison.Ordinal)
+                && !string.Equals(text, lastRemoteText, StringComparison.Ordinal))
+            {
+                lastLocalText = text;
+                var textMessage = ClipPlusMessage.CreateText(
+                    state.SharedGroupId,
+                    deviceId,
+                    deviceName,
+                    text
+                );
+                if (textMessage is not null)
+                {
+                    Send(textMessage);
+                    state.LastStatusMessage = "已广播文本剪贴板";
+                    logger.Info($"published text clipboard byte_count={Encoding.UTF8.GetByteCount(text)}");
+                }
+                else
+                {
+                    state.LastStatusMessage = "文本广播失败";
+                    logger.Error("text message creation failed");
+                }
+            }
+
+            return;
+        }
+
         var filePaths = clipboard.ReadFilePaths();
         if (filePaths.Count > 0)
         {
@@ -275,22 +304,6 @@ public sealed class UdpTextSyncService : IDisposable
             }
 
             return;
-        }
-
-        var text = clipboard.ReadText();
-        if (!string.IsNullOrEmpty(text)
-            && !string.Equals(text, lastLocalText, StringComparison.Ordinal)
-            && !string.Equals(text, lastRemoteText, StringComparison.Ordinal))
-        {
-            lastLocalText = text;
-            Send(ClipPlusMessage.CreateText(
-                state.SharedGroupId,
-                deviceId,
-                deviceName,
-                text
-            ));
-            state.LastStatusMessage = "已广播文本剪贴板";
-            logger.Info($"published text clipboard byte_count={Encoding.UTF8.GetByteCount(text)}");
         }
 
         var pngData = clipboard.ReadPngImageData();
@@ -513,14 +526,21 @@ public sealed class UdpTextSyncService : IDisposable
         }
 
         var items = filePaths.Select(CreateFileTransferItem).ToArray();
-        Send(ClipPlusMessage.CreateFileOffer(
+        var fileOfferMessage = ClipPlusMessage.CreateFileOffer(
             state.SharedGroupId,
             deviceId,
             deviceName,
             transferId,
             items,
             ArchivePort
-        ));
+        );
+        if (fileOfferMessage is null)
+        {
+            state.LastStatusMessage = "文件广播失败：文件名包含不支持的字符";
+            logger.Error($"file offer message creation failed file_count={items.Length}");
+            return;
+        }
+        Send(fileOfferMessage);
         state.LastStatusMessage = "已广播文件剪贴板";
         logger.Info($"published file offer file_count={items.Length}");
     }
@@ -564,6 +584,13 @@ public sealed class UdpTextSyncService : IDisposable
             transferId,
             pngData,
             ArchivePort);
+        if (message is null)
+        {
+            TryDeleteDirectory(Path.GetDirectoryName(sourcePath));
+            state.LastStatusMessage = "图片广播失败";
+            logger.Error("image offer message creation failed");
+            return false;
+        }
         if (!string.Equals(message.ImageContentHash, imageHash, StringComparison.Ordinal))
         {
             TryDeleteDirectory(Path.GetDirectoryName(sourcePath));
@@ -947,20 +974,36 @@ public sealed class UdpTextSyncService : IDisposable
 
     private void SendHello(string groupId, IReadOnlyCollection<string> trustedPeerIds)
     {
-        Send(ClipPlusMessage.CreateHello(
+        var helloMessage = ClipPlusMessage.CreateHello(
             groupId,
             deviceId,
             deviceName
-        ));
+        );
+        if (helloMessage is not null)
+        {
+            Send(helloMessage);
+        }
+        else
+        {
+            logger.Error("hello message creation failed");
+        }
 
         foreach (var trustedPeerId in trustedPeerIds)
         {
-            Send(ClipPlusMessage.CreateTrust(
+            var trustMessage = ClipPlusMessage.CreateTrust(
                 groupId,
                 deviceId,
                 deviceName,
                 trustedPeerId
-            ));
+            );
+            if (trustMessage is not null)
+            {
+                Send(trustMessage);
+            }
+            else
+            {
+                logger.Error("trust message creation failed");
+            }
         }
     }
 
@@ -971,12 +1014,20 @@ public sealed class UdpTextSyncService : IDisposable
             return;
         }
 
-        Send(ClipPlusMessage.CreateTrust(
+        var message = ClipPlusMessage.CreateTrust(
             state.SharedGroupId,
             deviceId,
             deviceName,
             approvedDeviceId
-        ));
+        );
+        if (message is not null)
+        {
+            Send(message);
+        }
+        else
+        {
+            logger.Error("trust message creation failed");
+        }
     }
 
     private void Send(ClipPlusMessage message)
