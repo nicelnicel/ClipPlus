@@ -1768,7 +1768,7 @@ public sealed class SettingsStateTests
         var imageStart = source.IndexOf("var pngData = clipboard.ReadPngImageData()", StringComparison.Ordinal);
         Assert.True(pollStart >= 0);
         Assert.True(imageStart > pollStart);
-        var pollSource = source[pollStart..imageStart];
+        var pollSource = source[pollStart..imageStart].Replace("\r\n", "\n", StringComparison.Ordinal);
         var textRead = pollSource.IndexOf("clipboard.ReadText()", StringComparison.Ordinal);
         var fileRead = pollSource.IndexOf("clipboard.ReadFilePaths()", StringComparison.Ordinal);
 

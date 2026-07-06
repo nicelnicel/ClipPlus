@@ -199,6 +199,12 @@ public sealed class UdpTextSyncService : IDisposable
 
                 var json = Encoding.UTF8.GetString(datagram.Payload);
                 var message = ClipPlusMessage.FromJson(json);
+                if (message is null)
+                {
+                    logger.Error("receive loop ignored invalid message payload");
+                    continue;
+                }
+
                 var sourceHost = datagram.SourceHost;
                 await dispatcher.InvokeAsync(() => Handle(message, sourceHost));
             }
